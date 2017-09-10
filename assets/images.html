@@ -1,0 +1,36 @@
+{{ define "images" -}}
+<!DOCTYPE html>
+<html lang="en">
+{{ template "header" . -}}
+<body>
+<div class="root-container">
+  {{ template "menu" . -}}
+  <div class="body-container pure-g">
+    <div class="pure-u-1">
+      <div class="l-box">
+        <table border="1" class="h-center">
+        {{ $p := . -}}
+        {{ range $row := $p.Rows -}}
+          <tr>
+          {{ range $col := $p.Cols -}}
+            {{ $i := $p.Index $row $col -}}
+            <td>
+              {{ if $i -}}
+              <div class="digit-image">
+                <image src="/img/{{$p.Dset}}/{{$i}}" width="{{$p.Width}}" height="{{$p.Height}}" alt="{{$i}}" title="{{$i}}"></image>
+                <span class="digit-label-left">{{$p.Label $i}}</span>
+                <span class="digit-label-right">{{$p.Predict $i}}</span>
+              </div>
+              {{ end -}}
+            </td>
+          {{ end -}}
+          </tr>
+        {{ end -}}
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
+{{ end -}}

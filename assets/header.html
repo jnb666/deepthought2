@@ -1,0 +1,30 @@
+{{ define "header" -}}
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>Deepthought2</title>
+
+<link rel="stylesheet" type="text/css" href="/static/pure-min.css">
+<link rel="stylesheet" type="text/css" href="/static/custom.css">
+
+<script type="text/javascript">
+window.onload = function () {
+    var conn;
+    if (window["WebSocket"]) {
+        conn = new WebSocket("ws://" + document.location.host + "/ws"); 
+        conn.onmessage = function (e) {
+            var iframe = document.getElementById('statsFrame');
+            if (iframe) {
+                iframe.contentWindow.location.reload(true);
+            }
+            var epoch = document.getElementById('epoch');
+            if (epoch) {
+              epoch.innerHTML = e.data;
+            }
+        };
+    }
+};
+</script>
+</head>
+{{ end -}}

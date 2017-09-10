@@ -1,0 +1,37 @@
+{{ define "stats" -}}
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" type="text/css" href="/static/pure-min.css">
+<link rel="stylesheet" type="text/css" href="/static/custom.css">
+</head>
+<body>
+<div class="pure-g">
+  <div class="pure-u-1-2">
+    <div class="l-box">
+    <table class="stats-table pure-table pure-table-bordered">
+      <thead>
+        <tr>
+          <th>epoch</th>{{ range .Headers }}<th>{{.}}</th>{{ end -}}
+        </tr>
+        </thead>
+      <tbody>
+        {{ range $s := .LatestStats 20 -}}
+        <tr>
+          <td>{{$s.Epoch}}</td>{{ range $s.Format }}<td>{{.}}</td>{{ end -}}
+        </tr>
+        {{ end -}}
+      </tbody>
+    </table>
+    </div>
+    <div class="l-box">{{ .RunTime -}}</div>
+    <div class="l-box" id="log"></div>
+  </div>
+  <div class="pure-u-1-2">
+    <div class="l-box">{{ .LossPlot 400 250 }}</div> 
+    <div class="l-box">{{ .ErrorPlot 400 250 }}</div>
+  </div>
+</div>
+</body>
+</html>
+{{ end -}}

@@ -1,0 +1,91 @@
+body, html {
+  width: 100%; 
+  height: 100%; 
+  margin: 0; 
+  padding: 0;
+}
+
+.root-container {
+  display: table; 
+  empty-cells: show; 
+  border-collapse: collapse;
+  width: 100%; 
+  height: 100%;
+}
+
+.body-container {
+  display: table-row; 
+  height: 100%; 
+  overflow: hidden 
+}
+
+.body-container iframe {
+  width: 100%; 
+  height: 100%; 
+  border: none; 
+  margin: 0; 
+  padding: 0; 
+  display: block;
+}
+
+.top-menu {
+  display: table-row;
+  overflow: auto;
+  background: #000080;
+  color: white;
+}
+
+.menu-selected {
+  background: blue;
+}
+
+.menu-item {
+  text-align: center;
+  padding: 0 1em;
+}
+
+.top-menu a {
+  color: white;
+}
+
+.top-menu li a:hover,
+.top-menu li a:focus {
+  background: blue;
+}
+
+.l-box {
+  padding: 1em;
+  font-size: 0.875em;
+}
+
+.stats-table td,
+.stats-table th {
+  font-size: 0.875em;
+}
+
+.h-center {
+  margin: 0 auto;
+}
+
+.digit-image {
+  position: relative;
+  width: 100%;
+}
+
+.digit-label-left {
+  position: absolute;
+  top: 0;
+  left: 2px;
+  font-size: 0.875em;
+}
+
+.digit-label-right {
+  position: absolute;
+  top: 0;
+  right: 2px;
+  font-size: 0.875em;
+}
+
+.error-text {
+  color: red;
+}

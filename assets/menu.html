@@ -1,0 +1,19 @@
+{{ define "menu" -}}
+<div class="top-menu pure-menu pure-menu-horizontal">
+  <ul class="pure-menu-list">
+    {{ range .Menu -}}
+      <li class="pure-menu-item"><a class="pure-menu-link{{if .Selected}} menu-selected{{end}}" href="{{.Url}}">{{.Name}}</a></li>
+    {{ end -}}
+    <li class="pure-menu-separator">
+    {{ range .Options -}}
+      {{ if .Submit -}}
+      <li class="pure-menu-item"><a class="pure-menu-link" href="javascript:document.xform.submit();">{{.Name}}</a></li>
+      {{ else -}}
+      <li class="pure-menu-item"><a class="pure-menu-link{{if .Selected}} menu-selected{{end}}" href="{{.Url}}">{{.Name}}</a></li>
+      {{ end -}}
+    {{ end -}}
+    <li class="pure-menu-separator">
+    <li class="menu-item pure-menu-item">{{.Heading}}</li>
+  </ul>
+</div>
+{{ end -}}
