@@ -3,7 +3,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef USE_MKL
+#include <mkl.h>
+#else
 #include <cblas.h>
+#endif
 
 #define EPS 1e-7f
 
@@ -16,7 +20,8 @@
 #define clamp(x, min, max)  ((x) < (min) ? (min) : ((x) > (max) ? (max) : (x)))
 
 enum {COPY, COPY_ROW, TILE0, TILE1, FILL, NEQ, ONEHOT, UNHOT, SCALE, AXPY, TRANS, SUM, GEMV, GEMM,
-	  SIGMOID, SIGMOID_D, TANH, TANH_D, RELU, RELU_D, QUAD_LOSS, SOFTMAX, SOFTMAX_LOSS};
+	  SIGMOID, SIGMOID_D, TANH, TANH_D, RELU, RELU_D, QUAD_LOSS, SOFTMAX, SOFTMAX_LOSS, 
+	  DNN_CONVERT, DNN_EXECUTE};
 
 typedef struct args {
 	int   op;
@@ -24,6 +29,14 @@ typedef struct args {
 	float f[4];
 	void* p[4];
 } Args;
+
+void set_num_threads(int n) {
+#ifdef USE_MKL
+	mkl_set_num_threads(n);
+#else
+	openblas_set_num_threads(n);
+#endif
+}
 
 void array_copy_row(int* dst, int* src, int row, int rows, int cols) {
 	for (int i = 0; i < cols; ++i) dst[row+i*rows] = src[i];
@@ -178,8 +191,9 @@ void softmax_loss(float* y, float* y_pred, float* res, int n, int classes) {
 }
 
 
-void execCPU(int nargs, Args** buffer) {
-	for (int i = 0; i < nargs; ++i) {
+dnnError_t execCPU(int nargs, Args** buffer) {
+	dnnError_t error = 0;
+	for (int i = 0; i < nargs && error == E_SUCCESS; ++i) {
 		Args* a = buffer[i];
 		switch (a->op) {
 		case COPY:
@@ -218,8 +232,13 @@ void execCPU(int nargs, Args** buffer) {
 			cblas_saxpy(a->i[0], a->f[0], FP(a->p[0]), 1, FP(a->p[1]), 1);
 			break;
 		case TRANS:
+#ifdef USE_MKL
+			mkl_somatcopy('c', 't', a->i[0], a->i[1], 1.0f, FP(a->p[0]), 
+				a->i[0], FP(a->p[1]), a->i[1]);
+#else
 			cblas_somatcopy(CblasColMajor, CblasTrans, a->i[0], a->i[1], 1.0f, FP(a->p[0]), 
 				a->i[0], FP(a->p[1]), a->i[1]);
+#endif
 			break;
 		case GEMV:
 			cblas_sgemv(CblasColMajor, a->i[0], a->i[1], a->i[2], a->f[0],
@@ -262,6 +281,21 @@ void execCPU(int nargs, Args** buffer) {
 		case SOFTMAX_LOSS:
 			softmax_loss(FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0], a->i[1]);
 			break;
+		case DNN_CONVERT:
+#ifdef USE_MKL
+			error = dnnConversionExecute_F32((dnnPrimitive_t)(a->p[0]), a->p[1], a->p[2]);
+#else
+			error = E_UNIMPLEMENTED;
+#endif
+			break;
+		case DNN_EXECUTE:
+#ifdef USE_MKL
+			error = dnnExecute_F32((dnnPrimitive_t)(a->p[0]), a->p[1]);
+#else
+			error = E_UNIMPLEMENTED;
+#endif
+			break;
 		}
 	}
+	return error;
 }

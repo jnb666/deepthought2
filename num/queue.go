@@ -1,6 +1,8 @@
 package num
 
 import (
+	"github.com/jnb666/deepthought2/num/dnn"
+	"github.com/jnb666/deepthought2/num/mkl"
 	"runtime"
 	"sync"
 )
@@ -8,16 +10,37 @@ import (
 const queueSize = 128
 
 // Device type indicates a compute device, currently only CPU, GPU coming later
-type Device int
+type DeviceType int
 
 const (
-	CPU Device = iota
+	CPU DeviceType = iota
 )
+
+// Device interface type
+type Device interface {
+	// Setup new worker queue
+	NewQueue(threads int) Queue
+	// Allocate new n dimensional array
+	NewArray(dtype DataType, dims ...int) Array
+	NewArrayLike(a Array) Array
+	// Allocate DNN layer
+	LinearLayer(nBatch, nIn, nOut int) dnn.Layer
+	ReluLayer(prev dnn.Layer) dnn.Layer
+}
+
+type cpuDevice struct {
+	attr *mkl.Attr
+}
+
+// Initialise new CPU device
+func NewCPUDevice() Device {
+	return cpuDevice{attr: mkl.NewAttr()}
+}
 
 // A Queue processes a series of operations on a Device
 type Queue interface {
-	// Device this queue is on
-	Device() Device
+	Device
+	Dev() Device
 	// Asyncronous function call
 	Call(args ...Function) Queue
 	// Wait for any pending requests to complete
@@ -26,27 +49,22 @@ type Queue interface {
 	Shutdown()
 }
 
-// NewQueue function starts queue running on the given device
-func NewQueue(dev Device, threads int) Queue {
-	switch dev {
-	case CPU:
-		runtime.LockOSThread()
-		setCPUThreads(threads)
-		return &cpuQueue{}
-	default:
-		panic("NewQueue: invalid device type")
-	}
-}
-
 // CPUQueue uses OpenBLAS accelarated CPU routines
 type cpuQueue struct {
+	cpuDevice
 	buffer [queueSize]Function
 	queued int
 	sync.Mutex
 }
 
-func (a *cpuQueue) Device() Device {
-	return CPU
+func (d cpuDevice) NewQueue(threads int) Queue {
+	runtime.LockOSThread()
+	setCPUThreads(threads)
+	return &cpuQueue{cpuDevice: d}
+}
+
+func (q *cpuQueue) Dev() Device {
+	return q.cpuDevice
 }
 
 func (q *cpuQueue) Call(args ...Function) Queue {

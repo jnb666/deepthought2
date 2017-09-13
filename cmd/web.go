@@ -24,7 +24,7 @@ func main() {
 		os.Exit(1)
 	}
 	model := os.Args[len(os.Args)-1]
-	net, err := web.NewNetwork(num.CPU, model)
+	net, err := web.NewNetwork(num.NewCPUDevice(), model)
 	nnet.CheckErr(err)
 
 	t, err := web.NewTemplates()

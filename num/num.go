@@ -6,10 +6,17 @@ package num
 #cgo LDFLAGS: -L/opt/OpenBLAS/lib -lopenblas -lm -lpthread
 #include "num.h"
 */
+
+/*
+#cgo CFLAGS: -g -O2 -std=c99 -I/opt/intel/mkl/include -DUSE_MKL
+#cgo LDFLAGS: -L/opt/intel/mkl/lib/intel64 -L/opt/intel/tbb/lib/intel64/gcc4.7 -Wl,--no-as-needed -lmkl_intel_lp64 -lmkl_tbb_thread -lmkl_core -ltbb -lstdc++ -lpthread -lm -ldl
+#include "num.h"
+*/
 import "C"
 
 import (
 	"fmt"
+	"github.com/jnb666/deepthought2/num/mkl"
 	"reflect"
 	"unsafe"
 )
@@ -58,7 +65,7 @@ func Fill(a Array, scalar float32) Function {
 	return args(C.FILL, int(a.Dtype()), Prod(a.Dims()), scalar, a.Data())
 }
 
-// Copy from src to dst, broadcast vector to matrix if needed
+// Copy from src to dst, broadcast vector to matrix if needed, vector is tiled row wise
 func Copy(dst, src Array) Function {
 	if src.Dtype() != dst.Dtype() {
 		panic("Copy: arguments must be same type")
@@ -66,9 +73,11 @@ func Copy(dst, src Array) Function {
 	ddim, sdim := dst.Dims(), src.Dims()
 	if SameShape(ddim, sdim) {
 		return args(C.COPY, Prod(ddim), dst.Data(), src.Data())
-	} else if len(sdim) == 1 && len(ddim) == 2 && sdim[0] == ddim[0] {
-		return args(C.TILE0, sdim[0], ddim[1], dst.Data(), src.Data())
 	} else if len(sdim) == 1 && len(ddim) == 2 && sdim[0] == ddim[1] {
+		return args(C.TILE1, sdim[0], ddim[0], dst.Data(), src.Data())
+	} else if len(sdim) == 2 && sdim[1] == 1 && len(ddim) == 2 && sdim[0] == ddim[0] {
+		return args(C.TILE0, sdim[0], ddim[1], dst.Data(), src.Data())
+	} else if len(sdim) == 2 && sdim[0] == 1 && len(ddim) == 2 && sdim[1] == ddim[1] {
 		return args(C.TILE1, sdim[0], ddim[0], dst.Data(), src.Data())
 	} else {
 		panic(fmt.Sprintf("Copy: cannot copy from %v to %v shape", sdim, ddim))
@@ -276,6 +285,26 @@ func binaryFunc(op int, x, y, z Array) Function {
 	return args(op, Prod(x.Dims()), x.Data(), y.Data(), z.Data())
 }
 
+func dnnConvert(p *mkl.Primitive, src, dst unsafe.Pointer) Function {
+	if p == nil || p.Ptr() == nil {
+		panic("dnnConvert: primitive is nil")
+	}
+	if src == nil || dst == nil {
+		panic("dnnConvert: input argument is nil")
+	}
+	return args(C.DNN_CONVERT, p.Ptr(), src, dst)
+}
+
+func dnnExecute(p *mkl.Primitive, res unsafe.Pointer) Function {
+	if p == nil || p.Ptr() == nil {
+		panic("dnnExecute: primitive is nil")
+	}
+	if res == nil {
+		panic("dnnExecute: resource pointer is nil")
+	}
+	return args(C.DNN_EXECUTE, p.Ptr(), res)
+}
+
 // Function which may be called via the queue
 type Function *C.struct_args
 
@@ -304,13 +333,13 @@ func setCPUThreads(threads int) {
 	if threads < 1 {
 		threads = 1
 	}
-	fmt.Println("set num threads", threads)
-	C.openblas_set_num_threads(C.int(threads))
+	C.set_num_threads(C.int(threads))
 }
 
 func execCPU(buffer []Function) {
 	ptr := unsafe.Pointer(&buffer[0])
-	C.execCPU(C.int(len(buffer)), (**C.struct_args)(ptr))
+	err := C.execCPU(C.int(len(buffer)), (**C.struct_args)(ptr))
+	mkl.Chk(mkl.Error(err))
 }
 
 func ptr(ival interface{}) unsafe.Pointer {

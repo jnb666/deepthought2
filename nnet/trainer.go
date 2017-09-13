@@ -41,27 +41,37 @@ type Tester interface {
 
 // Tester which evaluates the loss and error for each of the data sets and updates the stats.
 type TestBase struct {
+	Net     *Network
 	Data    map[string]*Dataset
 	Stats   Stats
 	Headers []string
 }
 
 // Create a new base class which implements the Tester interface.
-func NewTestBase(device num.Device, data map[string]Data, conf Config) *TestBase {
-	t := &TestBase{Data: make(map[string]*Dataset), Headers: StatsHeaders(data)}
+func NewTestBase(dev num.Device, data map[string]Data, net *Network) *TestBase {
+	t := &TestBase{
+		Net:     net,
+		Data:    make(map[string]*Dataset),
+		Headers: StatsHeaders(data),
+	}
 	for key, d := range data {
-		t.Data[key] = NewDataset(device, d, conf.TestBatch, conf.MaxSamples)
+		t.Data[key] = NewDataset(dev, d, net.TestBatch, net.MaxSamples)
 	}
 	return t
 }
 
 // Test performance of the network, called from the Train function on completion of each epoch.
 func (t *TestBase) Test(q num.Queue, net *Network, epoch int, loss float64, start time.Time) bool {
+	net.CopyTo(q, t.Net)
+	if net.DebugLevel >= 1 {
+		fmt.Printf("== TEST EPOCH %d ==\n", epoch)
+		//t.Net.PrintWeights(q)
+	}
 	t.Stats.Epoch = epoch
 	t.Stats.Values = []float64{loss}
 	for _, key := range DataTypes {
 		if _, ok := t.Data[key]; ok {
-			t.Stats.Values = append(t.Stats.Values, net.Error(q, t.Data[key], nil))
+			t.Stats.Values = append(t.Stats.Values, t.Net.Error(q, t.Data[key], nil))
 		}
 	}
 	t.Stats.Elapsed = time.Since(start)
@@ -73,8 +83,8 @@ type testLogger struct {
 }
 
 // Create a new tester which logs stats to stdout.
-func NewTestLogger(device num.Device, data map[string]Data, conf Config) Tester {
-	return testLogger{TestBase: NewTestBase(device, data, conf)}
+func NewTestLogger(device num.Device, data map[string]Data, net *Network) Tester {
+	return testLogger{TestBase: NewTestBase(device, data, net)}
 }
 
 func (t testLogger) Test(q num.Queue, net *Network, epoch int, loss float64, start time.Time) bool {
@@ -94,8 +104,8 @@ func (t testLogger) Test(q num.Queue, net *Network, epoch int, loss float64, sta
 
 // Train the network on the given training set by updating the weights
 func Train(q num.Queue, net *Network, data Data, test Tester) {
-	dset := NewDataset(q.Device(), data, net.TrainBatch, net.MaxSamples)
-	acc := num.NewArray(q.Device(), num.Float32)
+	dset := NewDataset(q.Dev(), data, net.TrainBatch, net.MaxSamples)
+	acc := q.NewArray(num.Float32)
 	epoch := 1
 	done := false
 	start := time.Now()
@@ -115,11 +125,11 @@ func TrainEpoch(q num.Queue, net *Network, dset *Dataset, acc num.Array) float64
 	weightDecay := float32(net.Eta*net.Lambda) / float32(dset.Samples)
 	q.Call(num.Fill(acc, 0))
 	if net.inputGrad == nil || net.inputGrad.Dims()[0] != dset.BatchSize {
-		net.inputGrad = num.NewArray(q.Device(), num.Float32, dset.BatchSize, dset.Classes)
-		net.batchLoss = num.NewArray(q.Device(), num.Float32)
+		net.inputGrad = q.NewArray(num.Float32, dset.BatchSize, dset.Classes)
+		net.batchLoss = q.NewArray(num.Float32)
 	}
 	for batch := 0; batch < nbatch; batch++ {
-		if net.DebugLevel >= 1 {
+		if net.DebugLevel >= 2 || (net.DebugLevel == 1 && batch == 0) {
 			fmt.Printf("== train batch %d ==\n", batch)
 		}
 		x, _, yOneHot := dset.GetBatch(q, batch)
@@ -139,7 +149,7 @@ func TrainEpoch(q num.Queue, net *Network, dset *Dataset, acc num.Array) float64
 			num.Copy(net.inputGrad, yPred),
 			num.Axpy(-1, yOneHot, net.inputGrad),
 		)
-		if net.DebugLevel >= 1 {
+		if net.DebugLevel >= 2 || (net.DebugLevel == 1 && batch == 0) {
 			fmt.Printf("input grad:\n%s", net.inputGrad.String(q))
 		}
 		grad := net.inputGrad
@@ -147,27 +157,18 @@ func TrainEpoch(q num.Queue, net *Network, dset *Dataset, acc num.Array) float64
 		for i := len(net.Layers) - 1; i >= 0; i-- {
 			layer := net.Layers[i]
 			grad = layer.Bprop(q, grad)
-			if net.DebugLevel >= 2 || (net.DebugLevel == 1 && i == 0) {
+			if net.DebugLevel >= 3 && grad != nil {
 				fmt.Printf("layer %d bprop output:\n%s", i, grad.String(q))
 			}
 		}
 		// update weights
-		for ix, layer := range net.Layers {
+		for _, layer := range net.Layers {
 			if l, ok := layer.(ParamLayer); ok {
-				W, B := l.Params()
-				dW, dB := l.ParamGrads()
-				if weightDecay != 0 {
-					q.Call(num.Axpy(-weightDecay, W, dW))
-				}
-				q.Call(
-					num.Axpy(-float32(net.Eta), dW, W),
-					num.Axpy(-float32(net.Eta), dB, B),
-				).Finish()
-				if net.DebugLevel >= 1 {
-					fmt.Printf("layer %d weights\n%s", ix, W.String(q))
-					fmt.Printf("layer %d bias\n %s\n %s\n", ix, dB.String(q), B.String(q))
-				}
+				l.UpdateParams(q, float32(net.Eta), weightDecay)
 			}
+		}
+		if net.DebugLevel >= 2 || (batch == nbatch-1 && net.DebugLevel >= 1) {
+			net.PrintWeights(q)
 		}
 	}
 	lossVal := make([]float32, 1)

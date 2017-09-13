@@ -11,6 +11,7 @@ import (
 
 // Training configuration settings
 type Config struct {
+	DataSet       string
 	Eta           float64
 	Lambda        float64
 	NormalWeights bool

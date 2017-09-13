@@ -20,10 +20,11 @@ var (
 // Dataset type encapsulates a set of training, test or validation data.
 type Dataset struct {
 	Data
-	Samples   int
-	BatchSize int
-	x, y, y1H num.Array
-	indexes   []int
+	Samples       int
+	BatchSize     int
+	x, xT, y, y1H num.Array
+	indexes       []int
+	shuffled      bool
 }
 
 // Create a new Dataset struct, allocate array buffers  and set the batch size and maxSamples
@@ -40,13 +41,10 @@ func NewDataset(dev num.Device, data Data, batchSize, maxSamples int) *Dataset {
 	} else {
 		d.BatchSize = batchSize
 	}
-	d.x = num.NewArray(dev, num.Float32, d.BatchSize, d.Nfeat())
-	d.y = num.NewArray(dev, num.Int32, d.BatchSize)
-	d.y1H = num.NewArray(dev, num.Float32, d.BatchSize, d.Classes)
-	d.indexes = make([]int, d.Samples)
-	for i := range d.indexes {
-		d.indexes[i] = i
-	}
+	d.x = dev.NewArray(num.Float32, d.BatchSize, d.Nfeat())
+	d.xT = dev.NewArray(num.Float32, d.Nfeat(), d.BatchSize)
+	d.y = dev.NewArray(num.Int32, d.BatchSize)
+	d.y1H = dev.NewArray(num.Float32, d.BatchSize, d.Classes)
 	return d
 }
 
@@ -67,10 +65,18 @@ func (d *Dataset) GetBatch(q num.Queue, b int) (x, y, yOneHot num.Array) {
 	if end > d.Samples {
 		end = d.Samples
 	}
-	for i, ix := range d.indexes[start:end] {
+	if d.shuffled {
+		for i, ix := range d.indexes[start:end] {
+			q.Call(
+				num.WriteRow(d.x, i, d.Input[ix*nfeat:(ix+1)*nfeat]),
+				num.WriteRow(d.y, i, &d.Labels[ix]),
+			)
+		}
+	} else {
 		q.Call(
-			num.WriteRow(d.x, i, d.Input[ix*nfeat:(ix+1)*nfeat]),
-			num.WriteRow(d.y, i, &d.Labels[ix]),
+			num.Write(d.xT, d.Input[start*nfeat:end*nfeat]),
+			num.Transpose(d.xT, d.x),
+			num.Write(d.y, d.Labels[start:end]),
 		)
 	}
 	q.Call(
@@ -82,6 +88,7 @@ func (d *Dataset) GetBatch(q num.Queue, b int) (x, y, yOneHot num.Array) {
 // Shuffle the data set
 func (d *Dataset) Shuffle() {
 	d.indexes = rand.Perm(d.Samples)
+	d.shuffled = true
 }
 
 // Data type has the raw data for a training or test set

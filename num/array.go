@@ -2,6 +2,7 @@ package num
 
 import (
 	"fmt"
+	"github.com/jnb666/deepthought2/num/dnn"
 	"unsafe"
 )
 
@@ -12,36 +13,34 @@ var (
 )
 
 // Array interface is a general n dimensional tensor similar to a numpy ndarray
+// data is stored internally in column major order
 type Array interface {
-	// Dims returns the shape of the array with most significant dimension first
+	// Dims returns the shape of the array in rows, cols, ... order
 	Dims() []int
 	// Dtype returns the data type of the elements in the array
 	Dtype() DataType
 	// Reshape returns a new array of the same size with a view on the same data but with a different shape
 	Reshape(dims ...int) Array
-	// Device where the data resides
-	Device() Device
 	// Reference to the raw data
 	Data() unsafe.Pointer
+	// Point to new data buffer
+	SetData(p unsafe.Pointer)
 	// Formatted output
 	String(q Queue) string
 }
 
 // Allocate a new array on the device with the given type and fill with zeroes.
-func NewArray(dev Device, dtype DataType, dims ...int) Array {
-	size := Prod(dims)
-	switch dev {
-	case CPU:
-		buf := make([]int32, size)
-		return &arrayCPU{dims: dims, dtype: dtype, data: unsafe.Pointer(&buf[0])}
-	default:
-		panic("NewArray: invalid device type")
+func (d cpuDevice) NewArray(dtype DataType, dims ...int) Array {
+	return &arrayCPU{
+		dims:  dims,
+		dtype: dtype,
+		data:  dnn.Alloc(Prod(dims)),
 	}
 }
 
 // Allocate a new array with same device, datatype and shape as the input.
-func NewArrayLike(a Array) Array {
-	return NewArray(a.Device(), a.Dtype(), a.Dims()...)
+func (d cpuDevice) NewArrayLike(a Array) Array {
+	return d.NewArray(a.Dtype(), a.Dims()...)
 }
 
 type arrayCPU struct {
@@ -54,9 +53,9 @@ func (a *arrayCPU) Dims() []int { return a.dims }
 
 func (a *arrayCPU) Dtype() DataType { return a.dtype }
 
-func (a *arrayCPU) Device() Device { return CPU }
-
 func (a *arrayCPU) Data() unsafe.Pointer { return a.data }
+
+func (a *arrayCPU) SetData(p unsafe.Pointer) { a.data = p }
 
 func (a *arrayCPU) Reshape(dims ...int) Array {
 	n := Prod(a.Dims())

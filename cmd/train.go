@@ -9,9 +9,9 @@ import (
 )
 
 func predict(q num.Queue, net *nnet.Network, data nnet.Data) {
-	dset := nnet.NewDataset(q.Device(), data, net.TrainBatch, net.MaxSamples)
+	dset := nnet.NewDataset(q.Dev(), data, net.TrainBatch, net.MaxSamples)
 	x, y, _ := dset.GetBatch(q, 0)
-	classes := num.NewArray(q.Device(), num.Int32, y.Dims()[0])
+	classes := q.NewArray(num.Int32, y.Dims()[0])
 	yPred := net.Predict(q, x, classes)
 	if net.DebugLevel == 0 && yPred.Dims()[1] == 1 {
 		fmt.Println("predict:", yPred.Reshape(-1).String(q))
@@ -36,28 +36,35 @@ func main() {
 	flag.Int64Var(&conf.RandSeed, "seed", conf.RandSeed, "random number seed")
 	flag.IntVar(&conf.MaxEpoch, "epochs", conf.MaxEpoch, "max epochs")
 	flag.IntVar(&conf.MaxSamples, "samples", conf.MaxSamples, "max samples")
+	flag.IntVar(&conf.TrainBatch, "batch", conf.TrainBatch, "train batch size")
+	flag.IntVar(&conf.TestBatch, "testbatch", conf.TestBatch, "test batch size")
 	flag.IntVar(&conf.DebugLevel, "debug", conf.DebugLevel, "debug logging level")
 	flag.Parse()
 	nnet.SetSeed(conf.RandSeed)
 
 	// load traing and test data
-	data, err := nnet.LoadData(model)
+	data, err := nnet.LoadData(conf.DataSet)
 	nnet.CheckErr(err)
 
 	// initialise weights
-	net := nnet.New(conf)
-	q := num.NewQueue(num.CPU, conf.Threads)
-	net.InitWeights(q, data["train"].Shape)
-	fmt.Println(net)
-
-	fmt.Println("== Before ==")
-	predict(q, net, data["train"])
+	dev := num.NewCPUDevice()
+	q := dev.NewQueue(conf.Threads)
+	trainNet := nnet.New(dev, conf, conf.TrainBatch, data["train"].Shape)
+	trainNet.InitWeights(q)
+	fmt.Println(trainNet)
+	if conf.DebugLevel >= 1 {
+		fmt.Println("== Before ==")
+		predict(q, trainNet, data["train"])
+	}
 
 	// train the network
-	tester := nnet.NewTestLogger(num.CPU, data, conf)
-	nnet.Train(q, net, data["train"], tester)
+	testNet := nnet.New(dev, conf, conf.TestBatch, data["train"].Shape)
+	tester := nnet.NewTestLogger(dev, data, testNet)
+	nnet.Train(q, trainNet, data["train"], tester)
 
-	fmt.Println("== After ==")
-	predict(q, net, data["train"])
+	if conf.DebugLevel >= 1 {
+		fmt.Println("== After ==")
+		predict(q, trainNet, data["train"])
+	}
 	q.Shutdown()
 }

@@ -16,6 +16,7 @@ func main() {
 	nnet.CheckErr(err)
 
 	conf := nnet.Config{
+		DataSet:  "xor",
 		Eta:      10,
 		MaxEpoch: 500,
 		LogEvery: 25,

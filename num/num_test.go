@@ -8,8 +8,9 @@ import (
 
 func TestArray(t *testing.T) {
 	xd := []float32{1, 1, 2, 2, 3, 3}
-	q := NewQueue(CPU, 1)
-	x := NewArray(CPU, Float32, 6)
+	dev := NewCPUDevice()
+	q := dev.NewQueue(1)
+	x := dev.NewArray(Float32, 6)
 	if typ := x.Dtype(); typ != Float32 {
 		t.Error("dtype invalid: got", typ)
 	}
@@ -34,14 +35,14 @@ func TestArray(t *testing.T) {
 	if !reflect.DeepEqual(res, expect) {
 		t.Error("got", res, "expect", expect)
 	}
-
 }
 
 func TestCopy(t *testing.T) {
-	q := NewQueue(CPU, 1)
-	x := NewArray(CPU, Float32, 2, 3)
+	dev := NewCPUDevice()
+	q := dev.NewQueue(1)
+	x := dev.NewArray(Float32, 2, 3)
 	// tile columns
-	y := NewArray(CPU, Float32, 2)
+	y := dev.NewArray(Float32, 2, 1)
 	res := make([]float32, 6)
 	q.Call(
 		Write(y, []float32{1, 2}),
@@ -53,7 +54,7 @@ func TestCopy(t *testing.T) {
 		t.Error("got", res, "expect", expect)
 	}
 	// tile rows
-	y = NewArray(CPU, Float32, 3)
+	y = dev.NewArray(Float32, 3)
 	q.Call(
 		Write(y, []float32{3, 2, 1}),
 		Copy(x, y),
@@ -66,9 +67,10 @@ func TestCopy(t *testing.T) {
 }
 
 func TestOnehot(t *testing.T) {
-	q := NewQueue(CPU, 1)
-	y := NewArray(CPU, Int32, 3)
-	y1h := NewArray(CPU, Float32, 3, 3)
+	dev := NewCPUDevice()
+	q := dev.NewQueue(1)
+	y := dev.NewArray(Int32, 3)
+	y1h := dev.NewArray(Float32, 3, 3)
 	res := make([]float32, 9)
 	vec := []int32{2, 1, 0}
 	q.Call(
@@ -91,9 +93,10 @@ func TestOnehot(t *testing.T) {
 }
 
 func TestTranspose(t *testing.T) {
-	q := NewQueue(CPU, 1)
-	x := NewArray(CPU, Float32, 2, 3)
-	y := NewArray(CPU, Float32, 3, 2)
+	dev := NewCPUDevice()
+	q := dev.NewQueue(1)
+	x := dev.NewArray(Float32, 2, 3)
+	y := dev.NewArray(Float32, 3, 2)
 	res1 := make([]float32, 6)
 	q.Call(
 		Write(x, []float32{1, 1, 2, 2, 3, 3}),
@@ -109,9 +112,10 @@ func TestTranspose(t *testing.T) {
 }
 
 func TestAxpy(t *testing.T) {
-	q := NewQueue(CPU, 1)
-	x := NewArray(CPU, Float32, 2, 3)
-	y := NewArray(CPU, Float32, 2, 3)
+	dev := NewCPUDevice()
+	q := dev.NewQueue(1)
+	x := dev.NewArray(Float32, 2, 3)
+	y := dev.NewArray(Float32, 2, 3)
 	res := make([]float32, 6)
 	q.Call(
 		Write(x, []float32{1, 1, 2, 2, 3, 3}),
@@ -126,9 +130,10 @@ func TestAxpy(t *testing.T) {
 }
 
 func TestSum(t *testing.T) {
-	q := NewQueue(CPU, 1)
-	x := NewArray(CPU, Float32, 2, 3)
-	sum := NewArray(CPU, Float32)
+	dev := NewCPUDevice()
+	q := dev.NewQueue(1)
+	x := dev.NewArray(Float32, 2, 3)
+	sum := dev.NewArray(Float32)
 	res := make([]float32, 1)
 	// scalar sum
 	q.Call(
@@ -140,9 +145,9 @@ func TestSum(t *testing.T) {
 		t.Error("got", res[0], "expect", 3.5)
 	}
 	// sum for each column
-	sum = NewArray(CPU, Float32, 3)
+	sum = dev.NewArray(Float32, 3)
 	res = make([]float32, 3)
-	ones := NewArray(CPU, Float32, 2)
+	ones := dev.NewArray(Float32, 2)
 	q.Call(
 		Fill(ones, 1),
 		Gemv(1, 0, x, ones, sum, Trans),
@@ -155,10 +160,11 @@ func TestSum(t *testing.T) {
 }
 
 func TestGemm(t *testing.T) {
-	q := NewQueue(CPU, 1)
-	x := NewArray(CPU, Float32, 2, 3)
-	y := NewArray(CPU, Float32, 3, 2)
-	z := NewArray(CPU, Float32, 2, 2)
+	dev := NewCPUDevice()
+	q := dev.NewQueue(1)
+	x := dev.NewArray(Float32, 2, 3)
+	y := dev.NewArray(Float32, 3, 2)
+	z := dev.NewArray(Float32, 2, 2)
 	q.Call(Write(x, []float32{1, 4, 2, 5, 3, 6}))
 	res := make([]float32, 4)
 	for _, trans := range []TransType{NoTrans, Trans} {
@@ -189,10 +195,11 @@ func randSlice(n int) []float32 {
 
 func BenchmarkGemm(b *testing.B) {
 	size := 100
-	q := NewQueue(CPU, 1)
-	x := NewArray(CPU, Float32, size, size)
-	y := NewArray(CPU, Float32, size, size)
-	z := NewArray(CPU, Float32, size, size)
+	dev := NewCPUDevice()
+	q := dev.NewQueue(4)
+	x := dev.NewArray(Float32, size, size)
+	y := dev.NewArray(Float32, size, size)
+	z := dev.NewArray(Float32, size, size)
 	q.Call(
 		Write(x, randSlice(size*size)),
 		Write(y, randSlice(size*size)),

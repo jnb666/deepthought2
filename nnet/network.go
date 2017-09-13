@@ -21,33 +21,49 @@ type Network struct {
 	batchErr  num.Array
 	batchLoss num.Array
 	inputGrad num.Array
+	inShape   []int
 }
 
 // New function creates a new network with the given layers.
-func New(conf Config) *Network {
+func New(dev num.Device, conf Config, batchSize int, inShape []int) *Network {
 	n := &Network{Config: conf}
+	if conf.FlattenInput {
+		n.inShape = []int{batchSize, num.Prod(inShape)}
+	} else {
+		n.inShape = append([]int{batchSize}, inShape...)
+	}
+	shape := n.inShape
+	var prev Layer
 	for _, l := range conf.Layers {
-		n.Layers = append(n.Layers, l.Unmarshal())
+		layer := l.Unmarshal()
+		layer.Init(dev, shape, prev)
+		n.Layers = append(n.Layers, layer)
+		shape = layer.OutShape(shape)
+		prev = layer
+	}
+	// add backward links for DNN layers
+	var next Layer
+	for i := len(n.Layers) - 1; i >= 0; i-- {
+		if l, ok := n.Layers[i].(DNNLayer); ok {
+			l.Link(dev, next)
+			if conf.DebugLevel >= 1 {
+				fmt.Printf("== DNN layer %d ==\n%s", i, l.Get())
+			}
+		}
+		next = n.Layers[i]
 	}
 	return n
 }
 
-// Accessor for output layer
-func (n *Network) OutLayer() OutputLayer {
-	return n.Layers[len(n.Layers)-1].(OutputLayer)
-}
-
 // Initialise network weights using a linear or normal distribution.
 // Weights for each layer are scaled by 1/sqrt(nin)
-func (n *Network) InitWeights(q num.Queue, inShape []int) {
-	shape := inShape
-	if n.FlattenInput {
-		shape = []int{num.Prod(inShape)}
-	}
+func (n *Network) InitWeights(q num.Queue) {
+	shape := n.inShape
 	for _, layer := range n.Layers {
 		if l, ok := layer.(ParamLayer); ok {
-			scale := float32(1 / math.Sqrt(float64(shape[0])))
-			l.InitParams(q, shape, scale, n.NormalWeights)
+			nin := num.Prod(shape[1:])
+			scale := float32(1 / math.Sqrt(float64(nin)))
+			l.InitParams(q, scale, n.NormalWeights)
 		}
 		shape = layer.OutShape(shape)
 	}
@@ -56,11 +72,26 @@ func (n *Network) InitWeights(q num.Queue, inShape []int) {
 	}
 }
 
+// Copy weights and bias arrays to destination net
+func (n *Network) CopyTo(q num.Queue, net *Network) {
+	for i, layer := range n.Layers {
+		if l, ok := layer.(ParamLayer); ok {
+			W, B := l.Params()
+			net.Layers[i].(ParamLayer).SetParams(q, W, B)
+		}
+	}
+}
+
+// Accessor for output layer
+func (n *Network) OutLayer() OutputLayer {
+	return n.Layers[len(n.Layers)-1].(OutputLayer)
+}
+
 // Feed forward the input to get the predicted output
 func (n *Network) Fprop(q num.Queue, input num.Array) num.Array {
 	pred := input
 	for i, layer := range n.Layers {
-		if n.DebugLevel >= 3 {
+		if n.DebugLevel >= 2 && pred != nil {
 			fmt.Printf("layer %d input\n%s", i, pred.String(q))
 		}
 		pred = layer.Fprop(q, pred)
@@ -97,7 +128,7 @@ func (n *Network) Error(q num.Queue, dset *Dataset, pred []int32) float64 {
 			end := start + y.Dims()[0]
 			q.Call(num.Read(n.classes, pred[start:end]))
 		}
-		if n.DebugLevel >= 2 {
+		if n.DebugLevel >= 2 || (n.DebugLevel >= 1 && batch == 0) {
 			fmt.Printf("batch %d error =%s\n", batch, n.batchErr.String(q))
 			fmt.Println(y.String(q))
 			fmt.Println(n.classes.String(q))
@@ -111,8 +142,10 @@ func (n *Network) Error(q num.Queue, dset *Dataset, pred []int32) float64 {
 // Print network description
 func (n *Network) String() string {
 	s := make([]string, len(n.Layers))
+	shape := n.inShape
 	for i, layer := range n.Layers {
-		s[i] = fmt.Sprintf("%2d: %s", i, layer)
+		s[i] = fmt.Sprintf("%2d: %-25s %v", i, layer, shape)
+		shape = layer.OutShape(shape)
 	}
 	return fmt.Sprintf("== Config ==\n%s\n== Network ==\n%s", n.Config, strings.Join(s, "\n"))
 }
@@ -129,10 +162,10 @@ func (n *Network) PrintWeights(q num.Queue) {
 
 func (n *Network) allocArrays(q num.Queue, size int) {
 	if n.classes == nil || n.classes.Dims()[0] != size {
-		n.classes = num.NewArray(q.Device(), num.Int32, size)
-		n.diffs = num.NewArray(q.Device(), num.Int32, size)
-		n.batchErr = num.NewArray(q.Device(), num.Float32)
-		n.total = num.NewArray(q.Device(), num.Float32)
+		n.classes = q.NewArray(num.Int32, size)
+		n.diffs = q.NewArray(num.Int32, size)
+		n.batchErr = q.NewArray(num.Float32)
+		n.total = q.NewArray(num.Float32)
 	}
 }
 

@@ -29,6 +29,7 @@ func main() {
 	nnet.CheckErr(err)
 
 	conf := nnet.Config{
+		DataSet:       "mnist",
 		Eta:           0.1,
 		Lambda:        3.0,
 		NormalWeights: true,
@@ -46,11 +47,22 @@ func main() {
 		},
 	}
 	fmt.Println(conf)
+	save("mnist", conf)
 
-	err = conf.SaveDefault("mnist")
+	conf.Layers = []nnet.LayerConfig{
+		nnet.LinearDNN(100),
+		nnet.ReluDNN(),
+		nnet.LinearDNN(10),
+		nnet.LogRegression(),
+	}
+	save("mnist_dnn", conf)
+}
+
+func save(model string, conf nnet.Config) {
+	err := conf.SaveDefault(model)
 	nnet.CheckErr(err)
-	if !nnet.FileExists("mnist.net") {
-		err = conf.Save("mnist")
+	if !nnet.FileExists(model + ".net") {
+		err = conf.Save(model)
 		nnet.CheckErr(err)
 	}
 }
