@@ -6,9 +6,10 @@ import (
 	"testing"
 )
 
+var dev = NewCPUDevice()
+
 func TestArray(t *testing.T) {
 	xd := []float32{1, 1, 2, 2, 3, 3}
-	dev := NewCPUDevice()
 	q := dev.NewQueue(1)
 	x := dev.NewArray(Float32, 6)
 	if typ := x.Dtype(); typ != Float32 {
@@ -49,7 +50,6 @@ func TestArray(t *testing.T) {
 }
 
 func TestCopy(t *testing.T) {
-	dev := NewCPUDevice()
 	q := dev.NewQueue(1)
 	x := dev.NewArray(Float32, 2, 3)
 	// tile columns
@@ -78,7 +78,6 @@ func TestCopy(t *testing.T) {
 }
 
 func TestOnehot(t *testing.T) {
-	dev := NewCPUDevice()
 	q := dev.NewQueue(1)
 	y := dev.NewArray(Int32, 4)
 	y1h := dev.NewArray(Float32, 3, 4)
@@ -105,7 +104,6 @@ func TestOnehot(t *testing.T) {
 }
 
 func TestTranspose(t *testing.T) {
-	dev := NewCPUDevice()
 	q := dev.NewQueue(1)
 	x := dev.NewArray(Float32, 2, 3)
 	y := dev.NewArray(Float32, 3, 2)
@@ -124,7 +122,6 @@ func TestTranspose(t *testing.T) {
 }
 
 func TestAxpy(t *testing.T) {
-	dev := NewCPUDevice()
 	q := dev.NewQueue(1)
 	x := dev.NewArray(Float32, 2, 3)
 	y := dev.NewArray(Float32, 2, 3)
@@ -142,7 +139,6 @@ func TestAxpy(t *testing.T) {
 }
 
 func TestSum(t *testing.T) {
-	dev := NewCPUDevice()
 	q := dev.NewQueue(1)
 	x := dev.NewArray(Float32, 2, 3)
 	sum := dev.NewArray(Float32)
@@ -172,7 +168,6 @@ func TestSum(t *testing.T) {
 }
 
 func TestGemm(t *testing.T) {
-	dev := NewCPUDevice()
 	q := dev.NewQueue(1)
 	x := dev.NewArray(Float32, 2, 3)
 	y := dev.NewArray(Float32, 3, 2)

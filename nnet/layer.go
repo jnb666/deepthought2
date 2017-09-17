@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/jnb666/deepthought2/num"
-	"github.com/jnb666/deepthought2/num/dnn"
 	"math/rand"
 )
 
@@ -34,9 +33,9 @@ type OutputLayer interface {
 	Loss(yOneHot, yPred num.Array) num.Array
 }
 
-// LayerDNN hold a layer which implements the dnn.Layer interface
+// LayerDNN hold a layer which implements the num.Layer interface
 type LayerDNN interface {
-	DNNLayer() dnn.Layer
+	DNNLayer() num.Layer
 }
 
 // Layer configuration details
@@ -257,8 +256,8 @@ func (l *linearDNN) Init(queue num.Queue, inShape []int, prev Layer) Layer {
 	}
 	nBatch, nIn := inShape[1], inShape[0]
 	layer := queue.LinearLayer(nBatch, nIn, l.Nout)
-	l.paramBase = newParams(queue, layer.Shape(dnn.Filter), layer.Shape(dnn.Bias), nBatch)
-	num.SetParams(layer, l.w, l.b, l.dw, l.db)
+	l.paramBase = newParams(queue, layer.FilterShape(), layer.BiasShape(), nBatch)
+	layer.SetParams(l.w, l.b, l.dw, l.db)
 	l.layerDNN = newLayerDNN(queue, layer)
 	return l
 }
@@ -276,8 +275,8 @@ func (l *convDNN) Init(queue num.Queue, inShape []int, prev Layer) Layer {
 	}
 	n, d, h, w := inShape[3], inShape[2], inShape[1], inShape[0]
 	layer := queue.ConvLayer(n, d, h, w, l.Nfeats, l.Size, l.Stride, l.Pad)
-	l.paramBase = newParams(queue, layer.Shape(dnn.Filter), layer.Shape(dnn.Bias), n)
-	num.SetParams(layer, l.w, l.b, l.dw, l.db)
+	l.paramBase = newParams(queue, layer.FilterShape(), layer.BiasShape(), n)
+	layer.SetParams(l.w, l.b, l.dw, l.db)
 	l.layerDNN = newLayerDNN(queue, layer)
 	return l
 }
@@ -420,36 +419,36 @@ func (l layerBase) Link(next Layer) {}
 
 type layerDNN struct {
 	que   num.Queue
-	layer dnn.Layer
+	layer num.Layer
 	layerBase
 }
 
-func newLayerDNN(queue num.Queue, layer dnn.Layer) *layerDNN {
+func newLayerDNN(queue num.Queue, layer num.Layer) *layerDNN {
 	l := &layerDNN{que: queue, layer: layer}
-	l.dsrc = queue.NewArrayFrom(l.layer, dnn.DiffSrc)
+	l.dsrc = l.layer.DiffSrc()
 	return l
 }
 
 func (l *layerDNN) Link(next Layer) {
-	l.dst = l.que.NewArrayFrom(l.layer, dnn.Dst)
+	l.dst = l.layer.Dst()
 }
 
-func (l *layerDNN) DNNLayer() dnn.Layer {
+func (l *layerDNN) DNNLayer() num.Layer {
 	return l.layer
 }
 
 func (l *layerDNN) OutShape(inShape []int) []int {
-	return l.layer.Shape(dnn.Dst)
+	return l.layer.OutShape()
 }
 
 func (l *layerDNN) Fprop(in num.Array) num.Array {
-	l.layer.SetData(dnn.Src, in.Data())
+	l.layer.SetSrc(in)
 	l.que.Call(num.Fprop(l.layer))
 	return l.dst
 }
 
 func (l *layerDNN) Bprop(grad num.Array) num.Array {
-	l.layer.SetData(dnn.DiffDst, grad.Data())
+	l.layer.SetDiffDst(grad)
 	l.que.Call(num.BpropData(l.layer))
 	if l.layer.HasParams() {
 		l.que.Call(
@@ -523,6 +522,7 @@ func isDNNLayer(l Layer) bool {
 	_, ok := l.(LayerDNN)
 	return ok
 }
+
 func marshal(v interface{}) []byte {
 	data, err := json.Marshal(v)
 	if err != nil {

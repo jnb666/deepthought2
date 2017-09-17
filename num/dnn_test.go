@@ -1,7 +1,6 @@
 package num
 
 import (
-	"github.com/jnb666/deepthought2/num/dnn"
 	"math/rand"
 	"testing"
 	"time"
@@ -14,8 +13,6 @@ const (
 	nOut      = 4
 	eps       = 1e-6
 )
-
-var dev = NewCPUDevice()
 
 func randArray(size int, min, max float32) []float32 {
 	v := make([]float32, size)
@@ -47,13 +44,14 @@ func getInputs(t *testing.T, q Queue) (input, W, B Array) {
 	return
 }
 
-func setupNetwork(W, B Array) (linear, relu dnn.Layer, dW, dB Array) {
+func setupNetwork(W, B Array) (linear, relu Layer, dW, dB Array) {
 	dW = dev.NewArrayLike(W)
 	dB = dev.NewArrayLike(B)
-	linear = dev.LinearLayer(batch, nIn, nOut, W, B, dW, dB)
+	linear = dev.LinearLayer(batch, nIn, nOut)
+	linear.SetParams(W, B, dW, dB)
 	relu = dev.ReluLayer(linear)
-	relu.SetData(dnn.Src, linear.Data(dnn.Dst))
-	linear.SetData(dnn.DiffDst, relu.Data(dnn.DiffSrc))
+	relu.SetSrc(linear.Dst())
+	linear.SetDiffDst(relu.DiffSrc())
 	return
 }
 
@@ -89,9 +87,9 @@ func fpropBLAS(q Queue, input, W, B Array) (output, output1 Array) {
 	return
 }
 
-func fpropDNN(t *testing.T, q Queue, linear, relu dnn.Layer, input Array) Array {
-	linear.SetData(dnn.Src, input.Data())
-	output := dev.NewArrayFrom(relu, dnn.Dst)
+func fpropDNN(t *testing.T, q Queue, linear, relu Layer, input Array) Array {
+	linear.SetSrc(input)
+	output := relu.Dst()
 	t.Logf("== FPROP ==\n%s%s", linear, relu)
 	q.Call(
 		Fprop(linear),
@@ -149,9 +147,9 @@ func bpropBLAS(q Queue, inGrad, input, input1, W Array) (dSrc, dW, dB Array) {
 	return
 }
 
-func bpropDNN(t *testing.T, q Queue, linear, relu dnn.Layer, inGrad, dW, dB Array) Array {
-	relu.SetData(dnn.DiffDst, inGrad.Data())
-	dSrc := dev.NewArrayFrom(linear, dnn.DiffSrc)
+func bpropDNN(t *testing.T, q Queue, linear, relu Layer, inGrad, dW, dB Array) Array {
+	relu.SetDiffDst(inGrad)
+	dSrc := linear.DiffSrc()
 	scale := 1 / float32(batch)
 	t.Logf("== BPROP ==\n%s%s", linear, relu)
 	q.Call(

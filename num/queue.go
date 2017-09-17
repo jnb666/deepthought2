@@ -2,7 +2,6 @@ package num
 
 import (
 	"fmt"
-	"github.com/jnb666/deepthought2/num/dnn"
 	"github.com/jnb666/deepthought2/num/mkl"
 	"runtime"
 	"sort"
@@ -25,12 +24,11 @@ type Device interface {
 	// Allocate new n dimensional array
 	NewArray(dtype DataType, dims ...int) Array
 	NewArrayLike(a Array) Array
-	NewArrayFrom(layer dnn.Layer, res dnn.ResType) Array
 	// Allocate DNN layer
-	LinearLayer(nBatch, nIn, nOut int) dnn.Layer
-	ConvLayer(nBatch, depth, h, w, nFeats, size, stride, pad int) dnn.Layer
-	MaxPoolLayer(prev dnn.Layer, size, stride int) dnn.Layer
-	ReluLayer(prev dnn.Layer) dnn.Layer
+	LinearLayer(nBatch, nIn, nOut int) Layer
+	ConvLayer(nBatch, depth, h, w, nFeats, size, stride, pad int) Layer
+	MaxPoolLayer(prev Layer, size, stride int) Layer
+	ReluLayer(prev Layer) Layer
 }
 
 type cpuDevice struct {

@@ -2,7 +2,7 @@ package num
 
 import (
 	"fmt"
-	"github.com/jnb666/deepthought2/num/dnn"
+	"github.com/jnb666/deepthought2/num/mkl"
 	"unsafe"
 )
 
@@ -32,22 +32,13 @@ func (d cpuDevice) NewArray(dtype DataType, dims ...int) Array {
 	return &arrayCPU{
 		dims:  dims,
 		dtype: dtype,
-		data:  dnn.Alloc(Prod(dims)),
+		data:  mkl.NewBuffer(Prod(dims)),
 	}
 }
 
 // Allocate a new array with same device, datatype and shape as the input.
 func (d cpuDevice) NewArrayLike(a Array) Array {
 	return d.NewArray(a.Dtype(), a.Dims()...)
-}
-
-// Create a new array with given layer resource
-func (d cpuDevice) NewArrayFrom(layer dnn.Layer, res dnn.ResType) Array {
-	return &arrayCPU{
-		dims:  layer.Shape(res),
-		dtype: Float32,
-		data:  layer.Data(res),
-	}
 }
 
 type arrayCPU struct {

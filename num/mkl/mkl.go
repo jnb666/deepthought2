@@ -11,43 +11,20 @@ import "C"
 import (
 	"errors"
 	"fmt"
-	"github.com/jnb666/deepthought2/num/dnn"
 	"runtime"
 	"unsafe"
 )
 
-var resMap []dnn.ResType
-
-func init() {
-	resMap = make([]dnn.ResType, C.dnnResourceNumber)
-	for i := dnn.ResType(0); i < dnn.ResNumber; i++ {
-		resMap[res(i)] = i
-	}
-}
-
-func res(t dnn.ResType) C.dnnResourceType_t {
-	switch t {
-	case dnn.Src:
-		return C.dnnResourceSrc
-	case dnn.Dst:
-		return C.dnnResourceDst
-	case dnn.Filter:
-		return C.dnnResourceFilter
-	case dnn.Bias:
-		return C.dnnResourceBias
-	case dnn.DiffSrc:
-		return C.dnnResourceDiffSrc
-	case dnn.DiffDst:
-		return C.dnnResourceDiffDst
-	case dnn.DiffFilter:
-		return C.dnnResourceDiffFilter
-	case dnn.DiffBias:
-		return C.dnnResourceDiffBias
-	case dnn.Workspace:
-		return C.dnnResourceWorkspace
-	default:
-		panic("invalid resource type")
-	}
+var resNames = map[C.dnnResourceType_t]string{
+	C.dnnResourceSrc:        "Src",
+	C.dnnResourceDst:        "Dst",
+	C.dnnResourceFilter:     "Filter",
+	C.dnnResourceBias:       "Bias",
+	C.dnnResourceDiffSrc:    "DiffSrc",
+	C.dnnResourceDiffDst:    "DiffDst",
+	C.dnnResourceDiffFilter: "DiffFilter",
+	C.dnnResourceDiffBias:   "DiffBias",
+	C.dnnResourceWorkspace:  "WorkSpace",
 }
 
 type Attr struct {
@@ -106,84 +83,57 @@ func NewLayer(typ string, inShape, outShape []int) *Layer {
 }
 
 func (l *Layer) init() {
-	l.layoutFromPrimitive(l.Fwd, dnn.Src)
-	l.layoutFromPrimitive(l.Fwd, dnn.Dst)
-	l.layoutFromPrimitive(l.BData, dnn.DiffSrc)
-	l.layoutFromPrimitive(l.BData, dnn.DiffDst)
-	l.Alloc(dnn.Dst)
-	l.Alloc(dnn.DiffSrc)
+	l.layoutFromPrimitive(l.Fwd, C.dnnResourceSrc)
+	l.layoutFromPrimitive(l.Fwd, C.dnnResourceDst)
+	l.layoutFromPrimitive(l.BData, C.dnnResourceDiffSrc)
+	l.layoutFromPrimitive(l.BData, C.dnnResourceDiffDst)
+	l.Alloc(C.dnnResourceDst)
+	l.Alloc(C.dnnResourceDiffSrc)
 }
 
 func (l *Layer) initParams() {
-	l.layoutFromPrimitive(l.Fwd, dnn.Filter)
-	l.layoutFromPrimitive(l.Fwd, dnn.Bias)
-	l.layoutFromPrimitive(l.BFilter, dnn.DiffFilter)
-	l.layoutFromPrimitive(l.BBias, dnn.DiffBias)
+	l.layoutFromPrimitive(l.Fwd, C.dnnResourceFilter)
+	l.layoutFromPrimitive(l.Fwd, C.dnnResourceBias)
+	l.layoutFromPrimitive(l.BFilter, C.dnnResourceDiffFilter)
+	l.layoutFromPrimitive(l.BBias, C.dnnResourceDiffBias)
 }
 
-func (l *Layer) layoutFromPrimitive(prim *Primitive, typ dnn.ResType) {
-	t := res(typ)
+func (l *Layer) layoutFromPrimitive(prim *Primitive, typ C.dnnResourceType_t) {
 	layout := new(Layout)
-	chk(C.dnnLayoutCreateFromPrimitive_F32(&layout.h, prim.h, t))
-	l.layout[t] = layout
+	chk(C.dnnLayoutCreateFromPrimitive_F32(&layout.h, prim.h, typ))
+	l.layout[typ] = layout
 	runtime.SetFinalizer(layout, func(obj *Layout) { obj.Release() })
 }
 
-func (l *Layer) Alloc(typ dnn.ResType) {
-	t := res(typ)
-	l.data[t] = dnn.Alloc(l.layout[t].Size())
-}
-
-// Set a conversion from input layout to given layout, returns false if input and output have same layout
-func (l *Layer) InitInConv(typ dnn.ResType, dims []int, order dnn.DataLayout) bool {
-	t := res(typ)
-	l.inConv[t] = NewLayout(dims, order).Conversion(l.layout[t])
-	return l.inConv != nil
-}
-
-// Setup a conversion from given resource to output layout, returns false if input and output have same layout
-func (l *Layer) InitOutConv(typ dnn.ResType, dims []int, order dnn.DataLayout) bool {
-	t := res(typ)
-	l.outConv[t] = l.layout[t].Conversion(NewLayout(dims, order))
-	return l.outConv != nil
-}
-
-func (l *Layer) Shape(typ dnn.ResType) []int {
-	switch typ {
-	case dnn.Src, dnn.DiffSrc:
-		return l.inShape
-	case dnn.Dst, dnn.DiffDst:
-		return l.outShape
-	case dnn.Filter, dnn.DiffFilter:
-		return l.filtShape
-	case dnn.Bias, dnn.DiffBias:
-		return l.biasShape
-	default:
-		panic("invalid type")
-	}
+func (l *Layer) Alloc(typ C.dnnResourceType_t) {
+	l.data[typ] = NewBuffer(l.layout[typ].Size())
 }
 
 func (l *Layer) String() string {
 	return fmt.Sprintf("[%s]  inShape=%v  outShape=%v\n\t%s\n", l.name, l.inShape, l.outShape, l.Resource)
 }
 
-func (l *Layer) Type() string {
-	return l.name
-}
+func (l *Layer) InShape() []int { return l.inShape }
 
-func (l *Layer) HasParams() bool {
-	return l.BFilter != nil
-}
+func (l *Layer) OutShape() []int { return l.outShape }
+
+func (l *Layer) FilterShape() []int { return l.filtShape }
+
+func (l *Layer) BiasShape() []int { return l.biasShape }
+
+func (l *Layer) Type() string { return l.name }
+
+func (l *Layer) HasParams() bool { return l.BFilter != nil }
 
 // Setup new linear layer
-func InnerProduct(attr *Attr, nBatch, nIn, nOut int, order dnn.DataLayout) *Layer {
+func InnerProduct(attr *Attr, nBatch, nIn, nOut int) *Layer {
 	l := NewLayer("linear", []int{nIn, nBatch}, []int{nOut, nBatch})
 	l.filtShape = []int{nIn, nOut}
 	l.biasShape = []int{nOut}
 	l.BFilter = NewPrimitive()
 	l.BBias = NewPrimitive()
-	inSize := sizeDims(l.inShape, order)
-	outSize := sizeDims(l.outShape, order)
+	inSize := sizeDims(l.inShape)
+	outSize := sizeDims(l.outShape)
 	chans := C.size_t(nOut)
 	chk(C.dnnInnerProductCreateForwardBias_F32(&l.Fwd.h, attr.h, 2, &inSize[0], chans))
 	chk(C.dnnInnerProductCreateBackwardData_F32(&l.BData.h, attr.h, 2, &inSize[0], chans))
@@ -195,7 +145,7 @@ func InnerProduct(attr *Attr, nBatch, nIn, nOut int, order dnn.DataLayout) *Laye
 }
 
 // Setup new convolution layer
-func Convolution(attr *Attr, n, d, h, w, nFeats, filtSize, stride, pad int, order dnn.DataLayout) *Layer {
+func Convolution(attr *Attr, n, d, h, w, nFeats, filtSize, stride, pad int) *Layer {
 	wOut := outSize(w, filtSize, stride, pad)
 	hOut := outSize(h, filtSize, stride, pad)
 	l := NewLayer("conv", []int{w, h, d, n}, []int{wOut, hOut, nFeats, n})
@@ -203,9 +153,9 @@ func Convolution(attr *Attr, n, d, h, w, nFeats, filtSize, stride, pad int, orde
 	l.biasShape = []int{nFeats}
 	l.BFilter = NewPrimitive()
 	l.BBias = NewPrimitive()
-	inSize := sizeDims(l.inShape, order)
-	outSize := sizeDims(l.outShape, order)
-	filter := sizeDims(l.filtShape, order)
+	inSize := sizeDims(l.inShape)
+	outSize := sizeDims(l.outShape)
+	filter := sizeDims(l.filtShape)
 	cstride := sizeDims2(stride)
 	offset := [2]C.int{C.int(-pad), C.int(-pad)}
 	chk(C.dnnConvolutionCreateForwardBias_F32(&l.Fwd.h, attr.h, C.dnnAlgorithmConvolutionDirect,
@@ -227,7 +177,7 @@ func MaxPooling(attr *Attr, prev *Layer, size, stride int) *Layer {
 	wOut := outSize(inShape[0], size, stride, 0)
 	hOut := outSize(inShape[1], size, stride, 0)
 	l := NewLayer("maxPool", inShape, []int{wOut, hOut, inShape[2], inShape[3]})
-	in := prev.GetLayout(dnn.Dst)
+	in := prev.layout[C.dnnResourceDst]
 	csize := sizeDims2(size)
 	cstride := sizeDims2(stride)
 	offset := [2]C.int{}
@@ -236,8 +186,8 @@ func MaxPooling(attr *Attr, prev *Layer, size, stride int) *Layer {
 	chk(C.dnnPoolingCreateBackward_F32(&l.BData.h, attr.h, C.dnnAlgorithmPoolingMax,
 		in.h, &csize[0], &cstride[0], &offset[0], C.dnnBorderZeros))
 	l.init()
-	l.layoutFromPrimitive(l.Fwd, dnn.Workspace)
-	l.Alloc(dnn.Workspace)
+	l.layoutFromPrimitive(l.Fwd, C.dnnResourceWorkspace)
+	l.Alloc(C.dnnResourceWorkspace)
 	return l
 }
 
@@ -245,8 +195,8 @@ func MaxPooling(attr *Attr, prev *Layer, size, stride int) *Layer {
 func Relu(attr *Attr, prev *Layer) *Layer {
 	shape := prev.outShape
 	l := NewLayer("relu", shape, shape)
-	in := prev.GetLayout(dnn.Dst)
-	out := NewLayout(prev.Shape(dnn.Dst), dnn.ColMajor)
+	in := prev.layout[C.dnnResourceDst]
+	out := NewLayout(prev.outShape)
 	chk(C.dnnReLUCreateForward_F32(&l.Fwd.h, attr.h, in.h, 0))
 	chk(C.dnnReLUCreateBackward_F32(&l.BData.h, attr.h, out.h, in.h, 0))
 	l.init()
@@ -255,18 +205,14 @@ func Relu(attr *Attr, prev *Layer) *Layer {
 
 // Resources associated with layer
 type Resource struct {
-	data    []unsafe.Pointer
-	inConv  []*Primitive
-	outConv []*Primitive
-	layout  []*Layout
+	data   []unsafe.Pointer
+	layout []*Layout
 }
 
 func newResources() Resource {
 	return Resource{
-		data:    make([]unsafe.Pointer, C.dnnResourceNumber),
-		layout:  make([]*Layout, C.dnnResourceNumber),
-		inConv:  make([]*Primitive, C.dnnResourceNumber),
-		outConv: make([]*Primitive, C.dnnResourceNumber),
+		data:   make([]unsafe.Pointer, C.dnnResourceNumber),
+		layout: make([]*Layout, C.dnnResourceNumber),
 	}
 }
 
@@ -274,38 +220,34 @@ func (r Resource) ResPtr() unsafe.Pointer {
 	return unsafe.Pointer(&r.data[0])
 }
 
-func (r Resource) Data(typ dnn.ResType) unsafe.Pointer {
-	return r.data[res(typ)]
+func (r Resource) Dst() unsafe.Pointer {
+	return r.data[C.dnnResourceDst]
 }
 
-func (r Resource) SetData(typ dnn.ResType, p unsafe.Pointer) {
-	r.data[res(typ)] = p
+func (r Resource) DiffSrc() unsafe.Pointer {
+	return r.data[C.dnnResourceDiffSrc]
 }
 
-func (r Resource) GetLayout(typ dnn.ResType) *Layout {
-	return r.layout[res(typ)]
+func (r Resource) SetSrc(p unsafe.Pointer) {
+	r.data[C.dnnResourceSrc] = p
 }
 
-func (r Resource) InConv(typ dnn.ResType) *Primitive {
-	return r.inConv[res(typ)]
+func (r Resource) SetDiffDst(p unsafe.Pointer) {
+	r.data[C.dnnResourceDiffDst] = p
 }
 
-func (r Resource) OutConv(typ dnn.ResType) *Primitive {
-	return r.outConv[res(typ)]
+func (r Resource) SetParams(W, B, dW, dB unsafe.Pointer) {
+	r.data[C.dnnResourceFilter] = W
+	r.data[C.dnnResourceBias] = B
+	r.data[C.dnnResourceDiffFilter] = dW
+	r.data[C.dnnResourceDiffBias] = dB
 }
 
 func (r Resource) String() string {
 	s := ""
 	for i, ptr := range r.data {
 		if ptr != nil {
-			s += resMap[i].String()
-			if r.inConv[i] != nil {
-				s += "(in)"
-			}
-			if r.outConv[i] != nil {
-				s += "(out)"
-			}
-			s += " "
+			s += resNames[C.dnnResourceType_t(i)] + " "
 		}
 	}
 	return s
@@ -317,11 +259,11 @@ type Layout struct {
 	h    C.dnnLayout_t
 }
 
-func NewLayout(dims []int, order dnn.DataLayout) *Layout {
+func NewLayout(dims []int) *Layout {
 	l := new(Layout)
 	ndim := C.size_t(len(dims))
-	size := sizeDims(dims, order)
-	strides := getStrides(dims, order)
+	size := sizeDims(dims)
+	strides := getStrides(dims)
 	chk(C.dnnLayoutCreate_F32(&l.h, ndim, &size[0], &strides[0]))
 	runtime.SetFinalizer(l, func(obj *Layout) { obj.Release() })
 	return l
@@ -333,16 +275,6 @@ func (l *Layout) Dims() []int {
 
 func (l *Layout) Release() {
 	C.dnnLayoutDelete_F32(l.h)
-}
-
-// Setup a conversion to copy data to the given layout returns nil if output layerout is the same
-func (l *Layout) Conversion(to *Layout) *Primitive {
-	if C.dnnLayoutCompare_F32(l.h, l.h) == 0 {
-		return nil
-	}
-	conv := NewPrimitive()
-	chk(C.dnnConversionCreate_F32(&conv.h, l.h, to.h))
-	return conv
 }
 
 // Get size of layout in 32 bit words
@@ -364,27 +296,19 @@ func sizeDims2(a int) [2]C.size_t {
 	return [2]C.size_t{C.size_t(a), C.size_t(a)}
 }
 
-func sizeDims(dims []int, order dnn.DataLayout) []C.size_t {
+func sizeDims(dims []int) []C.size_t {
 	res := make([]C.size_t, len(dims))
 	for i, dim := range dims {
-		if order == dnn.RowMajor {
-			res[len(dims)-i-1] = C.size_t(dim)
-		} else {
-			res[i] = C.size_t(dim)
-		}
+		res[i] = C.size_t(dim)
 	}
 	return res
 }
 
-func getStrides(dims []int, order dnn.DataLayout) []C.size_t {
+func getStrides(dims []int) []C.size_t {
 	p := 1
 	res := make([]C.size_t, len(dims))
 	for i, dim := range dims {
-		if order == dnn.RowMajor {
-			res[len(dims)-i-1] = C.size_t(p)
-		} else {
-			res[i] = C.size_t(p)
-		}
+		res[i] = C.size_t(p)
 		p *= dim
 	}
 	return res
@@ -418,5 +342,17 @@ func getError(err C.dnnError_t) error {
 		return errors.New("MKL_DNN: not implemented")
 	default:
 		return errors.New("MKL_DNN: unknown error!")
+	}
+}
+
+// Allocate a block of memory of given no. of 32 bit words - align on 64 byte boundary
+func NewBuffer(size int) unsafe.Pointer {
+	buf := make([]float32, size+16)
+	ptr := unsafe.Pointer(&buf[0])
+	off := (uintptr(ptr) % 64) / 4
+	if off != 0 {
+		return unsafe.Pointer(&buf[16-off])
+	} else {
+		return ptr
 	}
 }
