@@ -15,13 +15,28 @@ func (d cpuDevice) LinearLayer(nBatch, nIn, nOut int) dnn.Layer {
 	return mkl.InnerProduct(d.attr, nBatch, nIn, nOut, dnn.ColMajor)
 }
 
+func (d cpuDevice) ConvLayer(nBatch, depth, h, w, nFeats, size, stride, pad int) dnn.Layer {
+	return mkl.Convolution(d.attr, nBatch, depth, h, w, nFeats, size, stride, pad, dnn.ColMajor)
+}
+
+func (d cpuDevice) MaxPoolLayer(prev dnn.Layer, size, stride int) dnn.Layer {
+	return mkl.MaxPooling(d.attr, prev.(*mkl.Layer), size, stride)
+}
+
 func (d cpuDevice) ReluLayer(prev dnn.Layer) dnn.Layer {
-	out := mkl.NewLayout(prev.OutShape(), dnn.ColMajor)
-	return mkl.Relu(d.attr, prev.(*mkl.Layer), out)
+	return mkl.Relu(d.attr, prev.(*mkl.Layer))
+}
+
+// Set layer parameters
+func SetParams(layer dnn.Layer, W, B, dW, dB Array) {
+	layer.SetData(dnn.Filter, W.Data())
+	layer.SetData(dnn.Bias, B.Data())
+	layer.SetData(dnn.DiffFilter, dW.Data())
+	layer.SetData(dnn.DiffBias, dB.Data())
 }
 
 // Setup conversion from array to layer resource
-func ConvIn(layer dnn.Layer, typ dnn.ResType, dims []int, trans TransType) bool {
+func In(layer dnn.Layer, typ dnn.ResType, dims []int, trans TransType) bool {
 	l := layer.(*mkl.Layer)
 	if l.InitInConv(typ, dims, trans2Layout[trans]) {
 		l.Alloc(typ)
@@ -30,29 +45,13 @@ func ConvIn(layer dnn.Layer, typ dnn.ResType, dims []int, trans TransType) bool 
 	return false
 }
 
-func ArrayIn(layer dnn.Layer, typ dnn.ResType, a Array, trans TransType) bool {
-	if ConvIn(layer, typ, a.Dims(), trans) {
-		return true
-	}
-	layer.SetData(typ, a.Data())
-	return false
-}
-
 // Setup conversion from layer resource to array
-func ConvOut(layer dnn.Layer, typ dnn.ResType, dims []int, trans TransType) bool {
+func Out(layer dnn.Layer, typ dnn.ResType, dims []int, trans TransType) bool {
 	l := layer.(*mkl.Layer)
 	if l.InitOutConv(typ, dims, trans2Layout[trans]) {
 		l.Alloc(typ)
 		return true
 	}
-	return false
-}
-
-func ArrayOut(layer dnn.Layer, typ dnn.ResType, a Array, trans TransType) bool {
-	if ConvOut(layer, typ, a.Dims(), trans) {
-		return true
-	}
-	a.SetData(layer.Data(typ))
 	return false
 }
 
@@ -71,21 +70,21 @@ func Get(layer dnn.Layer, typ dnn.ResType, a Array) Function {
 // Forward propagation
 func Fprop(layer dnn.Layer) Function {
 	l := layer.(*mkl.Layer)
-	return dnnExecute(l.Fwd, l.ResPtr())
+	return dnnExecute(l.Fwd, l.ResPtr(), l.Type()+"_fprop")
 }
 
 // Backward propagation
 func BpropData(layer dnn.Layer) Function {
 	l := layer.(*mkl.Layer)
-	return dnnExecute(l.BData, l.ResPtr())
+	return dnnExecute(l.BData, l.ResPtr(), l.Type()+"_bprop")
 }
 
 func BpropFilter(layer dnn.Layer) Function {
 	l := layer.(*mkl.Layer)
-	return dnnExecute(l.BFilter, l.ResPtr())
+	return dnnExecute(l.BFilter, l.ResPtr(), l.Type()+"_bprop")
 }
 
 func BpropBias(layer dnn.Layer) Function {
 	l := layer.(*mkl.Layer)
-	return dnnExecute(l.BBias, l.ResPtr())
+	return dnnExecute(l.BBias, l.ResPtr(), l.Type()+"_bprop")
 }

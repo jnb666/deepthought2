@@ -3,40 +3,41 @@
 <html lang="en">
 {{ template "header" . -}}
 <body>
+<form name="loadConfig" id="loadConfig" action="/config/load"></form>
 <div class="root-container">
-{{ template "menu" . -}}
-
-<div class="body-container pure-g">
-  <div class="pure-u-1-2">
-    <div class="l-box">
-      <form class="pure-form pure-form-aligned" name="xform" action="/config/save" method="post">
-      <fieldset>
-      {{ range .Fields -}}
-      <div class="pure-control-group">
-        <label for="{{.Name}}">{{.Name}}</label>
-        {{ if .Boolean -}}
-        <input id="{{.Name}}" name="{{.Name}}" type="checkbox" value="true" {{if .On}}checked{{end}}>
-        {{ else -}}
-        <input id="{{.Name}}" name="{{.Name}}" type="text" value="{{.Value}}">
+  {{ template "menu" . -}}
+  <div class="body-container pure-g">
+    <div class="pure-u-1-2">
+      <div class="l-box">
+        <form class="pure-form pure-form-aligned" name="xform" action="/config/save" method="post">
+        <fieldset>
+        {{ range .Fields -}}
+        <div class="pure-control-group">
+          <label for="{{.Name}}">{{.Name}}</label>
+          {{ if .Boolean -}}
+          <input id="{{.Name}}" name="{{.Name}}" type="checkbox" value="true" {{if .On}}checked{{end}}>
+          {{ else -}}
+          <input id="{{.Name}}" name="{{.Name}}" type="text" value="{{.Value}}">
+          {{ end -}}
+          <span class="error-text">{{.Error}}</span>
+        </div>
         {{ end -}}
-        <span class="error-text">{{.Error}}</span>
+        </fieldset>
+        </form>
       </div>
-      {{ end -}}
-      </fieldset>
-      </form>
     </div>
+    <div class="pure-u-1-2">
+      <div class="l-box">
+        <table class="pure-table pure-table-bordered">
+        <tbody>
+        {{ range .Layers -}}
+          <tr><td>layer {{.Index}}</td><td>{{.Desc}}</td></tr>
+        {{ end -}}
+        </tbody>
+        </table>
+      </div>
+    </div>  
   </div>
-  <div class="pure-u-1-2">
-    <div class="l-box">
-      <table class="pure-table pure-table-bordered">
-      <tbody>
-      {{ range .Layers -}}
-        <tr><td>layer {{.Index}}</td><td>{{.Desc}}</td></tr>
-      {{ end -}}
-      </tbody>
-      </table>
-    </div>
-  </div>  
 </div>
 </body>
 </html>

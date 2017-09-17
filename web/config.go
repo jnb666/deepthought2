@@ -3,19 +3,19 @@ package web
 import (
 	"fmt"
 	"github.com/jnb666/deepthought2/nnet"
+	"html/template"
+	"io/ioutil"
+	"log"
 	"net/http"
-	"reflect"
-	"strconv"
+	"strings"
 	"sync"
 )
 
 type ConfigPage struct {
 	*Templates
-	Heading string
-	Fields  []Field
-	Layers  []Layer
-	model   string
-	conf    nnet.Config
+	Fields []Field
+	Layers []Layer
+	conf   *Config
 	sync.Mutex
 }
 
@@ -33,14 +33,13 @@ type Layer struct {
 }
 
 // Base data for handler functions to view and update the network config
-func NewConfigPage(t *Templates, model string, conf nnet.Config) *ConfigPage {
-	p := &ConfigPage{model: model, conf: conf}
+func NewConfigPage(t *Templates, conf *Config) *ConfigPage {
+	p := &ConfigPage{conf: conf}
 	p.Templates = t.Select("config")
 	p.AddOption(Link{Name: "save", Url: "/config/save", Submit: true})
 	p.AddOption(Link{Name: "reset", Url: "/config/reset"})
-	p.Heading = "model: " + model
-	p.Fields = getFields(&conf)
-	p.Layers = getLayers(&conf)
+	p.Fields = getFields(&conf.Config)
+	p.Layers = getLayers(&conf.Config)
 	return p
 }
 
@@ -56,6 +55,27 @@ func (p *ConfigPage) Base() func(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Handler function for the action to load a new model
+func (p *ConfigPage) Load() func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p.Lock()
+		defer p.Unlock()
+		//log.Println("configLoad:", r.URL.Path, r.Method)
+		model := r.FormValue("model")
+		log.Println("load model:", model)
+		conf, err := nnet.LoadConfig(model + ".net")
+		if err != nil {
+			logError(w, err)
+			return
+		}
+		p.conf.Config = conf
+		p.conf.Model = model
+		p.Fields = getFields(&p.conf.Config)
+		p.Layers = getLayers(&p.conf.Config)
+		http.Redirect(w, r, "/config", http.StatusFound)
+	}
+}
+
 // Handler function for the config form save action
 func (p *ConfigPage) Save() func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -63,29 +83,18 @@ func (p *ConfigPage) Save() func(w http.ResponseWriter, r *http.Request) {
 		defer p.Unlock()
 		//log.Println("configSave:", r.URL.Path, r.Method)
 		r.ParseForm()
-		s := reflect.ValueOf(&p.conf).Elem()
 		haveErrors := false
+		conf := p.conf.Config
 		for i, fld := range p.Fields {
 			val := r.Form.Get(fld.Name)
-			p.Fields[i].Value = val
-			f := s.FieldByName(fld.Name)
 			var err error
-			switch f.Type().Kind() {
-			case reflect.Int, reflect.Int64:
-				var x int64
-				if x, err = strconv.ParseInt(val, 10, 64); err == nil {
-					f.SetInt(x)
-				}
-			case reflect.Float64:
-				var x float64
-				if x, err = strconv.ParseFloat(val, 64); err == nil {
-					f.SetFloat(x)
-				}
-			case reflect.Bool:
+			if fld.Boolean {
 				p.Fields[i].On = (val == "true")
-				f.SetBool(p.Fields[i].On)
+				conf, err = p.conf.SetBool(fld.Name, p.Fields[i].On)
+			} else {
+				p.Fields[i].Value = val
+				conf, err = p.conf.SetString(fld.Name, val)
 			}
-			//log.Println(fld.Name, "=>", val, err)
 			p.Fields[i].Error = ""
 			if err != nil {
 				p.Fields[i].Error = "invalid syntax"
@@ -93,10 +102,11 @@ func (p *ConfigPage) Save() func(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !haveErrors {
-			if err := p.conf.Save(p.model); err != nil {
+			if err := conf.Save(p.conf.Model + ".net"); err != nil {
 				logError(w, err)
 				return
 			}
+			p.conf.Config = conf
 		}
 		http.Redirect(w, r, "/config", http.StatusFound)
 	}
@@ -107,19 +117,41 @@ func (p *ConfigPage) Reset() func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p.Lock()
 		defer p.Unlock()
-		var err error
 		//log.Println("configReset:", r.URL.Path, r.Method)
-		if p.conf, err = nnet.LoadConfig(p.model + "_default"); err != nil {
+		conf, err := nnet.LoadConfig(p.conf.Model + ".default")
+		if err != nil {
 			logError(w, err)
 			return
 		}
-		if err = p.conf.Save(p.model); err != nil {
+		if err = conf.Save(p.conf.Model + ".net"); err != nil {
 			logError(w, err)
 			return
 		}
-		p.Fields = getFields(&p.conf)
+		p.conf.Config = conf
+		p.Fields = getFields(&conf)
 		http.Redirect(w, r, "/config", http.StatusFound)
 	}
+}
+
+func (p *ConfigPage) Heading() template.HTML {
+	files, err := ioutil.ReadDir(nnet.DataDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	html := `model: <select name="model" class="model-select" form="loadConfig" onchange="this.form.submit()">`
+	for _, file := range files {
+		name := file.Name()
+		if strings.HasSuffix(name, ".net") {
+			name = name[:len(name)-4]
+			if name == p.conf.Model {
+				html += "<option selected>" + name + "</option>"
+			} else {
+				html += "<option>" + name + "</option>"
+			}
+		}
+	}
+	html += "</select>"
+	return template.HTML(html)
 }
 
 func getFields(conf *nnet.Config) []Field {
@@ -140,7 +172,7 @@ func getLayers(conf *nnet.Config) []Layer {
 	layers := make([]Layer, len(conf.Layers))
 	for i, l := range conf.Layers {
 		layers[i].Index = i
-		layers[i].Desc = l.Unmarshal().String()
+		layers[i].Desc = l.Unmarshal().ToString()
 	}
 	return layers
 }

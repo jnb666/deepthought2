@@ -21,6 +21,7 @@ const (
 	DiffDst
 	DiffFilter
 	DiffBias
+	Workspace
 	ResNumber
 )
 
@@ -33,6 +34,7 @@ var resNames = map[ResType]string{
 	DiffDst:    "DiffDst",
 	DiffFilter: "DiffFilter",
 	DiffBias:   "DiffBias",
+	Workspace:  "WorkSpace",
 }
 
 func (r ResType) String() string {
@@ -41,10 +43,11 @@ func (r ResType) String() string {
 
 // Layer interface type represents a DNN layer
 type Layer interface {
-	InShape() []int
-	OutShape() []int
+	Shape(typ ResType) []int
 	Data(typ ResType) unsafe.Pointer
 	SetData(typ ResType, p unsafe.Pointer)
+	HasParams() bool
+	Type() string
 }
 
 // Allocate a block of memory of given no. of 32 bit words - align on 64 byte boundary

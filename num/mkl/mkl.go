@@ -9,6 +9,7 @@ package mkl
 import "C"
 
 import (
+	"errors"
 	"fmt"
 	"github.com/jnb666/deepthought2/num/dnn"
 	"runtime"
@@ -42,6 +43,8 @@ func res(t dnn.ResType) C.dnnResourceType_t {
 		return C.dnnResourceDiffFilter
 	case dnn.DiffBias:
 		return C.dnnResourceDiffBias
+	case dnn.Workspace:
+		return C.dnnResourceWorkspace
 	default:
 		panic("invalid resource type")
 	}
@@ -84,10 +87,14 @@ func (p *Primitive) Release() {
 // Layer structure represents a DNN layer definition and associated layouts and primitives
 type Layer struct {
 	Resource
-	Fwd, BData, BFilter, BBias *Primitive
-	inShape, outShape          []int
-	filtShape, biasShape       []int
-	name                       string
+	Fwd, BData     *Primitive
+	BFilter, BBias *Primitive
+	inShape        []int
+	outShape       []int
+	filtShape      []int
+	biasShape      []int
+	name           string
+	params         bool
 }
 
 func NewLayer(typ string, inShape, outShape []int) *Layer {
@@ -141,17 +148,38 @@ func (l *Layer) InitOutConv(typ dnn.ResType, dims []int, order dnn.DataLayout) b
 	return l.outConv != nil
 }
 
-func (l *Layer) InShape() []int { return l.inShape }
-
-func (l *Layer) OutShape() []int { return l.outShape }
+func (l *Layer) Shape(typ dnn.ResType) []int {
+	switch typ {
+	case dnn.Src, dnn.DiffSrc:
+		return l.inShape
+	case dnn.Dst, dnn.DiffDst:
+		return l.outShape
+	case dnn.Filter, dnn.DiffFilter:
+		return l.filtShape
+	case dnn.Bias, dnn.DiffBias:
+		return l.biasShape
+	default:
+		panic("invalid type")
+	}
+}
 
 func (l *Layer) String() string {
-	return fmt.Sprintf("%s:\tinShape=%v outShape=%v\n\t%s\n", l.name, l.inShape, l.outShape, l.Resource)
+	return fmt.Sprintf("[%s]  inShape=%v  outShape=%v\n\t%s\n", l.name, l.inShape, l.outShape, l.Resource)
+}
+
+func (l *Layer) Type() string {
+	return l.name
+}
+
+func (l *Layer) HasParams() bool {
+	return l.BFilter != nil
 }
 
 // Setup new linear layer
 func InnerProduct(attr *Attr, nBatch, nIn, nOut int, order dnn.DataLayout) *Layer {
 	l := NewLayer("linear", []int{nIn, nBatch}, []int{nOut, nBatch})
+	l.filtShape = []int{nIn, nOut}
+	l.biasShape = []int{nOut}
 	l.BFilter = NewPrimitive()
 	l.BBias = NewPrimitive()
 	inSize := sizeDims(l.inShape, order)
@@ -166,16 +194,62 @@ func InnerProduct(attr *Attr, nBatch, nIn, nOut int, order dnn.DataLayout) *Laye
 	return l
 }
 
+// Setup new convolution layer
+func Convolution(attr *Attr, n, d, h, w, nFeats, filtSize, stride, pad int, order dnn.DataLayout) *Layer {
+	wOut := outSize(w, filtSize, stride, pad)
+	hOut := outSize(h, filtSize, stride, pad)
+	l := NewLayer("conv", []int{w, h, d, n}, []int{wOut, hOut, nFeats, n})
+	l.filtShape = []int{filtSize, filtSize, d, nFeats}
+	l.biasShape = []int{nFeats}
+	l.BFilter = NewPrimitive()
+	l.BBias = NewPrimitive()
+	inSize := sizeDims(l.inShape, order)
+	outSize := sizeDims(l.outShape, order)
+	filter := sizeDims(l.filtShape, order)
+	cstride := sizeDims2(stride)
+	offset := [2]C.int{C.int(-pad), C.int(-pad)}
+	chk(C.dnnConvolutionCreateForwardBias_F32(&l.Fwd.h, attr.h, C.dnnAlgorithmConvolutionDirect,
+		4, &inSize[0], &outSize[0], &filter[0], &cstride[0], &offset[0], C.dnnBorderZeros))
+	chk(C.dnnConvolutionCreateBackwardData_F32(&l.BData.h, attr.h, C.dnnAlgorithmConvolutionDirect,
+		4, &inSize[0], &outSize[0], &filter[0], &cstride[0], &offset[0], C.dnnBorderZeros))
+	chk(C.dnnConvolutionCreateBackwardFilter_F32(&l.BFilter.h, attr.h, C.dnnAlgorithmConvolutionDirect,
+		4, &inSize[0], &outSize[0], &filter[0], &cstride[0], &offset[0], C.dnnBorderZeros))
+	chk(C.dnnConvolutionCreateBackwardBias_F32(&l.BBias.h, attr.h, C.dnnAlgorithmConvolutionDirect,
+		4, &outSize[0]))
+	l.init()
+	l.initParams()
+	return l
+}
+
+// Setup new max pooling layer
+func MaxPooling(attr *Attr, prev *Layer, size, stride int) *Layer {
+	inShape := prev.outShape
+	wOut := outSize(inShape[0], size, stride, 0)
+	hOut := outSize(inShape[1], size, stride, 0)
+	l := NewLayer("maxPool", inShape, []int{wOut, hOut, inShape[2], inShape[3]})
+	in := prev.GetLayout(dnn.Dst)
+	csize := sizeDims2(size)
+	cstride := sizeDims2(stride)
+	offset := [2]C.int{}
+	chk(C.dnnPoolingCreateForward_F32(&l.Fwd.h, attr.h, C.dnnAlgorithmPoolingMax,
+		in.h, &csize[0], &cstride[0], &offset[0], C.dnnBorderZeros))
+	chk(C.dnnPoolingCreateBackward_F32(&l.BData.h, attr.h, C.dnnAlgorithmPoolingMax,
+		in.h, &csize[0], &cstride[0], &offset[0], C.dnnBorderZeros))
+	l.init()
+	l.layoutFromPrimitive(l.Fwd, dnn.Workspace)
+	l.Alloc(dnn.Workspace)
+	return l
+}
+
 // Setup new relu activation layer
-func Relu(attr *Attr, prev *Layer, out *Layout) *Layer {
-	shape := prev.OutShape()
+func Relu(attr *Attr, prev *Layer) *Layer {
+	shape := prev.outShape
 	l := NewLayer("relu", shape, shape)
 	in := prev.GetLayout(dnn.Dst)
+	out := NewLayout(prev.Shape(dnn.Dst), dnn.ColMajor)
 	chk(C.dnnReLUCreateForward_F32(&l.Fwd.h, attr.h, in.h, 0))
 	chk(C.dnnReLUCreateBackward_F32(&l.BData.h, attr.h, out.h, in.h, 0))
 	l.init()
-	l.SetData(dnn.Src, prev.Data(dnn.Dst))
-	prev.SetData(dnn.DiffDst, l.Data(dnn.DiffSrc))
 	return l
 }
 
@@ -278,6 +352,14 @@ func (l *Layout) Size() int {
 }
 
 // utilities
+func outSize(x, size, stride, pad int) int {
+	ns := x - size + 2*pad
+	if ns%stride != 0 {
+		panic("output size invalid, must be even no. of strides")
+	}
+	return ns/stride + 1
+}
+
 func sizeDims2(a int) [2]C.size_t {
 	return [2]C.size_t{C.size_t(a), C.size_t(a)}
 }
@@ -311,23 +393,30 @@ func getStrides(dims []int, order dnn.DataLayout) []C.size_t {
 type Error C.dnnError_t
 
 // Check for error running DNN function, panics if not success
-func Chk(err Error) {
-	chk(C.dnnError_t(err))
+func GetError(err Error) error {
+	return getError(C.dnnError_t(err))
 }
 
 func chk(err C.dnnError_t) {
+	errDesc := getError(err)
+	if errDesc != nil {
+		panic(errDesc)
+	}
+}
+
+func getError(err C.dnnError_t) error {
 	switch err {
 	case C.E_SUCCESS:
-		return
+		return nil
 	case C.E_INCORRECT_INPUT_PARAMETER:
-		panic("MKL_DNN: incorrect input parameter")
+		return errors.New("MKL_DNN: incorrect input parameter")
 	case C.E_MEMORY_ERROR:
-		panic("MKL_DNN: memory allocation failed")
+		return errors.New("MKL_DNN: memory allocation failed")
 	case C.E_UNSUPPORTED_DIMENSION:
-		panic("MKL_DNN: unsupported dimension")
+		return errors.New("MKL_DNN: unsupported dimension")
 	case C.E_UNIMPLEMENTED:
-		panic("MKL_DNN: not implemented")
+		return errors.New("MKL_DNN: not implemented")
 	default:
-		panic("MKL_DNN: unknown error!")
+		return errors.New("MKL_DNN: unknown error!")
 	}
 }

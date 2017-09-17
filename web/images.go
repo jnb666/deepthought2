@@ -88,14 +88,16 @@ func (p *ImagePage) setPageCount() {
 
 func (p *ImagePage) errorImageCount(index int) int {
 	labels := p.net.Data[p.Dset].Labels
-	pred := p.net.Pred(p.Dset)
+	pred, ok := p.net.Pred[p.Dset]
 	count := 0
-	for i := range pred {
-		if pred[i] != labels[i] {
-			count++
-		}
-		if index >= 0 && count == index+1 {
-			return i + 1
+	if ok {
+		for i := range pred {
+			if pred[i] != labels[i] {
+				count++
+			}
+			if index >= 0 && count == index+1 {
+				return i + 1
+			}
 		}
 	}
 	if index < 0 {
@@ -125,8 +127,8 @@ func (p *ImagePage) Label(i int) int {
 }
 
 func (p *ImagePage) Predict(i int) int {
-	pred := p.net.Pred(p.Dset)
-	if pred == nil || i < 1 || i > len(pred) {
+	pred, ok := p.net.Pred[p.Dset]
+	if !ok || i < 1 || i > len(pred) {
 		return -1
 	}
 	return int(pred[i-1])

@@ -26,12 +26,23 @@ func TestArray(t *testing.T) {
 	if !reflect.DeepEqual(res, xd) {
 		t.Error("got", res, "expect", xd)
 	}
+	expect := []float32{9, 6, 8, 5, 7, 4}
 	q.Call(
+		Fill(x, 0),
+		WriteCol(x, 0, []float32{9, 6}),
+		WriteCol(x, 1, []float32{8, 5}),
+		WriteCol(x, 2, []float32{7, 4}),
+		Read(x, res),
+	).Finish()
+	if !reflect.DeepEqual(res, expect) {
+		t.Error("got", res, "expect", expect)
+	}
+	q.Call(
+		Fill(x, 0),
 		WriteRow(x, 0, []float32{9, 8, 7}),
 		WriteRow(x, 1, []float32{6, 5, 4}),
 		Read(x, res),
 	).Finish()
-	expect := []float32{9, 6, 8, 5, 7, 4}
 	if !reflect.DeepEqual(res, expect) {
 		t.Error("got", res, "expect", expect)
 	}
@@ -69,20 +80,21 @@ func TestCopy(t *testing.T) {
 func TestOnehot(t *testing.T) {
 	dev := NewCPUDevice()
 	q := dev.NewQueue(1)
-	y := dev.NewArray(Int32, 3)
-	y1h := dev.NewArray(Float32, 3, 3)
-	res := make([]float32, 9)
-	vec := []int32{2, 1, 0}
+	y := dev.NewArray(Int32, 4)
+	y1h := dev.NewArray(Float32, 3, 4)
+	res := make([]float32, 12)
+	vec := []int32{2, 1, 0, 2}
 	q.Call(
 		Write(y, vec),
 		Onehot(y, y1h, 3),
 		Read(y1h, res),
 	).Finish()
-	expect := []float32{0, 0, 1, 0, 1, 0, 1, 0, 0}
+	t.Logf("y1hot %s\n%s", y.String(q), y1h.String(q))
+	expect := []float32{0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 1}
 	if !reflect.DeepEqual(res, expect) {
 		t.Error("got", res, "expect", expect)
 	}
-	res2 := make([]int32, 3)
+	res2 := make([]int32, 4)
 	q.Call(
 		Unhot(y1h, y),
 		Read(y, res2),

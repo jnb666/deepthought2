@@ -16,19 +16,19 @@ func main() {
 	nnet.CheckErr(err)
 
 	conf := nnet.Config{
-		DataSet:  "xor",
-		Eta:      10,
-		MaxEpoch: 500,
-		LogEvery: 25,
-		MinLoss:  0.05,
-		Threads:  1,
-		Layers: []nnet.LayerConfig{
-			nnet.Linear(2),
-			nnet.Activation("sigmoid"),
-			nnet.Linear(1),
-			nnet.Activation("sigmoid"),
-		},
-	}
+		DataSet:      "xor",
+		Eta:          10,
+		MaxEpoch:     500,
+		LogEvery:     25,
+		MinLoss:      0.05,
+		FlattenInput: true,
+		Threads:      1,
+	}.AddLayers(
+		nnet.Linear{Nout: 2},
+		nnet.Activation{Atype: "sigmoid"},
+		nnet.Linear{Nout: 1},
+		nnet.Activation{Atype: "sigmoid"},
+	)
 	fmt.Println(conf)
 
 	err = conf.SaveDefault("xor")

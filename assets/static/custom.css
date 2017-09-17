@@ -58,6 +58,10 @@ body, html {
   font-size: 0.875em;
 }
 
+.model-select {
+  background: blue;
+}
+
 .stats-table td,
 .stats-table th {
   font-size: 0.875em;

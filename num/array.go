@@ -23,8 +23,6 @@ type Array interface {
 	Reshape(dims ...int) Array
 	// Reference to the raw data
 	Data() unsafe.Pointer
-	// Point to new data buffer
-	SetData(p unsafe.Pointer)
 	// Formatted output
 	String(q Queue) string
 }
@@ -43,6 +41,15 @@ func (d cpuDevice) NewArrayLike(a Array) Array {
 	return d.NewArray(a.Dtype(), a.Dims()...)
 }
 
+// Create a new array with given layer resource
+func (d cpuDevice) NewArrayFrom(layer dnn.Layer, res dnn.ResType) Array {
+	return &arrayCPU{
+		dims:  layer.Shape(res),
+		dtype: Float32,
+		data:  layer.Data(res),
+	}
+}
+
 type arrayCPU struct {
 	dims  []int
 	dtype DataType
@@ -54,8 +61,6 @@ func (a *arrayCPU) Dims() []int { return a.dims }
 func (a *arrayCPU) Dtype() DataType { return a.dtype }
 
 func (a *arrayCPU) Data() unsafe.Pointer { return a.data }
-
-func (a *arrayCPU) SetData(p unsafe.Pointer) { a.data = p }
 
 func (a *arrayCPU) Reshape(dims ...int) Array {
 	n := Prod(a.Dims())
@@ -88,7 +93,7 @@ func (a *arrayCPU) String(q Queue) string {
 		data = make([]float32, n)
 	}
 	q.Call(Read(a, data)).Finish()
-	return format(a.Dims(), data, 0, 1, false)
+	return format(a.Dims(), data, 0, 1, "", false)
 }
 
 func abs(x float32) float32 {
@@ -98,7 +103,7 @@ func abs(x float32) float32 {
 	return -x
 }
 
-func format(dims []int, data interface{}, at, stride int, dots bool) string {
+func format(dims []int, data interface{}, at, stride int, indent string, dots bool) string {
 	var s string
 	switch len(dims) {
 	case 0:
@@ -120,13 +125,14 @@ func format(dims []int, data interface{}, at, stride int, dots bool) string {
 		s = "["
 		for i := 0; i < dims[0]; i++ {
 			dots2 := dims[0] > PrintThreshold+1 && i == PrintEdgeitems
-			s += format([]int{}, data, at+i*stride, 1, dots || dots2)
+			s += format([]int{}, data, at+i*stride, 1, "", dots || dots2)
 			if dots2 {
 				i = dims[0] - PrintEdgeitems - 1
 			}
 		}
 		s += "]"
 	case 2:
+		//fmt.Printf("format2 %v %d %d %v\n", dims, at, stride, dots)
 		var pre, post string
 		for i := 0; i < dims[0]; i++ {
 			if i == 0 {
@@ -140,13 +146,25 @@ func format(dims []int, data interface{}, at, stride int, dots bool) string {
 				post = "]\n"
 			}
 			dots := dims[0] > PrintThreshold+1 && i == PrintEdgeitems
-			s += pre + format(dims[1:], data, i, dims[0], dots) + post
+			s += indent + pre + format(dims[1:], data, at+i, dims[0], "", dots) + post
 			if dots {
 				i = dims[0] - PrintEdgeitems - 1
 			}
 		}
 	default:
-		panic("TODO")
+		//fmt.Printf("formatn %v %d %d %v\n", dims, at, stride, dots)
+		d := len(dims) - 1
+		bsize := Prod(dims[:d])
+		s = indent + "[\n"
+		for i := 0; i < dims[d]; i++ {
+			if dims[d] > PrintThreshold+1 && i == PrintEdgeitems {
+				s += "   ...  ...   \n"
+				i = dims[d] - PrintEdgeitems - 1
+			} else {
+				s += format(dims[:d], data, at+bsize*i, 1, indent+" ", false)
+			}
+		}
+		s += indent + "]\n"
 	}
 	return s
 }

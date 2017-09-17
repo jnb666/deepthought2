@@ -14,6 +14,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"time"
 )
 
 var upgrader = websocket.Upgrader{
@@ -25,12 +26,11 @@ type TrainPage struct {
 	*Templates
 	Headers []string
 	net     *Network
-	model   string
 }
 
 // Base data for handler functions to perform network training and display the stats
-func NewTrainPage(t *Templates, net *Network, model string) *TrainPage {
-	p := &TrainPage{net: net, model: model}
+func NewTrainPage(t *Templates, net *Network) *TrainPage {
+	p := &TrainPage{net: net}
 	p.Templates = t.Select("train")
 	p.AddOption(Link{Name: "start", Url: "/train/start"})
 	p.AddOption(Link{Name: "stop", Url: "/train/stop"})
@@ -51,12 +51,7 @@ func (p *TrainPage) Base() func(w http.ResponseWriter, r *http.Request) {
 			if p.net.running {
 				log.Println("skip start - already running")
 			} else {
-				conf, err := nnet.LoadConfig(p.model)
-				if err != nil {
-					logError(w, err)
-					return
-				}
-				p.net.Train(conf, cmd == "start")
+				p.net.Train(cmd == "start")
 			}
 		case "stop":
 			p.net.running = false
@@ -91,7 +86,7 @@ func (p *TrainPage) Websocket() func(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *TrainPage) Heading() template.HTML {
-	s := fmt.Sprintf(`epoch <span id="epoch">%d</span> of %d`, p.net.Epoch, p.net.MaxEpoch)
+	s := fmt.Sprintf(`%s: epoch <span id="epoch">%d</span> of %d`, p.net.Conf.Model, p.net.Epoch, p.net.MaxEpoch)
 	return template.HTML(s)
 }
 
@@ -108,7 +103,8 @@ func (p *TrainPage) RunTime() string {
 	if len(p.net.Stats) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("run time: %.4gs", p.net.Stats[len(p.net.Stats)-1].Elapsed.Seconds())
+	elapsed := p.net.Stats[len(p.net.Stats)-1].Elapsed
+	return fmt.Sprintf("run time: %s", elapsed.Round(10*time.Millisecond))
 }
 
 func (p *TrainPage) LossPlot(width, height int) template.HTML {

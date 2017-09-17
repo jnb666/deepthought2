@@ -13,7 +13,7 @@ import (
 
 const (
 	scale = 3
-	rows  = 6
+	rows  = 8
 	cols  = 10
 )
 
@@ -24,15 +24,17 @@ func main() {
 		os.Exit(1)
 	}
 	model := os.Args[len(os.Args)-1]
-	net, err := web.NewNetwork(num.NewCPUDevice(), model)
+	conf, err := web.NewConfig(model)
+	nnet.CheckErr(err)
+	net, err := web.NewNetwork(num.NewCPUDevice(), conf)
 	nnet.CheckErr(err)
 
 	t, err := web.NewTemplates()
 	nnet.CheckErr(err)
 
-	trainPage := web.NewTrainPage(t.Clone(), net, model)
+	trainPage := web.NewTrainPage(t.Clone(), net)
 	imagePage := web.NewImagePage(t.Clone(), net, scale, rows, cols)
-	configPage := web.NewConfigPage(t.Clone(), model, net.Config)
+	configPage := web.NewConfigPage(t.Clone(), conf)
 
 	r := mux.NewRouter()
 	r.Handle("/", http.RedirectHandler("/train/stats", http.StatusFound))
@@ -48,6 +50,7 @@ func main() {
 	r.HandleFunc("/img/{dset}/{id:[0-9]+}", imagePage.Image())
 
 	r.HandleFunc("/config", configPage.Base())
+	r.HandleFunc("/config/load", configPage.Load())
 	r.HandleFunc("/config/save", configPage.Save()).Methods("POST")
 	r.HandleFunc("/config/reset", configPage.Reset())
 

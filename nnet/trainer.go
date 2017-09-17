@@ -36,42 +36,66 @@ func (s Stats) Format() []string {
 
 // Tester interface to evaluate the performance after each epoch, Test method returns true if training should stop.
 type Tester interface {
-	Test(q num.Queue, net *Network, epoch int, loss float64, start time.Time) bool
+	Test(net *Network, epoch int, loss float64, start time.Time) bool
 }
 
 // Tester which evaluates the loss and error for each of the data sets and updates the stats.
 type TestBase struct {
 	Net     *Network
 	Data    map[string]*Dataset
+	Predict map[string][]int32
 	Stats   Stats
 	Headers []string
+	Samples int
 }
 
 // Create a new base class which implements the Tester interface.
-func NewTestBase(dev num.Device, data map[string]Data, net *Network) *TestBase {
+// If limitSamples flag is set then total no. of samples will be entries in smallest dataset.
+func NewTestBase(queue num.Queue, conf Config, data map[string]Data, limitSamples bool) *TestBase {
 	t := &TestBase{
-		Net:     net,
 		Data:    make(map[string]*Dataset),
 		Headers: StatsHeaders(data),
+		Samples: len(data["train"].Labels),
+	}
+	if limitSamples {
+		for _, d := range data {
+			if len(d.Labels) < t.Samples {
+				t.Samples = len(d.Labels)
+			}
+		}
+	}
+	if conf.DebugLevel >= 1 {
+		fmt.Printf("init tester: samples=%d batch size=%d\n", t.Samples, conf.TestBatch)
 	}
 	for key, d := range data {
-		t.Data[key] = NewDataset(dev, d, net.TestBatch, net.MaxSamples)
+		if conf.DebugLevel >= 1 {
+			fmt.Println("dataset =>", key)
+		}
+		t.Data[key] = NewDataset(queue.Dev(), d, conf.TestBatch, t.Samples)
 	}
+	t.Net = New(queue, conf, t.Data["train"].BatchSize, t.Data["train"].Shape)
 	return t
 }
 
 // Test performance of the network, called from the Train function on completion of each epoch.
-func (t *TestBase) Test(q num.Queue, net *Network, epoch int, loss float64, start time.Time) bool {
-	net.CopyTo(q, t.Net)
+// If Predict map is not nil then save predicted results.
+func (t *TestBase) Test(net *Network, epoch int, loss float64, start time.Time) bool {
+	net.CopyTo(t.Net)
 	if net.DebugLevel >= 1 {
 		fmt.Printf("== TEST EPOCH %d ==\n", epoch)
-		//t.Net.PrintWeights(q)
 	}
 	t.Stats.Epoch = epoch
 	t.Stats.Values = []float64{loss}
 	for _, key := range DataTypes {
-		if _, ok := t.Data[key]; ok {
-			t.Stats.Values = append(t.Stats.Values, t.Net.Error(q, t.Data[key], nil))
+		if dset, ok := t.Data[key]; ok {
+			if dset.Samples < len(dset.Labels) {
+				dset.Shuffle(t.Net.rng)
+			}
+			var pred []int32
+			if t.Predict != nil {
+				pred = t.Predict[key]
+			}
+			t.Stats.Values = append(t.Stats.Values, t.Net.Error(dset, pred))
 		}
 	}
 	t.Stats.Elapsed = time.Since(start)
@@ -83,12 +107,12 @@ type testLogger struct {
 }
 
 // Create a new tester which logs stats to stdout.
-func NewTestLogger(device num.Device, data map[string]Data, net *Network) Tester {
-	return testLogger{TestBase: NewTestBase(device, data, net)}
+func NewTestLogger(queue num.Queue, conf Config, data map[string]Data) Tester {
+	return testLogger{TestBase: NewTestBase(queue, conf, data, true)}
 }
 
-func (t testLogger) Test(q num.Queue, net *Network, epoch int, loss float64, start time.Time) bool {
-	done := t.TestBase.Test(q, net, epoch, loss, start)
+func (t testLogger) Test(net *Network, epoch int, loss float64, start time.Time) bool {
+	done := t.TestBase.Test(net, epoch, loss, start)
 	if done || net.LogEvery == 0 || epoch%net.LogEvery == 0 {
 		msg := fmt.Sprintf("epoch %3d:", epoch)
 		for i, val := range t.Stats.Format() {
@@ -97,49 +121,49 @@ func (t testLogger) Test(q num.Queue, net *Network, epoch int, loss float64, sta
 		fmt.Println(msg)
 	}
 	if done {
-		fmt.Printf("run time: %.2gs\n", t.Stats.Elapsed.Seconds())
+		fmt.Printf("run time: %s\n", t.Stats.Elapsed.Round(10*time.Millisecond))
 	}
 	return done
 }
 
 // Train the network on the given training set by updating the weights
-func Train(q num.Queue, net *Network, data Data, test Tester) {
-	dset := NewDataset(q.Dev(), data, net.TrainBatch, net.MaxSamples)
-	acc := q.NewArray(num.Float32)
-	epoch := 1
+func Train(net *Network, dset *Dataset, test Tester) {
+	acc := net.queue.NewArray(num.Float32)
 	done := false
 	start := time.Now()
-	for !done {
-		loss := TrainEpoch(q, net, dset, acc)
-		done = test.Test(q, net, epoch, loss, start)
-		epoch++
+	for epoch := 1; epoch <= net.MaxEpoch && !done; epoch++ {
+		loss := TrainEpoch(net, dset, acc)
+		done = test.Test(net, epoch, loss, start)
 	}
 }
 
 // Perform one training epoch on dataset, returns the current loss prior to updating the weights.
-func TrainEpoch(q num.Queue, net *Network, dset *Dataset, acc num.Array) float64 {
+func TrainEpoch(net *Network, dset *Dataset, acc num.Array) float64 {
+	q := net.queue
+	if net.inputGrad == nil {
+		net.inputGrad = q.NewArray(num.Float32, dset.Classes, dset.BatchSize)
+	}
 	if net.Shuffle {
-		dset.Shuffle()
+		dset.Shuffle(net.rng)
 	}
 	nbatch := dset.Batches()
 	weightDecay := float32(net.Eta*net.Lambda) / float32(dset.Samples)
 	q.Call(num.Fill(acc, 0))
-	if net.inputGrad == nil || net.inputGrad.Dims()[0] != dset.BatchSize {
-		net.inputGrad = q.NewArray(num.Float32, dset.BatchSize, dset.Classes)
-		net.batchLoss = q.NewArray(num.Float32)
-	}
 	for batch := 0; batch < nbatch; batch++ {
 		if net.DebugLevel >= 2 || (net.DebugLevel == 1 && batch == 0) {
 			fmt.Printf("== train batch %d ==\n", batch)
 		}
 		x, _, yOneHot := dset.GetBatch(q, batch)
-		yPred := net.Fprop(q, x)
+		yPred := net.Fprop(x)
 		if net.DebugLevel >= 2 {
 			fmt.Printf("yOneHot:\n%s", yOneHot.String(q))
 			fmt.Printf("yPred:\n%s", yPred.String(q))
 		}
 		// sum average loss over batches
-		losses := net.OutLayer().Loss(q, yOneHot, yPred)
+		losses := net.OutLayer().Loss(yOneHot, yPred)
+		if net.DebugLevel >= 2 {
+			fmt.Printf("loss:\n%s", losses.String(q))
+		}
 		q.Call(
 			num.Sum(losses, net.batchLoss, 1),
 			num.Axpy(1/float32(dset.Samples), net.batchLoss, acc),
@@ -156,7 +180,7 @@ func TrainEpoch(q num.Queue, net *Network, dset *Dataset, acc num.Array) float64
 		// back propagate gradient
 		for i := len(net.Layers) - 1; i >= 0; i-- {
 			layer := net.Layers[i]
-			grad = layer.Bprop(q, grad)
+			grad = layer.Bprop(grad)
 			if net.DebugLevel >= 3 && grad != nil {
 				fmt.Printf("layer %d bprop output:\n%s", i, grad.String(q))
 			}
@@ -164,11 +188,11 @@ func TrainEpoch(q num.Queue, net *Network, dset *Dataset, acc num.Array) float64
 		// update weights
 		for _, layer := range net.Layers {
 			if l, ok := layer.(ParamLayer); ok {
-				l.UpdateParams(q, float32(net.Eta), weightDecay)
+				l.UpdateParams(float32(net.Eta), weightDecay)
 			}
 		}
 		if net.DebugLevel >= 2 || (batch == nbatch-1 && net.DebugLevel >= 1) {
-			net.PrintWeights(q)
+			net.PrintWeights()
 		}
 	}
 	lossVal := make([]float32, 1)

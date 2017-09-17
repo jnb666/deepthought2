@@ -20,11 +20,11 @@ var (
 // Dataset type encapsulates a set of training, test or validation data.
 type Dataset struct {
 	Data
-	Samples       int
-	BatchSize     int
-	x, xT, y, y1H num.Array
-	indexes       []int
-	shuffled      bool
+	Samples   int
+	BatchSize int
+	x, y, y1H num.Array
+	indexes   []int
+	shuffled  bool
 }
 
 // Create a new Dataset struct, allocate array buffers  and set the batch size and maxSamples
@@ -41,10 +41,9 @@ func NewDataset(dev num.Device, data Data, batchSize, maxSamples int) *Dataset {
 	} else {
 		d.BatchSize = batchSize
 	}
-	d.x = dev.NewArray(num.Float32, d.BatchSize, d.Nfeat())
-	d.xT = dev.NewArray(num.Float32, d.Nfeat(), d.BatchSize)
+	d.x = dev.NewArray(num.Float32, d.Nfeat(), d.BatchSize)
 	d.y = dev.NewArray(num.Int32, d.BatchSize)
-	d.y1H = dev.NewArray(num.Float32, d.BatchSize, d.Classes)
+	d.y1H = dev.NewArray(num.Float32, d.Classes, d.BatchSize)
 	return d
 }
 
@@ -68,14 +67,13 @@ func (d *Dataset) GetBatch(q num.Queue, b int) (x, y, yOneHot num.Array) {
 	if d.shuffled {
 		for i, ix := range d.indexes[start:end] {
 			q.Call(
-				num.WriteRow(d.x, i, d.Input[ix*nfeat:(ix+1)*nfeat]),
-				num.WriteRow(d.y, i, &d.Labels[ix]),
+				num.WriteCol(d.x, i, d.Input[ix*nfeat:(ix+1)*nfeat]),
+				num.WriteCol(d.y, i, &d.Labels[ix]),
 			)
 		}
 	} else {
 		q.Call(
-			num.Write(d.xT, d.Input[start*nfeat:end*nfeat]),
-			num.Transpose(d.xT, d.x),
+			num.Write(d.x, d.Input[start*nfeat:end*nfeat]),
 			num.Write(d.y, d.Labels[start:end]),
 		)
 	}
@@ -86,8 +84,8 @@ func (d *Dataset) GetBatch(q num.Queue, b int) (x, y, yOneHot num.Array) {
 }
 
 // Shuffle the data set
-func (d *Dataset) Shuffle() {
-	d.indexes = rand.Perm(d.Samples)
+func (d *Dataset) Shuffle(rng *rand.Rand) {
+	d.indexes = rng.Perm(d.Samples)
 	d.shuffled = true
 }
 
@@ -124,9 +122,10 @@ func LoadDataFile(name string) (Data, error) {
 		return d, err
 	}
 	defer f.Close()
-	fmt.Println("loading data from", name+".dat")
+	fmt.Printf("loading data from %s.dat:\t", name)
 	dec := gob.NewDecoder(f)
 	err = dec.Decode(&d)
+	fmt.Println(append(d.Shape, len(d.Labels)))
 	return d, err
 }
 

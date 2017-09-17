@@ -1,9 +1,11 @@
 package num
 
 import (
+	"fmt"
 	"github.com/jnb666/deepthought2/num/dnn"
 	"github.com/jnb666/deepthought2/num/mkl"
 	"runtime"
+	"sort"
 	"sync"
 )
 
@@ -23,8 +25,11 @@ type Device interface {
 	// Allocate new n dimensional array
 	NewArray(dtype DataType, dims ...int) Array
 	NewArrayLike(a Array) Array
+	NewArrayFrom(layer dnn.Layer, res dnn.ResType) Array
 	// Allocate DNN layer
 	LinearLayer(nBatch, nIn, nOut int) dnn.Layer
+	ConvLayer(nBatch, depth, h, w, nFeats, size, stride, pad int) dnn.Layer
+	MaxPoolLayer(prev dnn.Layer, size, stride int) dnn.Layer
 	ReluLayer(prev dnn.Layer) dnn.Layer
 }
 
@@ -47,20 +52,31 @@ type Queue interface {
 	Finish()
 	// Shutdown the queue and release any resources
 	Shutdown()
+	// Enable profiling
+	Profiling(on bool)
+	PrintProfile()
 }
 
 // CPUQueue uses OpenBLAS accelarated CPU routines
 type cpuQueue struct {
 	cpuDevice
-	buffer [queueSize]Function
-	queued int
+	buffer  [queueSize]Function
+	queued  int
+	prof    map[string]profileRec
+	profile bool
 	sync.Mutex
+}
+
+type profileRec struct {
+	name  string
+	calls int64
+	usec  int64
 }
 
 func (d cpuDevice) NewQueue(threads int) Queue {
 	runtime.LockOSThread()
 	setCPUThreads(threads)
-	return &cpuQueue{cpuDevice: d}
+	return &cpuQueue{cpuDevice: d, prof: make(map[string]profileRec)}
 }
 
 func (q *cpuQueue) Dev() Device {
@@ -72,7 +88,7 @@ func (q *cpuQueue) Call(args ...Function) Queue {
 	defer q.Unlock()
 	for _, arg := range args {
 		if q.queued >= queueSize {
-			execCPU(q.buffer[:q.queued])
+			execCPU(q.buffer[:q.queued], q.profile, q.prof)
 			q.queued = 0
 		}
 		q.buffer[q.queued] = arg
@@ -83,11 +99,32 @@ func (q *cpuQueue) Call(args ...Function) Queue {
 
 func (q *cpuQueue) Finish() {
 	if q.queued > 0 {
-		execCPU(q.buffer[:q.queued])
+		execCPU(q.buffer[:q.queued], q.profile, q.prof)
 		q.queued = 0
 	}
 }
 
 func (q *cpuQueue) Shutdown() {
 	q.Finish()
+	if q.profile {
+		q.PrintProfile()
+	}
+}
+
+func (q *cpuQueue) Profiling(on bool) {
+	q.profile = on
+}
+
+func (q *cpuQueue) PrintProfile() {
+	fmt.Println("== Profile ==")
+	list := make([]profileRec, len(q.prof))
+	i := 0
+	for _, v := range q.prof {
+		list[i] = v
+		i++
+	}
+	sort.Slice(list, func(i, j int) bool { return list[j].usec < list[i].usec })
+	for _, r := range list {
+		fmt.Printf("%-20s %8d calls %10d usec\n", r.name, r.calls, r.usec)
+	}
 }

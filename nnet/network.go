@@ -15,6 +15,7 @@ import (
 type Network struct {
 	Config
 	Layers    []Layer
+	queue     num.Queue
 	classes   num.Array
 	diffs     num.Array
 	total     num.Array
@@ -22,21 +23,23 @@ type Network struct {
 	batchLoss num.Array
 	inputGrad num.Array
 	inShape   []int
+	rng       *rand.Rand
 }
 
 // New function creates a new network with the given layers.
-func New(dev num.Device, conf Config, batchSize int, inShape []int) *Network {
-	n := &Network{Config: conf}
+func New(queue num.Queue, conf Config, batchSize int, inShape []int) *Network {
+	n := &Network{Config: conf, queue: queue}
+	n.allocArrays(batchSize)
+	n.SetSeed(conf.RandSeed)
 	if conf.FlattenInput {
-		n.inShape = []int{batchSize, num.Prod(inShape)}
+		n.inShape = []int{num.Prod(inShape), batchSize}
 	} else {
-		n.inShape = append([]int{batchSize}, inShape...)
+		n.inShape = append(inShape, []int{1, batchSize}...)
 	}
 	shape := n.inShape
 	var prev Layer
 	for _, l := range conf.Layers {
-		layer := l.Unmarshal()
-		layer.Init(dev, shape, prev)
+		layer := l.Unmarshal().Init(queue, shape, prev)
 		n.Layers = append(n.Layers, layer)
 		shape = layer.OutShape(shape)
 		prev = layer
@@ -44,40 +47,60 @@ func New(dev num.Device, conf Config, batchSize int, inShape []int) *Network {
 	// add backward links for DNN layers
 	var next Layer
 	for i := len(n.Layers) - 1; i >= 0; i-- {
-		if l, ok := n.Layers[i].(DNNLayer); ok {
-			l.Link(dev, next)
-			if conf.DebugLevel >= 1 {
-				fmt.Printf("== DNN layer %d ==\n%s", i, l.Get())
-			}
+		layer := n.Layers[i]
+		layer.Link(next)
+		if conf.DebugLevel >= 1 && isDNNLayer(layer) {
+			fmt.Printf("== DNN layer %d ==\n%s", i, layer.(LayerDNN).DNNLayer())
 		}
 		next = n.Layers[i]
 	}
 	return n
 }
 
+// Set random number seed, or random seed if seed <= 0
+func (n *Network) SetSeed(seed int64) {
+	if seed <= 0 {
+		seed = time.Now().UTC().UnixNano()
+	}
+	if n.DebugLevel >= 1 {
+		fmt.Println("random seed =", seed)
+	}
+	source := rand.NewSource(seed)
+	n.rng = rand.New(source)
+}
+
 // Initialise network weights using a linear or normal distribution.
 // Weights for each layer are scaled by 1/sqrt(nin)
-func (n *Network) InitWeights(q num.Queue) {
+func (n *Network) InitWeights() {
 	shape := n.inShape
-	for _, layer := range n.Layers {
+	for i, layer := range n.Layers {
 		if l, ok := layer.(ParamLayer); ok {
-			nin := num.Prod(shape[1:])
-			scale := float32(1 / math.Sqrt(float64(nin)))
-			l.InitParams(q, scale, n.NormalWeights)
+			nin := num.Prod(shape[:len(shape)-1])
+			// if next layer is a pooling layer adjust the no. of inputs by scale factor
+			if i < len(n.Layers)-2 {
+				if pool, ok := n.Layers[i+2].(*poolDNN); ok {
+					nin /= (pool.Size * pool.Size)
+				}
+			}
+			scale := 1 / math.Sqrt(float64(nin))
+			if n.DebugLevel >= 1 {
+				fmt.Printf("layer %d: set weights scale=%.3g bias=%.3g normal=%v\n", i, scale, n.Bias, n.NormalWeights)
+			}
+			l.InitParams(float32(scale), float32(n.Bias), n.NormalWeights, n.rng)
 		}
 		shape = layer.OutShape(shape)
 	}
 	if n.DebugLevel >= 2 {
-		n.PrintWeights(q)
+		n.PrintWeights()
 	}
 }
 
 // Copy weights and bias arrays to destination net
-func (n *Network) CopyTo(q num.Queue, net *Network) {
+func (n *Network) CopyTo(net *Network) {
 	for i, layer := range n.Layers {
 		if l, ok := layer.(ParamLayer); ok {
 			W, B := l.Params()
-			net.Layers[i].(ParamLayer).SetParams(q, W, B)
+			net.Layers[i].(ParamLayer).SetParams(W, B)
 		}
 	}
 }
@@ -88,37 +111,36 @@ func (n *Network) OutLayer() OutputLayer {
 }
 
 // Feed forward the input to get the predicted output
-func (n *Network) Fprop(q num.Queue, input num.Array) num.Array {
+func (n *Network) Fprop(input num.Array) num.Array {
 	pred := input
 	for i, layer := range n.Layers {
 		if n.DebugLevel >= 2 && pred != nil {
-			fmt.Printf("layer %d input\n%s", i, pred.String(q))
+			fmt.Printf("layer %d input\n%s", i, pred.String(n.queue))
 		}
-		pred = layer.Fprop(q, pred)
+		pred = layer.Fprop(pred)
 	}
 	return pred
 }
 
 // Predict output given input data
-func (n *Network) Predict(q num.Queue, input, classes num.Array) num.Array {
-	yPred := n.Fprop(q, input)
+func (n *Network) Predict(input, classes num.Array) num.Array {
+	yPred := n.Fprop(input)
 	if n.DebugLevel >= 2 {
-		fmt.Printf("yPred\n%s", yPred.String(q))
+		fmt.Printf("yPred\n%s", yPred.String(n.queue))
 	}
-	q.Call(num.Unhot(yPred, classes))
+	n.queue.Call(num.Unhot(yPred, classes))
 	return yPred
 }
 
 // Calculate the error from the predicted versus actual values
 // if pred slice is not nil then also return the predicted output classes.
-func (n *Network) Error(q num.Queue, dset *Dataset, pred []int32) float64 {
-	n.allocArrays(q, dset.BatchSize)
-	q.Call(num.Fill(n.total, 0))
+func (n *Network) Error(dset *Dataset, pred []int32) float64 {
+	n.queue.Call(num.Fill(n.total, 0))
 	nbatch := dset.Batches()
 	for batch := 0; batch < nbatch; batch++ {
-		x, y, _ := dset.GetBatch(q, batch)
-		n.Predict(q, x, n.classes)
-		q.Call(
+		x, y, _ := dset.GetBatch(n.queue, batch)
+		n.Predict(x, n.classes)
+		n.queue.Call(
 			num.Neq(n.classes, y, n.diffs),
 			num.Sum(n.diffs, n.batchErr, 1),
 			num.Axpy(1, n.batchErr, n.total),
@@ -126,56 +148,50 @@ func (n *Network) Error(q num.Queue, dset *Dataset, pred []int32) float64 {
 		if pred != nil {
 			start := batch * dset.BatchSize
 			end := start + y.Dims()[0]
-			q.Call(num.Read(n.classes, pred[start:end]))
+			n.queue.Call(num.Read(n.classes, pred[start:end]))
 		}
 		if n.DebugLevel >= 2 || (n.DebugLevel >= 1 && batch == 0) {
-			fmt.Printf("batch %d error =%s\n", batch, n.batchErr.String(q))
-			fmt.Println(y.String(q))
-			fmt.Println(n.classes.String(q))
+			fmt.Printf("batch %d error =%s\n", batch, n.batchErr.String(n.queue))
+			fmt.Println(y.String(n.queue))
+			fmt.Println(n.classes.String(n.queue))
 		}
 	}
 	err := []float32{0}
-	q.Call(num.Read(n.total, err)).Finish()
+	n.queue.Call(num.Read(n.total, err)).Finish()
 	return float64(err[0]) / float64(dset.Samples)
 }
 
 // Print network description
 func (n *Network) String() string {
-	s := make([]string, len(n.Layers))
-	shape := n.inShape
-	for i, layer := range n.Layers {
-		s[i] = fmt.Sprintf("%2d: %-25s %v", i, layer, shape)
-		shape = layer.OutShape(shape)
+	s := n.configString()
+	if n.Layers != nil {
+		str := []string{"\n== Network =="}
+		shape := n.inShape
+		for i, layer := range n.Layers {
+			shape = layer.OutShape(shape)
+			str = append(str, fmt.Sprintf("%2d: %-16s %s", i, fmt.Sprint(shape), layer.ToString()))
+		}
+		s += strings.Join(str, "\n")
 	}
-	return fmt.Sprintf("== Config ==\n%s\n== Network ==\n%s", n.Config, strings.Join(s, "\n"))
+	return s
 }
 
 // Print network weights
-func (n *Network) PrintWeights(q num.Queue) {
+func (n *Network) PrintWeights() {
 	for i, layer := range n.Layers {
 		if l, ok := layer.(ParamLayer); ok {
 			W, B := l.Params()
-			fmt.Printf("== Layer %d weights ==\n%s %s\n", i, W.String(q), B.String(q))
+			fmt.Printf("== Layer %d weights ==\n%s %s\n", i, W.String(n.queue), B.String(n.queue))
 		}
 	}
 }
 
-func (n *Network) allocArrays(q num.Queue, size int) {
-	if n.classes == nil || n.classes.Dims()[0] != size {
-		n.classes = q.NewArray(num.Int32, size)
-		n.diffs = q.NewArray(num.Int32, size)
-		n.batchErr = q.NewArray(num.Float32)
-		n.total = q.NewArray(num.Float32)
-	}
-}
-
-// Set random number seed, or random seed id seed <= 0
-func SetSeed(seed int64) {
-	if seed <= 0 {
-		seed = time.Now().UTC().UnixNano()
-	}
-	fmt.Println("random seed =", seed)
-	rand.Seed(seed)
+func (n *Network) allocArrays(size int) {
+	n.classes = n.queue.NewArray(num.Int32, size)
+	n.diffs = n.queue.NewArray(num.Int32, size)
+	n.batchLoss = n.queue.NewArray(num.Float32)
+	n.batchErr = n.queue.NewArray(num.Float32)
+	n.total = n.queue.NewArray(num.Float32)
 }
 
 // Exit in case of error

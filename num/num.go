@@ -21,6 +21,39 @@ import (
 	"unsafe"
 )
 
+var opName = map[C.int]string{
+	C.COPY:         "copy",
+	C.COPY_ROW:     "copy_row",
+	C.COPY_COL:     "copy_col",
+	C.TILE0:        "tile0",
+	C.TILE1:        "tile1",
+	C.FILL:         "fill",
+	C.NEQ:          "neq",
+	C.ONEHOT:       "onehot",
+	C.UNHOT:        "unhot",
+	C.SCALE:        "scale",
+	C.AXPY:         "axpy",
+	C.TRANS:        "trams",
+	C.SUM:          "sum",
+	C.GEMV:         "gemv",
+	C.GEMM:         "gemm",
+	C.SIGMOID:      "sigmoid",
+	C.SIGMOID_D:    "sigmoid_d",
+	C.TANH:         "tanh",
+	C.TANH_D:       "tanh_d",
+	C.RELU:         "relu",
+	C.RELU_D:       "relu_d",
+	C.QUAD_LOSS:    "quad_loss",
+	C.SOFTMAX:      "sofmax",
+	C.SOFTMAX_LOSS: "softmax_loss",
+	C.DNN_CONVERT:  "dnn_convert",
+	C.DNN_EXECUTE:  "dnn_execute",
+}
+
+func getOpName(op int) string {
+	return opName[C.int(op)]
+}
+
 // Data type of an element of the array
 type DataType int
 
@@ -50,14 +83,30 @@ func Write(a Array, data interface{}) Function {
 // Write to one row in the array
 func WriteRow(a Array, row int, data interface{}) Function {
 	dims := a.Dims()
-	if len(dims) > 2 || len(dims) < 1 {
-		panic("WriteRow: must be vector or matrix")
+	if len(dims) != 2 {
+		panic("WriteRow: must be a matrix")
 	}
-	cols := 1
-	if len(dims) == 2 {
-		cols = a.Dims()[1]
+	if row < 0 || row >= dims[0] {
+		panic("WriteRow: row out of range")
 	}
-	return args(C.COPY_ROW, row, a.Dims()[0], cols, a.Data(), ptr(data))
+	return args(C.COPY_ROW, row, dims[0], dims[1], a.Data(), ptr(data))
+}
+
+// Write to one column in the array
+func WriteCol(a Array, col int, data interface{}) Function {
+	dims := a.Dims()
+	var rows, cols int
+	if len(dims) == 1 {
+		rows, cols = 1, dims[0]
+	} else if len(dims) == 2 {
+		rows, cols = dims[0], dims[1]
+	} else {
+		panic("WriteCol: must be vector or matrix")
+	}
+	if col < 0 || col >= cols {
+		panic("WriteCol: column out of range")
+	}
+	return args(C.COPY_COL, col, rows, a.Data(), ptr(data))
 }
 
 // Fill array with a scalar value
@@ -102,7 +151,7 @@ func Onehot(x, y Array, classes int) Function {
 		panic("Onehot: incorrect datatype")
 	}
 	xdim, ydim := x.Dims(), y.Dims()
-	if len(xdim) != 1 || len(ydim) != 2 || xdim[0] != ydim[0] || ydim[1] != classes {
+	if len(xdim) != 1 || len(ydim) != 2 || xdim[0] != ydim[1] || ydim[0] != classes {
 		panic("Onehot: invalid array shape")
 	}
 	return args(C.ONEHOT, xdim[0], classes, x.Data(), y.Data())
@@ -114,10 +163,10 @@ func Unhot(x, y Array) Function {
 		panic("Unhot: incorrect datatype")
 	}
 	xdim, ydim := x.Dims(), y.Dims()
-	if len(xdim) != 2 || len(ydim) != 1 || xdim[0] != ydim[0] {
+	if len(xdim) != 2 || len(ydim) != 1 || xdim[1] != ydim[0] {
 		panic("Unhot: invalid array shape")
 	}
-	return args(C.UNHOT, xdim[0], xdim[1], x.Data(), y.Data())
+	return args(C.UNHOT, xdim[1], xdim[0], x.Data(), y.Data())
 }
 
 // Scale array: x <- alpha*x
@@ -295,14 +344,14 @@ func dnnConvert(p *mkl.Primitive, src, dst unsafe.Pointer) Function {
 	return args(C.DNN_CONVERT, p.Ptr(), src, dst)
 }
 
-func dnnExecute(p *mkl.Primitive, res unsafe.Pointer) Function {
+func dnnExecute(p *mkl.Primitive, res unsafe.Pointer, desc string) Function {
 	if p == nil || p.Ptr() == nil {
 		panic("dnnExecute: primitive is nil")
 	}
 	if res == nil {
 		panic("dnnExecute: resource pointer is nil")
 	}
-	return args(C.DNN_EXECUTE, p.Ptr(), res)
+	return args(C.DNN_EXECUTE, p.Ptr(), res, desc)
 }
 
 // Function which may be called via the queue
@@ -322,6 +371,8 @@ func args(op int, arg ...interface{}) Function {
 		case unsafe.Pointer:
 			a.p[np] = v
 			np++
+		case string:
+			a.desc = unsafe.Pointer(&v)
 		default:
 			panic(fmt.Sprintf("invalid arg type: %T", val))
 		}
@@ -336,10 +387,34 @@ func setCPUThreads(threads int) {
 	C.set_num_threads(C.int(threads))
 }
 
-func execCPU(buffer []Function) {
-	ptr := unsafe.Pointer(&buffer[0])
-	err := C.execCPU(C.int(len(buffer)), (**C.struct_args)(ptr))
-	mkl.Chk(mkl.Error(err))
+func execCPU(buffer []Function, profile bool, p map[string]profileRec) {
+	bsize := C.int(len(buffer))
+	ptr := (**C.struct_args)(unsafe.Pointer(&buffer[0]))
+	var err C.dnnError_t
+	var ix C.int
+	if profile {
+		err = C.execCPUProfile(bsize, ptr, &ix)
+		for _, arg := range buffer {
+			name := opDesc(arg)
+			rec := p[name]
+			rec.name = name
+			rec.calls++
+			rec.usec += int64(arg.usec)
+			p[name] = rec
+		}
+	} else {
+		err = C.execCPU(bsize, ptr, &ix)
+	}
+	if e := mkl.GetError(mkl.Error(err)); e != nil {
+		panic(fmt.Sprintf("%s calling %s", e, opDesc(buffer[ix])))
+	}
+}
+
+func opDesc(arg Function) string {
+	if arg.desc != nil {
+		return *((*string)(arg.desc))
+	}
+	return opName[arg.op]
 }
 
 func ptr(ival interface{}) unsafe.Pointer {

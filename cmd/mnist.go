@@ -27,44 +27,6 @@ func main() {
 	nnet.CheckErr(err)
 	err = test.Save("mnist_test")
 	nnet.CheckErr(err)
-
-	conf := nnet.Config{
-		DataSet:       "mnist",
-		Eta:           0.1,
-		Lambda:        3.0,
-		NormalWeights: true,
-		FlattenInput:  true,
-		MaxEpoch:      20,
-		TrainBatch:    10,
-		TestBatch:     100,
-		Threads:       4,
-		Shuffle:       true,
-		Layers: []nnet.LayerConfig{
-			nnet.Linear(100),
-			nnet.Activation("relu"),
-			nnet.Linear(10),
-			nnet.LogRegression(),
-		},
-	}
-	fmt.Println(conf)
-	save("mnist", conf)
-
-	conf.Layers = []nnet.LayerConfig{
-		nnet.LinearDNN(100),
-		nnet.ReluDNN(),
-		nnet.LinearDNN(10),
-		nnet.LogRegression(),
-	}
-	save("mnist_dnn", conf)
-}
-
-func save(model string, conf nnet.Config) {
-	err := conf.SaveDefault(model)
-	nnet.CheckErr(err)
-	if !nnet.FileExists(model + ".net") {
-		err = conf.Save(model)
-		nnet.CheckErr(err)
-	}
 }
 
 func loadData(imageFile, labelFile string) (d nnet.Data, err error) {

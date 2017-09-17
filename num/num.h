@@ -1,8 +1,10 @@
 // Cgo interface routines
+#include <stdint.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 #ifdef USE_MKL
 #include <mkl.h>
 #else
@@ -19,15 +21,17 @@
 
 #define clamp(x, min, max)  ((x) < (min) ? (min) : ((x) > (max) ? (max) : (x)))
 
-enum {COPY, COPY_ROW, TILE0, TILE1, FILL, NEQ, ONEHOT, UNHOT, SCALE, AXPY, TRANS, SUM, GEMV, GEMM,
-	  SIGMOID, SIGMOID_D, TANH, TANH_D, RELU, RELU_D, QUAD_LOSS, SOFTMAX, SOFTMAX_LOSS, 
-	  DNN_CONVERT, DNN_EXECUTE};
+enum {COPY, COPY_ROW, COPY_COL, TILE0, TILE1, FILL, NEQ, ONEHOT, UNHOT, SCALE, AXPY, TRANS, SUM, 
+	GEMV, GEMM, SIGMOID, SIGMOID_D, TANH, TANH_D, RELU, RELU_D, QUAD_LOSS, SOFTMAX, SOFTMAX_LOSS, 
+	DNN_CONVERT, DNN_EXECUTE};
 
 typedef struct args {
-	int   op;
-	int   i[8];
-	float f[4];
-	void* p[4];
+	int     op;
+	int     i[8];
+	float   f[4];
+	void*   p[4];
+	int64_t usec;
+	void*   desc;
 } Args;
 
 void set_num_threads(int n) {
@@ -87,27 +91,28 @@ void onehot(int* y, float* y_one_hot, int n, int classes) {
 	} else {
 		memset(y_one_hot, 0, 4*n*classes);
 		for (int i = 0; i < n; ++i) {
-			y_one_hot[y[i]*n + i] = 1.f;
+			y_one_hot[y[i] + i*classes] = 1.f;
 		}
 	}
 }
 
 void unhot(float* y_one_hot, int* y, int n, int classes) {
 	if (classes == 1) {
-		for (int row = 0; row < n; ++row) {
-			y[row] = y_one_hot[row] > 0.5;
+		for (int i = 0; i < n; ++i) {
+			y[i] = y_one_hot[i] > 0.5;
 		}
 	} else {
-		for (int row = 0; row < n; ++row) {
+		for (int col = 0; col < n; ++col) {
 			int ix = 0;
-			float max = y_one_hot[row];
+			int base = col*classes;
+			float max = y_one_hot[base];
 			for (int i = 1; i < classes; ++i) {
-				if (y_one_hot[i*n+row] > max) {
-					max = y_one_hot[i*n+row];
+				if (y_one_hot[base+i] > max) {
+					max = y_one_hot[base+i];
 					ix = i;
 				}
 			}
-			y[row] = ix;
+			y[col] = ix;
 		}
 	}
 }
@@ -157,145 +162,176 @@ void quadratic_loss(float* y, float* y_pred, float* res, int n) {
 	}
 }
 
-void softmax(float* x, float* res, int n, int classes) {
-	for (int row = 0; row < n; ++row) {
-		float max = x[row];
+void softmax(float* x, float* res, int classes, int n) {
+	for (int col = 0; col < n; ++col) {
+		int base = col*classes;
+		float max = x[base];
 		for (int i = 1; i < classes; ++i) {
-			if (x[row+i*n] > max) max = x[row+i*n];
+			if (x[base+i] > max) max = x[base+i];
 		}
 		float sum = 0.f;
 		for (int i = 0; i < classes; ++i) {
-			res[row+i*n] = expf(x[row+i*n] - max);
-			sum += res[row+i*n];
+			res[base+i] = expf(x[base+i] - max);
+			sum += res[base+i];
 		}
 		for (int i = 0; i < classes; ++i) {
-			res[row+i*n] /= sum;
+			res[base+i] /= sum;
 		}
 	}
 }
 
-void softmax_loss(float* y, float* y_pred, float* res, int n, int classes) {
-	for (int row = 0; row < n; ++row) {
-		float sum = 0.f; 
+void softmax_loss(float* y, float* y_pred, float* res, int classes, int n) {
+	for (int col = 0; col < n; ++col) {
+		int base = col*classes;
+		float sum = 0.f;
 		for (int i = 0; i < classes; ++i) {
-			float pred = y_pred[row+i*n];
+			float pred = y_pred[base+i];
 			pred = clamp(pred, EPS, 1.f-EPS);
 			sum += pred;
 		}
 		for (int i = 0; i < classes; ++i) {
-			float pred = y_pred[row+i*n];
+			float pred = y_pred[base+i];
 			pred = clamp(pred, EPS, 1.f-EPS) / sum;
-			res[row+i*n] = -y[row+i*n] * logf(pred);
+			res[base+i] = -y[base+i] * logf(pred);
 		}
 	}
 }
 
-
-dnnError_t execCPU(int nargs, Args** buffer) {
+dnnError_t callCPU(Args* a) {
 	dnnError_t error = 0;
-	for (int i = 0; i < nargs && error == E_SUCCESS; ++i) {
-		Args* a = buffer[i];
-		switch (a->op) {
-		case COPY:
-			memcpy(a->p[0], a->p[1], a->i[0]*4);
-			break;
-		case COPY_ROW:
-			array_copy_row(IP(a->p[0]), IP(a->p[1]), a->i[0], a->i[1], a->i[2]);
-			break;
-		case NEQ:
-			array_neq(IP(a->p[0]), IP(a->p[1]), IP(a->p[2]), a->i[0]);
-			break;
-		case TILE0:
-			array_tile0(a->p[0], a->p[1], a->i[0]*4, a->i[1]);
-			break;
-		case TILE1:
-			array_tile1(FP(a->p[0]), FP(a->p[1]), a->i[0], a->i[1]);
-			break;
-		case FILL:
-			if (a->i[0] == I32) {
-				array_fill_i(IP(a->p[0]), a->f[0], a->i[1]);				
-			} else {
-				array_fill_f(FP(a->p[0]), a->f[0], a->i[1]);
-			}
-			break;
-		case SUM:
-			if (a->i[0] == I32) {
-				array_sum_i(IP(a->p[0]), a->i[1], a->f[0], FP(a->p[1]));
-			} else {
-				array_sum_f(FP(a->p[0]), a->i[1], a->f[0], FP(a->p[1]));
-			}
-			break;
-		case SCALE:
-			cblas_sscal(a->i[0], a->f[0], FP(a->p[0]), 1);
-			break;
-		case AXPY:
-			cblas_saxpy(a->i[0], a->f[0], FP(a->p[0]), 1, FP(a->p[1]), 1);
-			break;
-		case TRANS:
-#ifdef USE_MKL
-			mkl_somatcopy('c', 't', a->i[0], a->i[1], 1.0f, FP(a->p[0]), 
-				a->i[0], FP(a->p[1]), a->i[1]);
-#else
-			cblas_somatcopy(CblasColMajor, CblasTrans, a->i[0], a->i[1], 1.0f, FP(a->p[0]), 
-				a->i[0], FP(a->p[1]), a->i[1]);
-#endif
-			break;
-		case GEMV:
-			cblas_sgemv(CblasColMajor, a->i[0], a->i[1], a->i[2], a->f[0],
-				FP(a->p[0]), a->i[1], FP(a->p[1]), 1, a->f[1], FP(a->p[2]), 1);
-			break;
-		case GEMM:
-			cblas_sgemm(CblasColMajor, a->i[0], a->i[1], a->i[2], a->i[3], a->i[4], a->f[0], 
-				FP(a->p[0]), a->i[5], FP(a->p[1]), a->i[6], a->f[1], FP(a->p[2]), a->i[7]);
-			break;
-		case SIGMOID:
-			sigmoid_a(FP(a->p[0]), FP(a->p[1]), a->i[0]);
-			break;
-		case SIGMOID_D:
-			sigmoid_d(FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0]);
-			break;
-		case TANH:
-			tanh_a(FP(a->p[0]), FP(a->p[1]), a->i[0]);
-			break;
-		case TANH_D:
-			tanh_d(FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0]);
-			break;
-		case RELU:
-			relu_a(FP(a->p[0]), FP(a->p[1]), a->i[0]);
-			break;
-		case RELU_D:
-			relu_d(FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0]);
-			break;
-		case ONEHOT:
-			onehot(IP(a->p[0]), FP(a->p[1]), a->i[0], a->i[1]);
-			break;
-		case UNHOT:
-			unhot(FP(a->p[0]), IP(a->p[1]), a->i[0], a->i[1]);
-			break;
-		case QUAD_LOSS:
-			quadratic_loss(FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0]);
-			break;
-		case SOFTMAX:
-			softmax(FP(a->p[0]), FP(a->p[1]), a->i[0], a->i[1]);
-			break;
-		case SOFTMAX_LOSS:
-			softmax_loss(FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0], a->i[1]);
-			break;
-		case DNN_CONVERT:
-#ifdef USE_MKL
-			error = dnnConversionExecute_F32((dnnPrimitive_t)(a->p[0]), a->p[1], a->p[2]);
-#else
-			error = E_UNIMPLEMENTED;
-#endif
-			break;
-		case DNN_EXECUTE:
-#ifdef USE_MKL
-			error = dnnExecute_F32((dnnPrimitive_t)(a->p[0]), a->p[1]);
-#else
-			error = E_UNIMPLEMENTED;
-#endif
-			break;
+	switch (a->op) {
+	case COPY:
+		memcpy(a->p[0], a->p[1], a->i[0]*4);
+		break;
+	case COPY_COL:
+		memcpy(a->p[0] + a->i[0]*a->i[1]*4, a->p[1], a->i[1]*4);
+		break;
+	case COPY_ROW:
+		array_copy_row(IP(a->p[0]), IP(a->p[1]), a->i[0], a->i[1], a->i[2]);
+		break;
+	case NEQ:
+		array_neq(IP(a->p[0]), IP(a->p[1]), IP(a->p[2]), a->i[0]);
+		break;
+	case TILE0:
+		array_tile0(a->p[0], a->p[1], a->i[0]*4, a->i[1]);
+		break;
+	case TILE1:
+		array_tile1(FP(a->p[0]), FP(a->p[1]), a->i[0], a->i[1]);
+		break;
+	case FILL:
+		if (a->i[0] == I32) {
+			array_fill_i(IP(a->p[0]), a->f[0], a->i[1]);				
+		} else {
+			array_fill_f(FP(a->p[0]), a->f[0], a->i[1]);
 		}
+		break;
+	case SUM:
+		if (a->i[0] == I32) {
+			array_sum_i(IP(a->p[0]), a->i[1], a->f[0], FP(a->p[1]));
+		} else {
+			array_sum_f(FP(a->p[0]), a->i[1], a->f[0], FP(a->p[1]));
+		}
+		break;
+	case SCALE:
+		cblas_sscal(a->i[0], a->f[0], FP(a->p[0]), 1);
+		break;
+	case AXPY:
+		cblas_saxpy(a->i[0], a->f[0], FP(a->p[0]), 1, FP(a->p[1]), 1);
+		break;
+	case TRANS:
+#ifdef USE_MKL
+		mkl_somatcopy('c', 't', a->i[0], a->i[1], 1.0f, FP(a->p[0]), 
+			a->i[0], FP(a->p[1]), a->i[1]);
+#else
+		cblas_somatcopy(CblasColMajor, CblasTrans, a->i[0], a->i[1], 1.0f, FP(a->p[0]), 
+			a->i[0], FP(a->p[1]), a->i[1]);
+#endif
+		break;
+	case GEMV:
+		cblas_sgemv(CblasColMajor, a->i[0], a->i[1], a->i[2], a->f[0],
+			FP(a->p[0]), a->i[1], FP(a->p[1]), 1, a->f[1], FP(a->p[2]), 1);
+		break;
+	case GEMM:
+		cblas_sgemm(CblasColMajor, a->i[0], a->i[1], a->i[2], a->i[3], a->i[4], a->f[0], 
+			FP(a->p[0]), a->i[5], FP(a->p[1]), a->i[6], a->f[1], FP(a->p[2]), a->i[7]);
+		break;
+	case SIGMOID:
+		sigmoid_a(FP(a->p[0]), FP(a->p[1]), a->i[0]);
+		break;
+	case SIGMOID_D:
+		sigmoid_d(FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0]);
+		break;
+	case TANH:
+		tanh_a(FP(a->p[0]), FP(a->p[1]), a->i[0]);
+		break;
+	case TANH_D:
+		tanh_d(FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0]);
+		break;
+	case RELU:
+		relu_a(FP(a->p[0]), FP(a->p[1]), a->i[0]);
+		break;
+	case RELU_D:
+		relu_d(FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0]);
+		break;
+	case ONEHOT:
+		onehot(IP(a->p[0]), FP(a->p[1]), a->i[0], a->i[1]);
+		break;
+	case UNHOT:
+		unhot(FP(a->p[0]), IP(a->p[1]), a->i[0], a->i[1]);
+		break;
+	case QUAD_LOSS:
+		quadratic_loss(FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0]);
+		break;
+	case SOFTMAX:
+		softmax(FP(a->p[0]), FP(a->p[1]), a->i[0], a->i[1]);
+		break;
+	case SOFTMAX_LOSS:
+		softmax_loss(FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0], a->i[1]);
+		break;
+	case DNN_CONVERT:
+#ifdef USE_MKL
+		error = dnnConversionExecute_F32((dnnPrimitive_t)(a->p[0]), a->p[1], a->p[2]);
+#else
+		error = E_UNIMPLEMENTED;
+#endif
+		break;
+	case DNN_EXECUTE:
+#ifdef USE_MKL
+		error = dnnExecute_F32((dnnPrimitive_t)(a->p[0]), a->p[1]);
+#else
+		error = E_UNIMPLEMENTED;
+#endif
+		break;
 	}
 	return error;
 }
+
+// call batch of commands
+dnnError_t execCPU(int nargs, Args** buffer, int* ix) {
+	for (int i = 0; i < nargs; ++i) {
+		dnnError_t error = callCPU(buffer[i]);
+		if (error != E_SUCCESS) {
+			*ix = i;
+			return error;
+		}
+	}
+	return E_SUCCESS;
+}
+
+// call with profiling enabled
+dnnError_t execCPUProfile(int nargs, Args** buffer, int* ix) {
+	struct timeval start, end;
+	for (int i = 0; i < nargs; ++i) {
+		gettimeofday(&start, NULL);
+		dnnError_t error = callCPU(buffer[i]);
+		gettimeofday(&end, NULL);
+		buffer[i]->usec = 1000000*(end.tv_sec-start.tv_sec) + end.tv_usec-start.tv_usec;
+		if (error != E_SUCCESS) {
+			*ix = i;
+			return error;
+		}
+	}
+	return E_SUCCESS;
+}
+
+
