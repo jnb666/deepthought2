@@ -27,13 +27,4 @@ func main() {
 	fmt.Println(conf)
 	err := conf.SaveDefault("mnist_mlp")
 	nnet.CheckErr(err)
-
-	conf = confBase.AddLayers(
-		nnet.Linear{Nout: 100, DNN: true},
-		nnet.Activation{Atype: "relu", DNN: true},
-		nnet.Linear{Nout: 10, DNN: true},
-		nnet.LogRegression{},
-	)
-	err = conf.SaveDefault("mnist_mlp_dnn")
-	nnet.CheckErr(err)
 }

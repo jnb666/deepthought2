@@ -39,20 +39,10 @@ func New(queue num.Queue, conf Config, batchSize int, inShape []int) *Network {
 	shape := n.inShape
 	var prev Layer
 	for _, l := range conf.Layers {
-		layer := l.Unmarshal().Init(queue, shape, prev)
+		layer := l.Unmarshal().Init(queue.Dev(), shape, prev)
 		n.Layers = append(n.Layers, layer)
-		shape = layer.OutShape(shape)
+		shape = layer.OutShape()
 		prev = layer
-	}
-	// add backward links for DNN layers
-	var next Layer
-	for i := len(n.Layers) - 1; i >= 0; i-- {
-		layer := n.Layers[i]
-		layer.Link(next)
-		if conf.DebugLevel >= 1 && isDNNLayer(layer) {
-			fmt.Printf("== DNN layer %d ==\n%s", i, layer.(LayerDNN).DNNLayer())
-		}
-		next = n.Layers[i]
 	}
 	return n
 }
@@ -72,9 +62,9 @@ func (n *Network) SetSeed(seed int64) {
 // Initialise network weights using a linear or normal distribution.
 // Weights for each layer are scaled by 1/sqrt(nin)
 func (n *Network) InitWeights() {
-	shape := n.inShape
 	for i, layer := range n.Layers {
 		if l, ok := layer.(ParamLayer); ok {
+			shape := layer.InShape()
 			nin := num.Prod(shape[:len(shape)-1])
 			// if next layer is a pooling layer adjust the no. of inputs by scale factor
 			if i < len(n.Layers)-2 {
@@ -86,9 +76,8 @@ func (n *Network) InitWeights() {
 			if n.DebugLevel >= 1 {
 				fmt.Printf("layer %d: set weights scale=%.3g bias=%.3g normal=%v\n", i, scale, n.Bias, n.NormalWeights)
 			}
-			l.InitParams(float32(scale), float32(n.Bias), n.NormalWeights, n.rng)
+			l.InitParams(n.queue, float32(scale), float32(n.Bias), n.NormalWeights, n.rng)
 		}
-		shape = layer.OutShape(shape)
 	}
 	if n.DebugLevel >= 2 {
 		n.PrintWeights()
@@ -100,7 +89,7 @@ func (n *Network) CopyTo(net *Network) {
 	for i, layer := range n.Layers {
 		if l, ok := layer.(ParamLayer); ok {
 			W, B := l.Params()
-			net.Layers[i].(ParamLayer).SetParams(W, B)
+			net.Layers[i].(ParamLayer).SetParams(n.queue, W, B)
 		}
 	}
 }
@@ -117,7 +106,7 @@ func (n *Network) Fprop(input num.Array) num.Array {
 		if n.DebugLevel >= 2 && pred != nil {
 			fmt.Printf("layer %d input\n%s", i, pred.String(n.queue))
 		}
-		pred = layer.Fprop(pred)
+		pred = layer.Fprop(n.queue, pred)
 	}
 	return pred
 }
@@ -166,10 +155,8 @@ func (n *Network) String() string {
 	s := n.configString()
 	if n.Layers != nil {
 		str := []string{"\n== Network =="}
-		shape := n.inShape
 		for i, layer := range n.Layers {
-			shape = layer.OutShape(shape)
-			str = append(str, fmt.Sprintf("%2d: %-16s %s", i, fmt.Sprint(shape), layer.ToString()))
+			str = append(str, fmt.Sprintf("%2d: %-16s %s", i, fmt.Sprint(layer.OutShape()), layer.ToString()))
 		}
 		s += strings.Join(str, "\n")
 	}

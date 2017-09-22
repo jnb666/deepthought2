@@ -46,7 +46,6 @@ var opName = map[C.int]string{
 	C.QUAD_LOSS:    "quad_loss",
 	C.SOFTMAX:      "sofmax",
 	C.SOFTMAX_LOSS: "softmax_loss",
-	C.DNN_CONVERT:  "dnn_convert",
 	C.DNN_EXECUTE:  "dnn_execute",
 }
 
@@ -72,12 +71,12 @@ const (
 
 // Read data from array into a slice.
 func Read(a Array, data interface{}) Function {
-	return args(C.COPY, Prod(a.Dims()), ptr(data), a.Data())
+	return args(C.COPY, Prod(a.Dims()), a.Data(), ptr(data))
 }
 
 // Write data from a slice into the given array.
 func Write(a Array, data interface{}) Function {
-	return args(C.COPY, Prod(a.Dims()), a.Data(), ptr(data))
+	return args(C.COPY, Prod(a.Dims()), ptr(data), a.Data())
 }
 
 // Write to one row in the array
@@ -115,13 +114,13 @@ func Fill(a Array, scalar float32) Function {
 }
 
 // Copy from src to dst, broadcast vector to matrix if needed, vector is tiled row wise
-func Copy(dst, src Array) Function {
+func Copy(src, dst Array) Function {
 	if src.Dtype() != dst.Dtype() {
 		panic("Copy: arguments must be same type")
 	}
 	ddim, sdim := dst.Dims(), src.Dims()
 	if SameShape(ddim, sdim) {
-		return args(C.COPY, Prod(ddim), dst.Data(), src.Data())
+		return args(C.COPY, Prod(ddim), src.Data(), dst.Data())
 	} else if len(sdim) == 1 && len(ddim) == 2 && sdim[0] == ddim[1] {
 		return args(C.TILE1, sdim[0], ddim[0], dst.Data(), src.Data())
 	} else if len(sdim) == 2 && sdim[1] == 1 && len(ddim) == 2 && sdim[0] == ddim[0] {
@@ -258,36 +257,15 @@ func Gemm(alpha, beta float32, mA, mB, mC Array, aTrans, bTrans TransType) Funct
 		alpha, beta, mA.Data(), mB.Data(), mC.Data())
 }
 
-// Sigmoid activation function: y = 1/(1+e**(-x))
-func Sigmoid(x, y Array) Function {
-	return unaryFunc(C.SIGMOID, x, y)
-}
-
-func SigmoidD(x, grad, y Array) Function {
-	return binaryFunc(C.SIGMOID_D, x, grad, y)
-}
-
-// Tanh activation function: y = tanh(x)
-func Tanh(x, y Array) Function {
-	return unaryFunc(C.TANH, x, y)
-}
-
-func TanhD(x, grad, y Array) Function {
-	return binaryFunc(C.TANH_D, x, grad, y)
-}
-
-// Relu rectified linear activation function: y = max(x, 0)
-func Relu(x, y Array) Function {
-	return unaryFunc(C.RELU, x, y)
-}
-
-func ReluD(x, grad, y Array) Function {
-	return binaryFunc(C.RELU_D, x, grad, y)
-}
-
 // Quadratic loss function: (x-y)**2
 func QuadraticLoss(x, y, res Array) Function {
-	return binaryFunc(C.QUAD_LOSS, x, y, res)
+	if x.Dtype() != Float32 || y.Dtype() != Float32 || res.Dtype() != Float32 {
+		panic("QuadraticLoss: dtype must by Float32")
+	}
+	if !SameShape(x.Dims(), res.Dims()) || !SameShape(y.Dims(), res.Dims()) {
+		panic("QuadraticLoss: arrays must be same shape")
+	}
+	return args(C.QUAD_LOSS, Prod(x.Dims()), x.Data(), y.Data(), res.Data())
 }
 
 // Softmax activation function
@@ -314,36 +292,6 @@ func SoftmaxLoss(x, y, res Array) Function {
 	return args(C.SOFTMAX_LOSS, xdim[0], xdim[1], x.Data(), y.Data(), res.Data())
 }
 
-func unaryFunc(op int, x, y Array) Function {
-	if x.Dtype() != Float32 || y.Dtype() != Float32 {
-		panic("UnaryFunc: dtype must by Float32")
-	}
-	if !SameShape(x.Dims(), y.Dims()) {
-		panic("UnaryFunc: arrays must be same shape")
-	}
-	return args(op, Prod(x.Dims()), x.Data(), y.Data())
-}
-
-func binaryFunc(op int, x, y, z Array) Function {
-	if x.Dtype() != Float32 || y.Dtype() != Float32 || z.Dtype() != Float32 {
-		panic("BinaryFunc: dtype must by Float32")
-	}
-	if !SameShape(x.Dims(), z.Dims()) || !SameShape(y.Dims(), z.Dims()) {
-		panic("BinaryFunc: arrays must be same shape")
-	}
-	return args(op, Prod(x.Dims()), x.Data(), y.Data(), z.Data())
-}
-
-func dnnConvert(p *mkl.Primitive, src, dst unsafe.Pointer) Function {
-	if p == nil || p.Ptr() == nil {
-		panic("dnnConvert: primitive is nil")
-	}
-	if src == nil || dst == nil {
-		panic("dnnConvert: input argument is nil")
-	}
-	return args(C.DNN_CONVERT, p.Ptr(), src, dst)
-}
-
 func dnnExecute(p *mkl.Primitive, res unsafe.Pointer, desc string) Function {
 	if p == nil || p.Ptr() == nil {
 		panic("dnnExecute: primitive is nil")
@@ -355,7 +303,9 @@ func dnnExecute(p *mkl.Primitive, res unsafe.Pointer, desc string) Function {
 }
 
 // Function which may be called via the queue
-type Function *C.struct_args
+type Function struct {
+	args *C.struct_args
+}
 
 func args(op int, arg ...interface{}) Function {
 	a := &C.struct_args{op: C.int(op)}
@@ -377,7 +327,14 @@ func args(op int, arg ...interface{}) Function {
 			panic(fmt.Sprintf("invalid arg type: %T", val))
 		}
 	}
-	return a
+	return Function{args: a}
+}
+
+func (f Function) setData(arr ...Array) Function {
+	for i, a := range arr {
+		f.args.p[i] = a.Data()
+	}
+	return f
 }
 
 func setCPUThreads(threads int) {
@@ -394,12 +351,12 @@ func execCPU(buffer []Function, profile bool, p map[string]profileRec) {
 	var ix C.int
 	if profile {
 		err = C.execCPUProfile(bsize, ptr, &ix)
-		for _, arg := range buffer {
-			name := opDesc(arg)
+		for _, f := range buffer {
+			name := opDesc(f)
 			rec := p[name]
 			rec.name = name
 			rec.calls++
-			rec.usec += int64(arg.usec)
+			rec.usec += int64(f.args.usec)
 			p[name] = rec
 		}
 	} else {
@@ -410,11 +367,11 @@ func execCPU(buffer []Function, profile bool, p map[string]profileRec) {
 	}
 }
 
-func opDesc(arg Function) string {
-	if arg.desc != nil {
-		return *((*string)(arg.desc))
+func opDesc(f Function) string {
+	if f.args.desc != nil {
+		return *((*string)(f.args.desc))
 	}
-	return opName[arg.op]
+	return opName[f.args.op]
 }
 
 func ptr(ival interface{}) unsafe.Pointer {

@@ -18,10 +18,10 @@ func main() {
 		Shuffle:       true,
 	}.AddLayers(
 		nnet.Conv{Nfeats: 20, Size: 5},
-		nnet.Activation{Atype: "relu", DNN: true},
+		nnet.Activation{Atype: "relu"},
 		nnet.MaxPool{Size: 2},
 		nnet.Conv{Nfeats: 40, Size: 5},
-		nnet.Activation{Atype: "relu", DNN: true},
+		nnet.Activation{Atype: "relu"},
 		nnet.MaxPool{Size: 2},
 		nnet.Flatten{},
 		nnet.Linear{Nout: 100},

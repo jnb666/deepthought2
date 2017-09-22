@@ -24,11 +24,6 @@ type Device interface {
 	// Allocate new n dimensional array
 	NewArray(dtype DataType, dims ...int) Array
 	NewArrayLike(a Array) Array
-	// Allocate DNN layer
-	LinearLayer(nBatch, nIn, nOut int) Layer
-	ConvLayer(nBatch, depth, h, w, nFeats, size, stride, pad int) Layer
-	MaxPoolLayer(prev Layer, size, stride int) Layer
-	ReluLayer(prev Layer) Layer
 }
 
 type cpuDevice struct {

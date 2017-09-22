@@ -57,7 +57,7 @@ func TestCopy(t *testing.T) {
 	res := make([]float32, 6)
 	q.Call(
 		Write(y, []float32{1, 2}),
-		Copy(x, y),
+		Copy(y, x),
 		Read(x, res),
 	).Finish()
 	expect := []float32{1, 2, 1, 2, 1, 2}
@@ -68,7 +68,7 @@ func TestCopy(t *testing.T) {
 	y = dev.NewArray(Float32, 3)
 	q.Call(
 		Write(y, []float32{3, 2, 1}),
-		Copy(x, y),
+		Copy(y, x),
 		Read(x, res),
 	).Finish()
 	expect = []float32{3, 3, 2, 2, 1, 1}

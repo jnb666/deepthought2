@@ -160,7 +160,7 @@ func TrainEpoch(net *Network, dset *Dataset, acc num.Array) float64 {
 			fmt.Printf("yPred:\n%s", yPred.String(q))
 		}
 		// sum average loss over batches
-		losses := net.OutLayer().Loss(yOneHot, yPred)
+		losses := net.OutLayer().Loss(q, yOneHot, yPred)
 		if net.DebugLevel >= 2 {
 			fmt.Printf("loss:\n%s", losses.String(q))
 		}
@@ -170,7 +170,7 @@ func TrainEpoch(net *Network, dset *Dataset, acc num.Array) float64 {
 		)
 		// get difference at output
 		q.Call(
-			num.Copy(net.inputGrad, yPred),
+			num.Copy(yPred, net.inputGrad),
 			num.Axpy(-1, yOneHot, net.inputGrad),
 		)
 		if net.DebugLevel >= 2 || (net.DebugLevel == 1 && batch == 0) {
@@ -180,7 +180,7 @@ func TrainEpoch(net *Network, dset *Dataset, acc num.Array) float64 {
 		// back propagate gradient
 		for i := len(net.Layers) - 1; i >= 0; i-- {
 			layer := net.Layers[i]
-			grad = layer.Bprop(grad)
+			grad = layer.Bprop(q, grad)
 			if net.DebugLevel >= 3 && grad != nil {
 				fmt.Printf("layer %d bprop output:\n%s", i, grad.String(q))
 			}
@@ -188,7 +188,7 @@ func TrainEpoch(net *Network, dset *Dataset, acc num.Array) float64 {
 		// update weights
 		for _, layer := range net.Layers {
 			if l, ok := layer.(ParamLayer); ok {
-				l.UpdateParams(float32(net.Eta), weightDecay)
+				l.UpdateParams(q, float32(net.Eta), weightDecay)
 			}
 		}
 		if net.DebugLevel >= 2 || (batch == nbatch-1 && net.DebugLevel >= 1) {
