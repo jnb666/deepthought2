@@ -7,12 +7,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
-#ifdef USE_MKL
 #include <mkl.h>
-#else
-#include <cblas.h>
-#endif
+#include <cuda_runtime.h>
+#include <cublas_v2.h>
+#include <cudnn.h>
 
+#define QUEUE_SIZE 128
 #define EPS 1e-7f
 
 #define I32 0
@@ -23,23 +23,46 @@
 
 #define clamp(x, min, max)  ((x) < (min) ? (min) : ((x) > (max) ? (max) : (x)))
 
-enum {COPY, COPY_ROW, COPY_COL, TILE0, TILE1, FILL, NEQ, ONEHOT, UNHOT, SCALE, AXPY, TRANS, SUM, 
-	GEMV, GEMM, SIGMOID, SIGMOID_D, TANH, TANH_D, RELU, RELU_D, QUAD_LOSS, SOFTMAX, SOFTMAX_LOSS, 
-	DNN_EXECUTE};
+enum {COPY, COPY_TO_DEVICE, COPY_TO_HOST, COPY_COL, TILE0, TILE1, 
+	FILL, NEQ, ONEHOT, UNHOT, AXPY, TRANS, SUM, GEMV, GEMM, 
+	SIGMOID, SIGMOID_D, TANH, TANH_D, RELU, RELU_D, 
+	QUAD_LOSS, SOFTMAX, SOFTMAX_LOSS, MKL_DNN_EXECUTE, CUDNN_EXECUTE};
+
+enum{CUDNN_ACTIV_FPROP=CUDNN_EXECUTE, CUDNN_ACTIV_BPROP, 
+	CUDNN_CONV_FPROP, CUDNN_CONV_FPROP_BIAS, 
+	CUDNN_CONV_BPROP_DATA, CUDNN_CONV_BPROP_FILTER, CUDNN_CONV_BPROP_BIAS,
+	CUDNN_POOL_FPROP, CUDNN_POOL_BPROP};
 
 typedef struct args {
 	int     op;
+	float   msec;
 	int     i[8];
 	float   f[4];
-	void*   p[4];
-	int64_t usec;
+	void*   p[8];
 	void*   desc;
 } Args;
 
+typedef struct stream {
+	cudaStream_t	stream;
+	cublasHandle_t	blas;
+	cudnnHandle_t	cudnn;
+} Stream;
+
+typedef struct events {
+	cudaEvent_t start[QUEUE_SIZE];
+	cudaEvent_t end[QUEUE_SIZE];
+} Events;
+
 void set_num_threads(int n);
 
-dnnError_t execCPU(int nargs, Args** buffer, int* ix);
+void initEvents(Events* e);
 
-dnnError_t execCPUProfile(int nargs, Args** buffer, int* ix);
+int execCPU(int nargs, Args** buffer, dnnError_t* error);
+
+int execCPUProfile(int nargs, Args** buffer, dnnError_t* error);
+
+int execGPU(int nargs, Args** buffer, Stream* stream, cudaError_t* error, cublasStatus_t* blasError, cudnnStatus_t* dnnError);
+
+int execGPUProfile(int nargs, Args** buffer, Stream* stream, cudaError_t* error, cublasStatus_t* blasError, cudnnStatus_t* dnnError, Events* e);
 
 #endif // NUM_H

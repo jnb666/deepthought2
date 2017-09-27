@@ -15,6 +15,7 @@ import (
 type Network struct {
 	Config
 	Layers    []Layer
+	WorkSpace num.Array
 	queue     num.Queue
 	classes   num.Array
 	diffs     num.Array
@@ -37,12 +38,17 @@ func New(queue num.Queue, conf Config, batchSize int, inShape []int) *Network {
 		n.inShape = append(inShape, []int{1, batchSize}...)
 	}
 	shape := n.inShape
-	var prev Layer
-	for _, l := range conf.Layers {
-		layer := l.Unmarshal().Init(queue.Dev(), shape, prev)
+	wsize := 0
+	for ix, l := range conf.Layers {
+		layer := l.Unmarshal()
+		if size := layer.Init(queue, shape, ix); size > wsize {
+			wsize = size
+		}
 		n.Layers = append(n.Layers, layer)
 		shape = layer.OutShape()
-		prev = layer
+	}
+	if wsize > 0 {
+		n.WorkSpace = queue.NewArray(num.Float32, wsize)
 	}
 	return n
 }
@@ -106,7 +112,7 @@ func (n *Network) Fprop(input num.Array) num.Array {
 		if n.DebugLevel >= 2 && pred != nil {
 			fmt.Printf("layer %d input\n%s", i, pred.String(n.queue))
 		}
-		pred = layer.Fprop(n.queue, pred)
+		pred = layer.Fprop(n.queue, pred, n.WorkSpace)
 	}
 	return pred
 }
@@ -131,7 +137,7 @@ func (n *Network) Error(dset *Dataset, pred []int32) float64 {
 		n.Predict(x, n.classes)
 		n.queue.Call(
 			num.Neq(n.classes, y, n.diffs),
-			num.Sum(n.diffs, n.batchErr, 1),
+			num.Sum(n.diffs, n.batchErr),
 			num.Axpy(1, n.batchErr, n.total),
 		)
 		if pred != nil {
@@ -143,6 +149,7 @@ func (n *Network) Error(dset *Dataset, pred []int32) float64 {
 			fmt.Printf("batch %d error =%s\n", batch, n.batchErr.String(n.queue))
 			fmt.Println(y.String(n.queue))
 			fmt.Println(n.classes.String(n.queue))
+			fmt.Println(n.diffs.String(n.queue))
 		}
 	}
 	err := []float32{0}

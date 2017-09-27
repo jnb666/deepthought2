@@ -37,9 +37,10 @@ func main() {
 	flag.IntVar(&conf.TestBatch, "testbatch", conf.TestBatch, "test batch size")
 	flag.IntVar(&conf.DebugLevel, "debug", conf.DebugLevel, "debug logging level")
 	flag.BoolVar(&conf.Profile, "profile", conf.Profile, "print profiling info")
+	flag.BoolVar(&conf.UseGPU, "gpu", conf.UseGPU, "use Cuda GPU acceleration")
 	flag.Parse()
 
-	dev := num.NewCPUDevice()
+	dev := num.NewDevice(conf.UseGPU)
 	q := dev.NewQueue(conf.Threads)
 
 	// load traing and test data

@@ -55,7 +55,7 @@ func NewTestBase(queue num.Queue, conf Config, data map[string]Data, limitSample
 	t := &TestBase{
 		Data:    make(map[string]*Dataset),
 		Headers: StatsHeaders(data),
-		Samples: len(data["train"].Labels),
+		Samples: min(conf.MaxSamples, len(data["train"].Labels)),
 	}
 	if limitSamples {
 		for _, d := range data {
@@ -165,8 +165,8 @@ func TrainEpoch(net *Network, dset *Dataset, acc num.Array) float64 {
 			fmt.Printf("loss:\n%s", losses.String(q))
 		}
 		q.Call(
-			num.Sum(losses, net.batchLoss, 1),
-			num.Axpy(1/float32(dset.Samples), net.batchLoss, acc),
+			num.Sum(losses, net.batchLoss),
+			num.Axpy(1, net.batchLoss, acc),
 		)
 		// get difference at output
 		q.Call(
@@ -180,7 +180,7 @@ func TrainEpoch(net *Network, dset *Dataset, acc num.Array) float64 {
 		// back propagate gradient
 		for i := len(net.Layers) - 1; i >= 0; i-- {
 			layer := net.Layers[i]
-			grad = layer.Bprop(q, grad)
+			grad = layer.Bprop(q, grad, net.WorkSpace)
 			if net.DebugLevel >= 3 && grad != nil {
 				fmt.Printf("layer %d bprop output:\n%s", i, grad.String(q))
 			}
@@ -197,5 +197,15 @@ func TrainEpoch(net *Network, dset *Dataset, acc num.Array) float64 {
 	}
 	lossVal := make([]float32, 1)
 	q.Call(num.Read(acc, lossVal)).Finish()
-	return float64(lossVal[0])
+	return float64(lossVal[0] / float32(dset.Samples))
+}
+
+func min(a, b int) int {
+	if a == 0 {
+		return b
+	}
+	if a < b {
+		return a
+	}
+	return b
 }

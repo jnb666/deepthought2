@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"github.com/gorilla/mux"
 	"github.com/jnb666/deepthought2/nnet"
@@ -20,13 +21,16 @@ const (
 func main() {
 	log.SetFlags(0)
 	if len(os.Args) < 2 {
-		fmt.Println("usage: web <model>")
+		fmt.Println("usage: web [opts] <model>")
 		os.Exit(1)
 	}
 	model := os.Args[len(os.Args)-1]
 	conf, err := web.NewConfig(model)
 	nnet.CheckErr(err)
-	net, err := web.NewNetwork(num.NewCPUDevice(), conf)
+	flag.BoolVar(&conf.UseGPU, "gpu", conf.UseGPU, "use Cuda GPU acceleration")
+	flag.Parse()
+
+	net, err := web.NewNetwork(num.NewDevice(conf.UseGPU), conf)
 	nnet.CheckErr(err)
 
 	t, err := web.NewTemplates()

@@ -13,7 +13,14 @@ const (
 	eps   = 1e-6
 )
 
-var dev = num.NewCPUDevice()
+var devices []num.Device
+
+func init() {
+	devices = []num.Device{
+		num.NewDevice(false),
+		num.NewDevice(true),
+	}
+}
 
 func abs(x float32) float32 {
 	if x >= 0 {
@@ -32,9 +39,9 @@ func randArray(size int, min, max float32) []float32 {
 
 func getInputs(t *testing.T, q num.Queue) (input, W, B num.Array) {
 	rand.Seed(42)
-	input = dev.NewArray(num.Float32, nIn, batch)
-	W = dev.NewArray(num.Float32, nIn, nOut)
-	B = dev.NewArray(num.Float32, nOut)
+	input = q.NewArray(num.Float32, nIn, batch)
+	W = q.NewArray(num.Float32, nIn, nOut)
+	B = q.NewArray(num.Float32, nOut)
 	weights := randArray(nIn*nOut, -0.5, 0.5)
 	bias := randArray(nOut, 0.1, 0.2)
 	inData := randArray(batch*nIn, 0, 1)
@@ -50,10 +57,10 @@ func getInputs(t *testing.T, q num.Queue) (input, W, B num.Array) {
 
 func setupNetwork(q num.Queue, W, B num.Array) (l1, l2 Layer, dW, dB num.Array) {
 	lin := &linear{Linear: Linear{Nout: nOut}}
-	lin.Init(dev, []int{nIn, batch}, nil)
+	lin.Init(q, []int{nIn, batch}, 0)
 	lin.SetParams(q, W, B)
 	relu := &activation{Activation: Activation{Atype: "relu"}}
-	relu.Init(dev, []int{nOut, batch}, lin)
+	relu.Init(q, []int{nOut, batch}, 1)
 	return lin, relu, lin.dw, lin.db
 }
 
@@ -73,22 +80,24 @@ func compareArray(t *testing.T, q num.Queue, title string, A num.Array, expect [
 }
 
 func TestFprop(t *testing.T) {
-	q := dev.NewQueue(1)
-	input, W, B := getInputs(t, q)
-	lin, relu, _, _ := setupNetwork(q, W, B)
+	for _, dev := range devices {
+		q := dev.NewQueue(1)
+		input, W, B := getInputs(t, q)
+		lin, relu, _, _ := setupNetwork(q, W, B)
 
-	temp := lin.Fprop(q, input)
-	output := relu.Fprop(q, temp)
+		temp := lin.Fprop(q, input, nil)
+		output := relu.Fprop(q, temp, nil)
 
-	expect := []float32{
-		0, 0.21253887, 0.49112207, 0,
-		0, 0, 0.10656603, 0,
-		0, 0.23254871, 0.11656132, 0.38451424,
-		0, 0.3471108, 0.013840735, 0.3113696,
-		0, 0.3044004, 0, 0.48620278}
+		expect := []float32{
+			0, 0.21253887, 0.49112207, 0,
+			0, 0, 0.10656603, 0,
+			0, 0.23254871, 0.11656132, 0.38451424,
+			0, 0.3471108, 0.013840735, 0.3113696,
+			0, 0.3044004, 0, 0.48620278}
 
-	compareArray(t, q, "output", output, expect)
-	q.Shutdown()
+		compareArray(t, q, "output", output, expect)
+		q.Shutdown()
+	}
 }
 
 func getOutput(q num.Queue) num.Array {
@@ -96,13 +105,13 @@ func getOutput(q num.Queue) num.Array {
 	for row := 0; row < batch; row++ {
 		data[row+rand.Intn(nOut)*batch] = 1
 	}
-	yOneHot := dev.NewArray(num.Float32, nOut, batch)
+	yOneHot := q.NewArray(num.Float32, nOut, batch)
 	q.Call(num.Write(yOneHot, data))
 	return yOneHot
 }
 
 func inputGrad(t *testing.T, q num.Queue, output, yOneHot num.Array) num.Array {
-	inGrad := dev.NewArrayLike(output)
+	inGrad := q.NewArrayLike(output)
 	q.Call(
 		num.Copy(output, inGrad),
 		num.Axpy(-1, yOneHot, inGrad),
@@ -112,33 +121,28 @@ func inputGrad(t *testing.T, q num.Queue, output, yOneHot num.Array) num.Array {
 }
 
 func TestDNNBprop(t *testing.T) {
-	q := dev.NewQueue(1)
-	input, W, B := getInputs(t, q)
-	lin, relu, dW, dB := setupNetwork(q, W, B)
-	yOneHot := getOutput(q)
+	for _, dev := range devices {
+		q := dev.NewQueue(1)
+		input, W, B := getInputs(t, q)
+		lin, relu, dW, dB := setupNetwork(q, W, B)
+		yOneHot := getOutput(q)
 
-	temp := lin.Fprop(q, input)
-	output := relu.Fprop(q, temp)
+		temp := lin.Fprop(q, input, nil)
+		output := relu.Fprop(q, temp, nil)
 
-	inGrad := inputGrad(t, q, output, yOneHot)
-	temp2 := relu.Bprop(q, inGrad)
-	dSrc := lin.Bprop(q, temp2)
+		inGrad := inputGrad(t, q, output, yOneHot)
+		temp2 := relu.Bprop(q, inGrad, nil)
+		lin.Bprop(q, temp2, nil)
 
-	expect := []float32{
-		0.13688514, 0.16818382, -0.10831911, 0.048308894, -0.057987913, -0.16981822,
-		-0.014739918, -0.040363148, 0.017477995, -0.0036015448, 0.022630986, 0.023008253,
-		0.36478284, 0.4887628, -0.31846377, 0.002438562, -0.21487644, -0.3612575,
-		-0.06866552, 0.21678849, -0.039899595, -0.14580248, -0.2173502, 0.102175355,
-		-0.1316895, -0.2770605, 0.159985, 0.12667882, 0.18137558, 0.05434513}
-	compareArray(t, q, "dSrc", dSrc, expect)
-	expect = []float32{
-		0, 0, 0, 0, 0, 0,
-		0.009336092, 0.10726756, -0.06394093, -0.27729696, 0.36944908, 0.31641093,
-		-0.8669185, -0.6640028, -0.3048705, -0.31535587, -1.0578532, -0.94342196,
-		0.063568585, 0.052299034, -0.0022429964, 0.14734498, 0.09623108, 0.12843394}
-	compareArray(t, q, "dW", dW, expect)
-	expect = []float32{0, 0.096598804, -1.27191, 0.18208665}
-	compareArray(t, q, "dB", dB, expect)
+		expect := []float32{
+			0, 0, 0, 0, 0, 0,
+			0.009336092, 0.10726756, -0.06394093, -0.27729696, 0.36944908, 0.31641093,
+			-0.8669185, -0.6640028, -0.3048705, -0.31535587, -1.0578532, -0.94342196,
+			0.063568585, 0.052299034, -0.0022429964, 0.14734498, 0.09623108, 0.12843394}
+		compareArray(t, q, "dW", dW, expect)
+		expect = []float32{0, 0.096598804, -1.27191, 0.18208665}
+		compareArray(t, q, "dB", dB, expect)
 
-	q.Shutdown()
+		q.Shutdown()
+	}
 }

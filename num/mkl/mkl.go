@@ -49,7 +49,7 @@ type Primitive struct {
 
 func NewPrimitive() *Primitive {
 	p := new(Primitive)
-	runtime.SetFinalizer(p, func(obj *Primitive) { p.Release() })
+	runtime.SetFinalizer(p, func(obj *Primitive) { obj.Release() })
 	return p
 }
 
@@ -69,7 +69,6 @@ type Layer struct {
 	inShape        []int
 	outShape       []int
 	filtShape      []int
-	biasShape      []int
 	name           string
 	params         bool
 }
@@ -119,38 +118,16 @@ func (l *Layer) OutShape() []int { return l.outShape }
 
 func (l *Layer) FilterShape() []int { return l.filtShape }
 
-func (l *Layer) BiasShape() []int { return l.biasShape }
-
 func (l *Layer) Type() string { return l.name }
 
 func (l *Layer) HasParams() bool { return l.BFilter != nil }
 
-// Setup new linear layer
-func InnerProduct(attr *Attr, nBatch, nIn, nOut int) *Layer {
-	l := NewLayer("linear", []int{nIn, nBatch}, []int{nOut, nBatch})
-	l.filtShape = []int{nIn, nOut}
-	l.biasShape = []int{nOut}
-	l.BFilter = NewPrimitive()
-	l.BBias = NewPrimitive()
-	inSize := sizeDims(l.inShape)
-	outSize := sizeDims(l.outShape)
-	chans := C.size_t(nOut)
-	chk(C.dnnInnerProductCreateForwardBias_F32(&l.Fwd.h, attr.h, 2, &inSize[0], chans))
-	chk(C.dnnInnerProductCreateBackwardData_F32(&l.BData.h, attr.h, 2, &inSize[0], chans))
-	chk(C.dnnInnerProductCreateBackwardFilter_F32(&l.BFilter.h, attr.h, 2, &inSize[0], chans))
-	chk(C.dnnInnerProductCreateBackwardBias_F32(&l.BBias.h, attr.h, 2, &outSize[0]))
-	l.init()
-	l.initParams()
-	return l
-}
-
 // Setup new convolution layer
-func Convolution(attr *Attr, n, d, h, w, nFeats, filtSize, stride, pad int) *Layer {
+func Convolution(attr *Attr, n, c, h, w, nFeats, filtSize, stride, pad int) *Layer {
 	wOut := outSize(w, filtSize, stride, pad)
 	hOut := outSize(h, filtSize, stride, pad)
-	l := NewLayer("conv", []int{w, h, d, n}, []int{wOut, hOut, nFeats, n})
-	l.filtShape = []int{filtSize, filtSize, d, nFeats}
-	l.biasShape = []int{nFeats}
+	l := NewLayer("conv", []int{w, h, c, n}, []int{wOut, hOut, nFeats, n})
+	l.filtShape = []int{filtSize, filtSize, c, nFeats}
 	l.BFilter = NewPrimitive()
 	l.BBias = NewPrimitive()
 	inSize := sizeDims(l.inShape)
@@ -172,15 +149,14 @@ func Convolution(attr *Attr, n, d, h, w, nFeats, filtSize, stride, pad int) *Lay
 }
 
 // Setup new max pooling layer
-func MaxPooling(attr *Attr, prev *Layer, size, stride int) *Layer {
-	inShape := prev.outShape
-	wOut := outSize(inShape[0], size, stride, 0)
-	hOut := outSize(inShape[1], size, stride, 0)
-	l := NewLayer("maxPool", inShape, []int{wOut, hOut, inShape[2], inShape[3]})
-	in := prev.layout[C.dnnResourceDst]
+func MaxPooling(attr *Attr, n, c, h, w, size, stride int) *Layer {
+	wOut := outSize(w, size, stride, 0)
+	hOut := outSize(h, size, stride, 0)
+	l := NewLayer("pool", []int{w, h, c, n}, []int{wOut, hOut, c, n})
 	csize := sizeDims2(size)
 	cstride := sizeDims2(stride)
 	offset := [2]C.int{}
+	in := NewLayout(l.inShape)
 	chk(C.dnnPoolingCreateForward_F32(&l.Fwd.h, attr.h, C.dnnAlgorithmPoolingMax,
 		in.h, &csize[0], &cstride[0], &offset[0], C.dnnBorderZeros))
 	chk(C.dnnPoolingCreateBackward_F32(&l.BData.h, attr.h, C.dnnAlgorithmPoolingMax,
@@ -188,18 +164,6 @@ func MaxPooling(attr *Attr, prev *Layer, size, stride int) *Layer {
 	l.init()
 	l.layoutFromPrimitive(l.Fwd, C.dnnResourceWorkspace)
 	l.Alloc(C.dnnResourceWorkspace)
-	return l
-}
-
-// Setup new relu activation layer
-func Relu(attr *Attr, prev *Layer) *Layer {
-	shape := prev.outShape
-	l := NewLayer("relu", shape, shape)
-	in := prev.layout[C.dnnResourceDst]
-	out := NewLayout(prev.outShape)
-	chk(C.dnnReLUCreateForward_F32(&l.Fwd.h, attr.h, in.h, 0))
-	chk(C.dnnReLUCreateBackward_F32(&l.BData.h, attr.h, out.h, in.h, 0))
-	l.init()
 	return l
 }
 
@@ -255,22 +219,18 @@ func (r Resource) String() string {
 
 // DNN layout container reprents a n dimensional tensor
 type Layout struct {
-	dims []int
+	Dims []int
 	h    C.dnnLayout_t
 }
 
 func NewLayout(dims []int) *Layout {
-	l := new(Layout)
+	l := &Layout{Dims: dims}
 	ndim := C.size_t(len(dims))
 	size := sizeDims(dims)
 	strides := getStrides(dims)
 	chk(C.dnnLayoutCreate_F32(&l.h, ndim, &size[0], &strides[0]))
 	runtime.SetFinalizer(l, func(obj *Layout) { obj.Release() })
 	return l
-}
-
-func (l *Layout) Dims() []int {
-	return l.dims
 }
 
 func (l *Layout) Release() {
@@ -316,15 +276,15 @@ func getStrides(dims []int) []C.size_t {
 
 type Error C.dnnError_t
 
-// Check for error running DNN function, panics if not success
+// Convert MKL DNN error code to go error
 func GetError(err Error) error {
 	return getError(C.dnnError_t(err))
 }
 
+// Check for error running DNN function, panics if not success
 func chk(err C.dnnError_t) {
-	errDesc := getError(err)
-	if errDesc != nil {
-		panic(errDesc)
+	if e := getError(err); e != nil {
+		panic(e)
 	}
 }
 

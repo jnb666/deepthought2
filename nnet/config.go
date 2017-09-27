@@ -26,6 +26,7 @@ type Config struct {
 	LogEvery      int
 	MinLoss       float64
 	RandSeed      int64
+	UseGPU        bool
 	Profile       bool
 	Threads       int
 	DebugLevel    int

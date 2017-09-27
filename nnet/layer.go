@@ -9,13 +9,12 @@ import (
 
 // Layer interface type represents one layer of the neural net.
 type Layer interface {
-	Init(dev num.Device, inShape []int, prev Layer) Layer
+	Init(q num.Queue, inShape []int, index int) int
 	InShape() []int
 	OutShape() []int
-	Fprop(q num.Queue, in num.Array) num.Array
-	Bprop(q num.Queue, grad num.Array) num.Array
+	Fprop(q num.Queue, in, work num.Array) num.Array
+	Bprop(q num.Queue, grad, work num.Array) num.Array
 	ToString() string
-	DNNLayer() num.Layer
 }
 
 // ParamLayer is a layer with weight and bias parameters
@@ -168,51 +167,57 @@ func (c Flatten) Marshal() LayerConfig {
 type linear struct {
 	Linear
 	paramBase
+	inShape        []int
 	src, dst, dsrc num.Array
 	temp1, temp2   num.Array
 	ones           num.Array
 }
 
-func (l *linear) InShape() []int { return l.dsrc.Dims() }
+func (l *linear) InShape() []int { return l.inShape }
 
-func (l *linear) OutShape() []int { return l.dst.Dims() }
+func (l *linear) OutShape() []int { return []int{l.Nout, l.inShape[1]} }
 
-func (l *linear) DNNLayer() num.Layer { return nil }
-
-func (l *linear) Init(dev num.Device, inShape []int, prev Layer) Layer {
+func (l *linear) Init(q num.Queue, inShape []int, ix int) int {
 	if len(inShape) != 2 {
 		panic("Linear: expect 2 dimensional input")
 	}
 	nBatch, nIn := inShape[1], inShape[0]
-	l.paramBase = newParams(dev, []int{nIn, l.Nout}, []int{l.Nout}, nBatch)
-	l.dst = dev.NewArray(num.Float32, l.Nout, nBatch)
-	l.dsrc = dev.NewArray(num.Float32, nIn, nBatch)
-	l.temp1 = dev.NewArray(num.Float32, nBatch, nIn)
-	l.temp2 = dev.NewArray(num.Float32, nBatch, l.Nout)
-	return l
+	l.inShape = inShape
+	l.paramBase = newParams(q, []int{nIn, l.Nout}, nBatch)
+	l.dst = q.NewArray(num.Float32, l.Nout, nBatch)
+	l.temp1 = q.NewArray(num.Float32, nBatch, l.Nout)
+	if ix > 0 {
+		l.dsrc = q.NewArray(num.Float32, nIn, nBatch)
+		l.temp2 = q.NewArray(num.Float32, nBatch, nIn)
+	}
+	return 0
 }
 
-func (l *linear) Fprop(q num.Queue, in num.Array) num.Array {
+func (l *linear) Fprop(q num.Queue, in, work num.Array) num.Array {
 	l.src = in
 	q.Call(
-		num.Copy(l.b, l.temp2),
-		num.Gemm(1, 1, l.src, l.w, l.temp2, num.Trans, num.NoTrans),
-		num.Transpose(l.temp2, l.dst),
+		num.Copy(l.b, l.temp1),
+		num.Gemm(l.src, l.w, l.temp1, num.Trans, num.NoTrans, true),
+		num.Transpose(l.temp1, l.dst),
 	)
 	return l.dst
 }
 
-func (l *linear) Bprop(q num.Queue, grad num.Array) num.Array {
+func (l *linear) Bprop(q num.Queue, grad, work num.Array) num.Array {
 	if l.ones == nil {
 		l.ones = q.NewArray(num.Float32, grad.Dims()[1])
 		q.Call(num.Fill(l.ones, 1))
 	}
 	q.Call(
-		num.Gemv(1, 0, grad, l.ones, l.db, num.NoTrans),
-		num.Gemm(1, 0, l.src, grad, l.dw, num.NoTrans, num.Trans),
-		num.Gemm(1, 0, grad, l.w, l.temp1, num.Trans, num.Trans),
-		num.Transpose(l.temp1, l.dsrc),
+		num.Gemv(grad, l.ones, l.db, num.NoTrans),
+		num.Gemm(l.src, grad, l.dw, num.NoTrans, num.Trans, false),
 	)
+	if l.dsrc != nil {
+		q.Call(
+			num.Gemm(grad, l.w, l.temp2, num.Trans, num.Trans, false),
+			num.Transpose(l.temp2, l.dsrc),
+		)
+	}
 	return l.dsrc
 }
 
@@ -223,15 +228,12 @@ type convDNN struct {
 	num.Layer
 }
 
-func (l *convDNN) Init(dev num.Device, inShape []int, prev Layer) Layer {
-	if len(inShape) != 4 {
-		panic("ConvDNN: expect 4 dimensional input")
-	}
-	n, d, h, w := inShape[3], inShape[2], inShape[1], inShape[0]
-	l.Layer = num.ConvLayer(dev, n, d, h, w, l.Nfeats, l.Size, l.Stride, l.Pad)
-	l.paramBase = newParams(dev, l.FilterShape(), l.BiasShape(), n)
-	l.SetParamData(l.w, l.b, l.dw, l.db)
-	return l
+func (l *convDNN) Init(q num.Queue, inShape []int, ix int) int {
+	layer, workSize := num.ConvLayer(q, ix, inShape, l.Nfeats, l.Size, l.Stride, l.Pad)
+	l.paramBase = newParams(q, layer.FilterShape(), inShape[3])
+	layer.SetParamData(l.w, l.b, l.dw, l.db)
+	l.Layer = layer
+	return workSize
 }
 
 // pool layer implentation
@@ -240,12 +242,9 @@ type poolDNN struct {
 	num.Layer
 }
 
-func (l *poolDNN) Init(dev num.Device, inShape []int, prev Layer) Layer {
-	if len(inShape) != 4 {
-		panic("PoolDNN: expect 4 dimensional input")
-	}
-	l.Layer = num.MaxPoolLayer(dev, prev.DNNLayer(), l.Size, l.Stride)
-	return l
+func (l *poolDNN) Init(q num.Queue, inShape []int, ix int) int {
+	l.Layer = num.MaxPoolLayer(q, inShape, l.Size, l.Stride)
+	return 0
 }
 
 // activation layers
@@ -255,10 +254,10 @@ type activation struct {
 	loss num.Array
 }
 
-func (l *activation) Init(dev num.Device, inShape []int, prev Layer) Layer {
-	l.Layer = num.ActivationLayer(dev, l.Atype, inShape, prev.DNNLayer())
-	l.loss = dev.NewArray(num.Float32, inShape...)
-	return l
+func (l *activation) Init(q num.Queue, inShape []int, ix int) int {
+	l.Layer = num.ActivationLayer(q, l.Atype, inShape)
+	l.loss = q.NewArray(num.Float32, inShape...)
+	return 0
 }
 
 func (l *activation) Loss(q num.Queue, yOneHot, yPred num.Array) num.Array {
@@ -275,25 +274,23 @@ type logRegression struct {
 
 func (l *logRegression) ToString() string { return fmt.Sprintf("logRegression") }
 
-func (l *logRegression) Init(dev num.Device, inShape []int, prev Layer) Layer {
-	l.dst = dev.NewArray(num.Float32, inShape...)
-	l.dsrc = dev.NewArray(num.Float32, inShape...)
-	l.loss = dev.NewArray(num.Float32, inShape...)
-	return l
+func (l *logRegression) Init(q num.Queue, inShape []int, ix int) int {
+	l.dst = q.NewArray(num.Float32, inShape...)
+	l.dsrc = q.NewArray(num.Float32, inShape...)
+	l.loss = q.NewArray(num.Float32, inShape...)
+	return 0
 }
 
 func (l *logRegression) InShape() []int { return l.dst.Dims() }
 
 func (l *logRegression) OutShape() []int { return l.dst.Dims() }
 
-func (l *logRegression) DNNLayer() num.Layer { return nil }
-
-func (l *logRegression) Fprop(q num.Queue, in num.Array) num.Array {
+func (l *logRegression) Fprop(q num.Queue, in, work num.Array) num.Array {
 	q.Call(num.Softmax(in, l.dst))
 	return l.dst
 }
 
-func (l *logRegression) Bprop(q num.Queue, grad num.Array) num.Array {
+func (l *logRegression) Bprop(q num.Queue, grad, work num.Array) num.Array {
 	q.Call(num.Copy(grad, l.dsrc))
 	return l.dsrc
 }
@@ -314,19 +311,17 @@ func (l *flatten) InShape() []int { return l.inShape }
 
 func (l *flatten) OutShape() []int { return l.outShape }
 
-func (l *flatten) DNNLayer() num.Layer { return nil }
-
-func (l *flatten) Init(dev num.Device, inShape []int, prev Layer) Layer {
+func (l *flatten) Init(q num.Queue, inShape []int, ix int) int {
 	l.inShape = inShape
 	l.outShape = []int{num.Prod(l.inShape[:3]), l.inShape[3]}
-	return l
+	return 0
 }
 
-func (l *flatten) Fprop(q num.Queue, in num.Array) num.Array {
+func (l *flatten) Fprop(q num.Queue, in, work num.Array) num.Array {
 	return in.Reshape(l.outShape...)
 }
 
-func (l *flatten) Bprop(q num.Queue, grad num.Array) num.Array {
+func (l *flatten) Bprop(q num.Queue, grad, work num.Array) num.Array {
 	return grad.Reshape(l.inShape...)
 }
 
@@ -337,12 +332,13 @@ type paramBase struct {
 	nBatch float32
 }
 
-func newParams(dev num.Device, wShape, bShape []int, nBatch int) paramBase {
+func newParams(q num.Queue, filterShape []int, nBatch int) paramBase {
+	nout := filterShape[len(filterShape)-1]
 	return paramBase{
-		w:      dev.NewArray(num.Float32, wShape...),
-		b:      dev.NewArray(num.Float32, bShape...),
-		dw:     dev.NewArray(num.Float32, wShape...),
-		db:     dev.NewArray(num.Float32, bShape...),
+		w:      q.NewArray(num.Float32, filterShape...),
+		b:      q.NewArray(num.Float32, nout),
+		dw:     q.NewArray(num.Float32, filterShape...),
+		db:     q.NewArray(num.Float32, nout),
 		nBatch: float32(nBatch),
 	}
 }

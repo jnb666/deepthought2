@@ -1,10 +1,6 @@
 // Cgo interface routines
 #include "num.h"
 
-void array_copy_row(int* dst, int* src, int row, int rows, int cols) {
-	for (int i = 0; i < cols; ++i) dst[row+i*rows] = src[i];
-}
-
 void array_fill_f(float* a, float val, int n) {
 	for (int i = 0; i < n; ++i) a[i] = val;
 }
@@ -14,32 +10,32 @@ void array_fill_i(int* a, float val, int n) {
 	for (int i = 0; i < n; ++i) a[i] = ival;
 }			
 
-void array_neq(int* a, int* b, int* res, int n) {
-	for (int i = 0; i < n; ++i) res[i] = (a[i] != b[i]);
-}
-
-void array_tile0(void* dst, void* src, int vlen, int cols) {
+void array_tile0(float* dst, float* src, int rows, int cols) {
 	for (int i = 0; i < cols; ++i) {
-		memcpy(dst+i*vlen, src, vlen);				
+		memcpy(dst+i*rows, src, 4*rows);
 	}
 }
 
-void array_tile1(float* dst, float* src, int vlen, int rows) {
-	for (int j = 0; j < vlen; ++j) {
+void array_tile1(float* dst, float* src, int rows, int cols) {
+	for (int j = 0; j < cols; ++j) {
 		array_fill_f(dst+j*rows, src[j], rows);
 	}
 }
 
-void array_sum_f(float* a, int n, float scale, float* res) {
-	float sum = 0.f;
-	for (int i = 0; i < n; ++i) sum += a[i];
-	*res = scale * sum;
+void array_neq(int* a, int* b, int* res, int n) {
+	for (int i = 0; i < n; ++i) res[i] = (a[i] != b[i]);
 }
 
-void array_sum_i(int* a, int n, float scale, float* res) {
+void array_sum_f(float* a, int n, float* res) {
+	float sum = 0.f;
+	for (int i = 0; i < n; ++i) sum += a[i];
+	*res = sum;
+}
+
+void array_sum_i(int* a, int n, float* res) {
 	int sum = 0;
 	for (int i = 0; i < n; ++i) sum += a[i];
-	*res = scale * (float)sum;
+	*res = (float)sum;
 }
 
 void onehot(int* y, float* y_one_hot, int n, int classes) {
@@ -156,23 +152,18 @@ void softmax_loss(float* y, float* y_pred, float* res, int classes, int n) {
 	}
 }
 
-dnnError_t callCPU(Args* a) {
-	dnnError_t error = 0;
+void callCPU(Args* a, dnnError_t* error) {
 	switch (a->op) {
 	case COPY:
+	case COPY_TO_DEVICE:
+	case COPY_TO_HOST:
 		memcpy(a->p[1], a->p[0], a->i[0]*4);
 		break;
 	case COPY_COL:
 		memcpy(a->p[0] + a->i[0]*a->i[1]*4, a->p[1], a->i[1]*4);
 		break;
-	case COPY_ROW:
-		array_copy_row(IP(a->p[0]), IP(a->p[1]), a->i[0], a->i[1], a->i[2]);
-		break;
-	case NEQ:
-		array_neq(IP(a->p[0]), IP(a->p[1]), IP(a->p[2]), a->i[0]);
-		break;
 	case TILE0:
-		array_tile0(a->p[0], a->p[1], a->i[0]*4, a->i[1]);
+		array_tile0(FP(a->p[0]), FP(a->p[1]), a->i[0], a->i[1]);
 		break;
 	case TILE1:
 		array_tile1(FP(a->p[0]), FP(a->p[1]), a->i[0], a->i[1]);
@@ -184,35 +175,30 @@ dnnError_t callCPU(Args* a) {
 			array_fill_f(FP(a->p[0]), a->f[0], a->i[1]);
 		}
 		break;
+	case NEQ:
+		array_neq(IP(a->p[0]), IP(a->p[1]), IP(a->p[2]), a->i[0]);
+		break;
 	case SUM:
 		if (a->i[0] == I32) {
-			array_sum_i(IP(a->p[0]), a->i[1], a->f[0], FP(a->p[1]));
+			array_sum_i(IP(a->p[0]), a->i[1], FP(a->p[1]));
 		} else {
-			array_sum_f(FP(a->p[0]), a->i[1], a->f[0], FP(a->p[1]));
+			array_sum_f(FP(a->p[0]), a->i[1], FP(a->p[1]));
 		}
-		break;
-	case SCALE:
-		cblas_sscal(a->i[0], a->f[0], FP(a->p[0]), 1);
 		break;
 	case AXPY:
 		cblas_saxpy(a->i[0], a->f[0], FP(a->p[0]), 1, FP(a->p[1]), 1);
 		break;
 	case TRANS:
-#ifdef USE_MKL
 		mkl_somatcopy('c', 't', a->i[0], a->i[1], 1.0f, FP(a->p[0]), 
 			a->i[0], FP(a->p[1]), a->i[1]);
-#else
-		cblas_somatcopy(CblasColMajor, CblasTrans, a->i[0], a->i[1], 1.0f, FP(a->p[0]), 
-			a->i[0], FP(a->p[1]), a->i[1]);
-#endif
 		break;
 	case GEMV:
-		cblas_sgemv(CblasColMajor, a->i[0], a->i[1], a->i[2], a->f[0],
-			FP(a->p[0]), a->i[1], FP(a->p[1]), 1, a->f[1], FP(a->p[2]), 1);
+		cblas_sgemv(CblasColMajor, a->i[0], a->i[1], a->i[2], 1.0f,
+			FP(a->p[0]), a->i[1], FP(a->p[1]), 1, 0.0f, FP(a->p[2]), 1);
 		break;
 	case GEMM:
-		cblas_sgemm(CblasColMajor, a->i[0], a->i[1], a->i[2], a->i[3], a->i[4], a->f[0], 
-			FP(a->p[0]), a->i[5], FP(a->p[1]), a->i[6], a->f[1], FP(a->p[2]), a->i[7]);
+		cblas_sgemm(CblasColMajor, a->i[0], a->i[1], a->i[2], a->i[3], a->i[4], 1.0f, 
+			FP(a->p[0]), a->i[5], FP(a->p[1]), a->i[6], a->f[0], FP(a->p[2]), a->i[7]);
 		break;
 	case SIGMOID:
 		sigmoid_a(FP(a->p[0]), FP(a->p[1]), a->i[0]);
@@ -247,51 +233,40 @@ dnnError_t callCPU(Args* a) {
 	case SOFTMAX_LOSS:
 		softmax_loss(FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0], a->i[1]);
 		break;;
-	case DNN_EXECUTE:
-#ifdef USE_MKL
-		error = dnnExecute_F32((dnnPrimitive_t)(a->p[0]), a->p[1]);
-#else
-		error = E_UNIMPLEMENTED;
-#endif
+	case MKL_DNN_EXECUTE:
+		*error = dnnExecute_F32((dnnPrimitive_t)(a->p[0]), a->p[1]);
 		break;
+	default:
+		*error = E_UNIMPLEMENTED;
 	}
-	return error;
 }
 
 void set_num_threads(int n) {
-#ifdef USE_MKL
 	mkl_set_num_threads(n);
-#else
-	openblas_set_num_threads(n);
-#endif
 }
 
 // call batch of commands
-dnnError_t execCPU(int nargs, Args** buffer, int* ix) {
+int execCPU(int nargs, Args** buffer, dnnError_t* error) {
+	*error = E_SUCCESS;
 	for (int i = 0; i < nargs; ++i) {
-		dnnError_t error = callCPU(buffer[i]);
-		if (error != E_SUCCESS) {
-			*ix = i;
-			return error;
-		}
+		callCPU(buffer[i], error);
+		if (*error != E_SUCCESS) return i;
 	}
-	return E_SUCCESS;
+	return -1;
 }
 
 // call with profiling enabled
-dnnError_t execCPUProfile(int nargs, Args** buffer, int* ix) {
+int execCPUProfile(int nargs, Args** buffer, dnnError_t* error) {
+	*error = E_SUCCESS;
 	struct timeval start, end;
 	for (int i = 0; i < nargs; ++i) {
 		gettimeofday(&start, NULL);
-		dnnError_t error = callCPU(buffer[i]);
+		callCPU(buffer[i], error);
 		gettimeofday(&end, NULL);
-		buffer[i]->usec = 1000000*(end.tv_sec-start.tv_sec) + end.tv_usec-start.tv_usec;
-		if (error != E_SUCCESS) {
-			*ix = i;
-			return error;
-		}
+		buffer[i]->msec = (float)(1000*(end.tv_sec-start.tv_sec)) + (float)(end.tv_usec-start.tv_usec)/1000.f;
+		if (*error != E_SUCCESS) return i;
 	}
-	return E_SUCCESS;
+	return -1;
 }
 
 

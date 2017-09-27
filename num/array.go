@@ -2,7 +2,9 @@ package num
 
 import (
 	"fmt"
+	"github.com/jnb666/deepthought2/num/cuda"
 	"github.com/jnb666/deepthought2/num/mkl"
+	"runtime"
 	"unsafe"
 )
 
@@ -17,6 +19,8 @@ var (
 type Array interface {
 	// Dims returns the shape of the array in rows, cols, ... order
 	Dims() []int
+	// Size is total number of elements
+	Size() int
 	// Dtype returns the data type of the elements in the array
 	Dtype() DataType
 	// Reshape returns a new array of the same size with a view on the same data but with a different shape
@@ -27,34 +31,75 @@ type Array interface {
 	String(q Queue) string
 }
 
-// Allocate a new array on the device with the given type and fill with zeroes.
-func (d cpuDevice) NewArray(dtype DataType, dims ...int) Array {
-	return &arrayCPU{
-		dims:  dims,
-		dtype: dtype,
-		data:  mkl.NewBuffer(Prod(dims)),
-	}
-}
-
-// Allocate a new array with same device, datatype and shape as the input.
-func (d cpuDevice) NewArrayLike(a Array) Array {
-	return d.NewArray(a.Dtype(), a.Dims()...)
-}
-
+// array resident in main memory
 type arrayCPU struct {
-	dims  []int
-	dtype DataType
-	data  unsafe.Pointer
+	arrayBase
+	data unsafe.Pointer
 }
 
-func (a *arrayCPU) Dims() []int { return a.dims }
+func (d cpuDevice) NewArray(dtype DataType, dims ...int) Array {
+	return newArrayCPU(dtype, dims, mkl.NewBuffer(Prod(dims)))
+}
 
-func (a *arrayCPU) Dtype() DataType { return a.dtype }
+func (d cpuDevice) NewArrayLike(a Array) Array {
+	return newArrayCPU(a.Dtype(), a.Dims(), mkl.NewBuffer(Prod(a.Dims())))
+}
+
+func newArrayCPU(dtype DataType, dims []int, data unsafe.Pointer) *arrayCPU {
+	return &arrayCPU{arrayBase: arrayBase{size: Prod(dims), dims: dims, dtype: dtype}, data: data}
+}
 
 func (a *arrayCPU) Data() unsafe.Pointer { return a.data }
 
 func (a *arrayCPU) Reshape(dims ...int) Array {
-	n := Prod(a.Dims())
+	return &arrayCPU{arrayBase: a.reshape(dims), data: a.data}
+}
+
+func (a *arrayCPU) String(q Queue) string { return toString(a, q) }
+
+// array resident on GPU
+type arrayGPU struct {
+	arrayBase
+	data cuda.Buffer
+}
+
+func (d gpuDevice) NewArray(dtype DataType, dims ...int) Array {
+	return newArrayGPU(dtype, dims, cuda.NewBuffer(Prod(dims)).Clear())
+}
+
+func (d gpuDevice) NewArrayLike(a Array) Array {
+	return newArrayGPU(a.Dtype(), a.Dims(), cuda.NewBuffer(Prod(a.Dims())).Clear())
+}
+
+func newArrayGPU(dtype DataType, dims []int, data cuda.Buffer) *arrayGPU {
+	a := &arrayGPU{arrayBase: arrayBase{size: Prod(dims), dims: dims, dtype: dtype}, data: data}
+	runtime.SetFinalizer(a, func(obj *arrayGPU) { a.data.Free() })
+	return a
+}
+
+func (a *arrayGPU) Data() unsafe.Pointer { return a.data.Ptr }
+
+func (a *arrayGPU) Reshape(dims ...int) Array {
+	return &arrayGPU{arrayBase: a.reshape(dims), data: a.data}
+}
+
+func (a *arrayGPU) String(q Queue) string { return toString(a, q) }
+
+// common array functions
+type arrayBase struct {
+	size  int
+	dims  []int
+	dtype DataType
+}
+
+func (a arrayBase) Size() int { return a.size }
+
+func (a arrayBase) Dims() []int { return a.dims }
+
+func (a arrayBase) Dtype() DataType { return a.dtype }
+
+func (a arrayBase) reshape(dims []int) arrayBase {
+	n := a.size
 	for i := range dims {
 		if dims[i] == -1 {
 			other := 1
@@ -69,29 +114,21 @@ func (a *arrayCPU) Reshape(dims ...int) Array {
 			dims[i] = n / other
 		}
 	}
-	if Prod(a.dims) != Prod(dims) {
+	if Prod(dims) != n {
 		panic("reshape must be to array of same size")
 	}
-	return &arrayCPU{dims: dims, dtype: a.dtype, data: a.data}
+	return arrayBase{size: n, dims: dims, dtype: a.dtype}
 }
 
-func (a *arrayCPU) String(q Queue) string {
+func toString(a Array, q Queue) string {
 	var data interface{}
-	n := Prod(a.Dims())
 	if a.Dtype() == Int32 {
-		data = make([]int32, n)
+		data = make([]int32, a.Size())
 	} else {
-		data = make([]float32, n)
+		data = make([]float32, a.Size())
 	}
 	q.Call(Read(a, data)).Finish()
 	return format(a.Dims(), data, 0, 1, "", false)
-}
-
-func abs(x float32) float32 {
-	if x >= 0 {
-		return x
-	}
-	return -x
 }
 
 func format(dims []int, data interface{}, at, stride int, indent string, dots bool) string {
@@ -158,6 +195,13 @@ func format(dims []int, data interface{}, at, stride int, indent string, dots bo
 		s += indent + "]\n"
 	}
 	return s
+}
+
+func abs(x float32) float32 {
+	if x >= 0 {
+		return x
+	}
+	return -x
 }
 
 // Product of elements of an integer array. Zero dimension array (scalar) has size 1.
