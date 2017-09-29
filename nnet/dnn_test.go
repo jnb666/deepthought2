@@ -81,7 +81,7 @@ func compareArray(t *testing.T, q num.Queue, title string, A num.Array, expect [
 
 func TestFprop(t *testing.T) {
 	for _, dev := range devices {
-		q := dev.NewQueue(1)
+		q := dev.NewQueue()
 		input, W, B := getInputs(t, q)
 		lin, relu, _, _ := setupNetwork(q, W, B)
 
@@ -122,7 +122,7 @@ func inputGrad(t *testing.T, q num.Queue, output, yOneHot num.Array) num.Array {
 
 func TestDNNBprop(t *testing.T) {
 	for _, dev := range devices {
-		q := dev.NewQueue(1)
+		q := dev.NewQueue()
 		input, W, B := getInputs(t, q)
 		lin, relu, dW, dB := setupNetwork(q, W, B)
 		yOneHot := getOutput(q)

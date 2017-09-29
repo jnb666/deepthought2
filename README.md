@@ -9,7 +9,6 @@ Features:
 * Example data models including MNist digit recognition.
 
 To do:
-* Optimise performance using parallel processing.
 * Add image distortion.
 
 Dependencies:

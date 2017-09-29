@@ -146,14 +146,15 @@ func TrainEpoch(net *Network, dset *Dataset, acc num.Array) float64 {
 	if net.Shuffle {
 		dset.Shuffle(net.rng)
 	}
-	nbatch := dset.Batches()
 	weightDecay := float32(net.Eta*net.Lambda) / float32(dset.Samples)
 	q.Call(num.Fill(acc, 0))
-	for batch := 0; batch < nbatch; batch++ {
+	dset.Rewind()
+	for batch := 0; batch < dset.Batches; batch++ {
 		if net.DebugLevel >= 2 || (net.DebugLevel == 1 && batch == 0) {
 			fmt.Printf("== train batch %d ==\n", batch)
 		}
-		x, _, yOneHot := dset.GetBatch(q, batch)
+		q.Finish()
+		x, _, yOneHot := dset.NextBatch()
 		yPred := net.Fprop(x)
 		if net.DebugLevel >= 2 {
 			fmt.Printf("yOneHot:\n%s", yOneHot.String(q))
@@ -191,7 +192,7 @@ func TrainEpoch(net *Network, dset *Dataset, acc num.Array) float64 {
 				l.UpdateParams(q, float32(net.Eta), weightDecay)
 			}
 		}
-		if net.DebugLevel >= 2 || (batch == nbatch-1 && net.DebugLevel >= 1) {
+		if net.DebugLevel >= 2 || (batch == dset.Batches-1 && net.DebugLevel >= 1) {
 			net.PrintWeights()
 		}
 	}

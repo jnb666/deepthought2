@@ -18,7 +18,7 @@ func init() {
 func TestArray(t *testing.T) {
 	for _, dev := range devices {
 		xd := []float32{1, 1, 2, 2, 3, 3}
-		q := dev.NewQueue(1)
+		q := dev.NewQueue()
 		x := dev.NewArray(Float32, 6)
 		if typ := x.Dtype(); typ != Float32 {
 			t.Error("dtype invalid: got", typ)
@@ -54,7 +54,7 @@ func TestArray(t *testing.T) {
 
 func TestCopy(t *testing.T) {
 	for _, dev := range devices {
-		q := dev.NewQueue(1)
+		q := dev.NewQueue()
 		x := dev.NewArray(Float32, 2, 3)
 		// tile columns
 		y := dev.NewArray(Float32, 2, 1)
@@ -87,7 +87,7 @@ func TestCopy(t *testing.T) {
 
 func TestOnehot(t *testing.T) {
 	for _, dev := range devices {
-		q := dev.NewQueue(1)
+		q := dev.NewQueue()
 		y := dev.NewArray(Int32, 4)
 		y1h := dev.NewArray(Float32, 3, 4)
 		res := make([]float32, 12)
@@ -116,7 +116,7 @@ func TestOnehot(t *testing.T) {
 
 func TestTranspose(t *testing.T) {
 	for _, dev := range devices {
-		q := dev.NewQueue(1)
+		q := dev.NewQueue()
 		x := dev.NewArray(Float32, 2, 3)
 		y := dev.NewArray(Float32, 3, 2)
 		res1 := make([]float32, 6)
@@ -137,7 +137,7 @@ func TestTranspose(t *testing.T) {
 
 func TestAxpy(t *testing.T) {
 	for _, dev := range devices {
-		q := dev.NewQueue(1)
+		q := dev.NewQueue()
 		x := dev.NewArray(Float32, 2, 3)
 		y := dev.NewArray(Float32, 2, 3)
 		res := make([]float32, 6)
@@ -158,7 +158,7 @@ func TestAxpy(t *testing.T) {
 
 func TestSum(t *testing.T) {
 	for _, dev := range devices {
-		q := dev.NewQueue(1)
+		q := dev.NewQueue()
 		x := dev.NewArray(Float32, 2, 3)
 		sum := dev.NewArray(Float32)
 		res := make([]float32, 1)
@@ -192,7 +192,7 @@ func TestSum(t *testing.T) {
 
 func TestGemm(t *testing.T) {
 	for _, dev := range devices {
-		q := dev.NewQueue(1)
+		q := dev.NewQueue()
 		x := dev.NewArray(Float32, 2, 3)
 		y := dev.NewArray(Float32, 3, 2)
 		z := dev.NewArray(Float32, 2, 2)
@@ -231,7 +231,7 @@ func randSlice(n int) []float32 {
 
 func benchGemm(b *testing.B, dev Device) {
 	size := 250
-	q := dev.NewQueue(4)
+	q := dev.NewQueue()
 	x := dev.NewArray(Float32, size, size)
 	y := dev.NewArray(Float32, size, size)
 	z := dev.NewArray(Float32, size, size)

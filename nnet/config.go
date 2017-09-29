@@ -26,10 +26,9 @@ type Config struct {
 	LogEvery      int
 	MinLoss       float64
 	RandSeed      int64
+	DebugLevel    int
 	UseGPU        bool
 	Profile       bool
-	Threads       int
-	DebugLevel    int
 	Layers        []LayerConfig
 }
 

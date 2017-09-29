@@ -241,10 +241,6 @@ void callCPU(Args* a, dnnError_t* error) {
 	}
 }
 
-void set_num_threads(int n) {
-	mkl_set_num_threads(n);
-}
-
 // call batch of commands
 int execCPU(int nargs, Args** buffer, dnnError_t* error) {
 	*error = E_SUCCESS;

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/jnb666/deepthought2/num/cuda"
 	"github.com/jnb666/deepthought2/num/mkl"
+	"runtime"
 	"sort"
 	"unsafe"
 )
@@ -16,7 +17,7 @@ import (
 // Device interface type
 type Device interface {
 	// Setup new worker queue
-	NewQueue(threads int) Queue
+	NewQueue() Queue
 	// Allocate new n dimensional array
 	NewArray(dtype DataType, dims ...int) Array
 	NewArrayLike(a Array) Array
@@ -27,6 +28,8 @@ func NewDevice(useGPU bool) Device {
 	if useGPU {
 		return gpuDevice{dev: cuda.NewDevice()}
 	} else {
+		threads := C.int(runtime.NumCPU())
+		C.mkl_set_num_threads(threads)
 		return cpuDevice{attr: mkl.NewAttr()}
 	}
 }
@@ -43,7 +46,7 @@ type Queue interface {
 	Shutdown()
 	// Enable profiling
 	Profiling(on bool)
-	PrintProfile()
+	Profile() string
 }
 
 // CPUQueue uses Intel MKL accelarated CPU routines
@@ -58,11 +61,7 @@ type cpuQueue struct {
 	*profile
 }
 
-func (d cpuDevice) NewQueue(threads int) Queue {
-	if threads < 1 {
-		threads = 1
-	}
-	C.set_num_threads(C.int(threads))
+func (d cpuDevice) NewQueue() Queue {
 	return &cpuQueue{
 		cpuDevice: d,
 		profile:   newProfile(false),
@@ -108,9 +107,6 @@ func (q *cpuQueue) Finish() {
 
 func (q *cpuQueue) Shutdown() {
 	q.Finish()
-	if q.profile.enabled {
-		q.PrintProfile()
-	}
 }
 
 // GPU queue corresponds to a Cuda stream
@@ -118,7 +114,7 @@ type gpuDevice struct {
 	dev cuda.Device
 }
 
-func (d gpuDevice) NewQueue(threads int) Queue {
+func (d gpuDevice) NewQueue() Queue {
 	return &gpuQueue{
 		gpuDevice: d,
 		profile:   newProfile(true),
@@ -185,9 +181,6 @@ func (q *gpuQueue) Finish() {
 
 func (q *gpuQueue) Shutdown() {
 	q.Finish()
-	if q.profile.enabled {
-		q.PrintProfile()
-	}
 	q.stream.Release()
 }
 
@@ -227,8 +220,7 @@ func (p *profile) add(funcs []Function) {
 	}
 }
 
-func (p *profile) PrintProfile() {
-	fmt.Println("== Profile ==")
+func (p *profile) Profile() string {
 	list := make([]profileRec, len(p.prof))
 	i := 0
 	for _, v := range p.prof {
@@ -238,10 +230,12 @@ func (p *profile) PrintProfile() {
 	sort.Slice(list, func(i, j int) bool { return list[j].msec < list[i].msec })
 	totalCalls := int64(0)
 	totalMsec := 0.0
+	s := ""
 	for _, r := range list {
-		fmt.Printf("%-25s %8d calls %10.1f msec\n", r.name, r.calls, r.msec)
+		s += fmt.Sprintf("%-20s %8d calls %10.1f msec\n", r.name, r.calls, r.msec)
 		totalCalls += r.calls
 		totalMsec += r.msec
 	}
-	fmt.Printf("%-25s %8d calls %10.1f msec\n", "TOTAL", totalCalls, totalMsec)
+	s += fmt.Sprintf("%-20s %8d calls %10.1f msec", "TOTAL", totalCalls, totalMsec)
+	return s
 }

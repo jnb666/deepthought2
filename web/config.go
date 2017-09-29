@@ -90,10 +90,10 @@ func (p *ConfigPage) Save() func(w http.ResponseWriter, r *http.Request) {
 			var err error
 			if fld.Boolean {
 				p.Fields[i].On = (val == "true")
-				conf, err = p.conf.SetBool(fld.Name, p.Fields[i].On)
+				conf, err = conf.SetBool(fld.Name, p.Fields[i].On)
 			} else {
 				p.Fields[i].Value = val
-				conf, err = p.conf.SetString(fld.Name, val)
+				conf, err = conf.SetString(fld.Name, val)
 			}
 			p.Fields[i].Error = ""
 			if err != nil {
@@ -156,14 +156,13 @@ func (p *ConfigPage) Heading() template.HTML {
 
 func getFields(conf *nnet.Config) []Field {
 	keys := conf.Fields()
-	flds := make([]Field, len(keys))
-	for i, key := range keys {
-		if flag, ok := conf.Get(key).(bool); ok {
-			flds[i].Boolean = true
-			flds[i].On = flag
+	var flds []Field
+	for _, key := range keys {
+		if key != "UseGPU" {
+			f := Field{Name: key, Value: fmt.Sprint(conf.Get(key))}
+			f.On, f.Boolean = conf.Get(key).(bool)
+			flds = append(flds, f)
 		}
-		flds[i].Name = key
-		flds[i].Value = fmt.Sprint(conf.Get(key))
 	}
 	return flds
 }

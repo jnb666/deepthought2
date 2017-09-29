@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"os"
 	"path"
+	"sync"
 )
 
 var (
@@ -22,9 +23,14 @@ type Dataset struct {
 	Data
 	Samples   int
 	BatchSize int
-	x, y, y1H num.Array
+	Batches   int
+	queue     num.Queue
+	x, y, y1H [2]num.Array
 	indexes   []int
 	shuffled  bool
+	buf       int
+	start     int
+	sync.WaitGroup
 }
 
 // Create a new Dataset struct, allocate array buffers  and set the batch size and maxSamples
@@ -41,46 +47,67 @@ func NewDataset(dev num.Device, data Data, batchSize, maxSamples int) *Dataset {
 	} else {
 		d.BatchSize = batchSize
 	}
-	d.x = dev.NewArray(num.Float32, d.Nfeat(), d.BatchSize)
-	d.y = dev.NewArray(num.Int32, d.BatchSize)
-	d.y1H = dev.NewArray(num.Float32, d.Classes, d.BatchSize)
+	d.Batches = d.Samples / d.BatchSize
+	if d.Samples%d.BatchSize != 0 {
+		d.Batches++
+	}
+	for i := range d.x {
+		d.x[i] = dev.NewArray(num.Float32, d.Nfeat(), d.BatchSize)
+		d.y[i] = dev.NewArray(num.Int32, d.BatchSize)
+		d.y1H[i] = dev.NewArray(num.Float32, d.Classes, d.BatchSize)
+	}
+	d.queue = dev.NewQueue()
 	return d
 }
 
-// Number of batches
-func (d *Dataset) Batches() int {
-	batches := d.Samples / d.BatchSize
-	if d.Samples%d.BatchSize != 0 {
-		batches++
-	}
-	return batches
-}
-
-// Get given batch - TODO resize array in case of truncated batch
-func (d *Dataset) GetBatch(q num.Queue, b int) (x, y, yOneHot num.Array) {
-	nfeat := d.Nfeat()
-	start := b * d.BatchSize
-	end := start + d.BatchSize
-	if end > d.Samples {
-		end = d.Samples
-	}
-	if d.shuffled {
-		for i, ix := range d.indexes[start:end] {
-			q.Call(
-				num.WriteCol(d.x, i, d.Input[ix*nfeat:(ix+1)*nfeat]),
-				num.WriteCol(d.y, i, &d.Labels[ix]),
+// kick of load of next batch of data in background
+func (d *Dataset) loadBatch() {
+	d.Add(1)
+	go func() {
+		nfeat := d.Nfeat()
+		end := d.start + d.BatchSize
+		if end > d.Samples {
+			end = d.Samples
+		}
+		if d.shuffled {
+			for i, ix := range d.indexes[d.start:end] {
+				d.queue.Call(
+					num.WriteCol(d.x[d.buf], i, d.Input[ix*nfeat:(ix+1)*nfeat]),
+					num.WriteCol(d.y[d.buf], i, &d.Labels[ix]),
+				)
+			}
+		} else {
+			d.queue.Call(
+				num.Write(d.x[d.buf], d.Input[d.start*nfeat:end*nfeat]),
+				num.Write(d.y[d.buf], d.Labels[d.start:end]),
 			)
 		}
-	} else {
-		q.Call(
-			num.Write(d.x, d.Input[start*nfeat:end*nfeat]),
-			num.Write(d.y, d.Labels[start:end]),
+		d.queue.Call(
+			num.Onehot(d.y[d.buf], d.y1H[d.buf], d.Classes),
 		)
+		d.queue.Finish()
+		d.Done()
+	}()
+}
+
+// Get next batch of data
+func (d *Dataset) NextBatch() (x, y, yOneHot num.Array) {
+	d.Wait()
+	x, y, yOneHot = d.x[d.buf], d.y[d.buf], d.y1H[d.buf]
+	d.start += d.BatchSize
+	if d.start > d.Samples {
+		d.start = 0
 	}
-	q.Call(
-		num.Onehot(d.y, d.y1H, d.Classes),
-	)
-	return d.x, d.y, d.y1H
+	d.buf = (d.buf + 1) % 2
+	d.loadBatch()
+	return
+}
+
+// Rewind to start of data
+func (d *Dataset) Rewind() {
+	d.start = 0
+	d.buf = 0
+	d.loadBatch()
 }
 
 // Shuffle the data set

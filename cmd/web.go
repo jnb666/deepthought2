@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/gorilla/mux"
 	"github.com/jnb666/deepthought2/nnet"
-	"github.com/jnb666/deepthought2/num"
 	"github.com/jnb666/deepthought2/web"
 	"log"
 	"net/http"
@@ -30,7 +29,7 @@ func main() {
 	flag.BoolVar(&conf.UseGPU, "gpu", conf.UseGPU, "use Cuda GPU acceleration")
 	flag.Parse()
 
-	net, err := web.NewNetwork(num.NewDevice(conf.UseGPU), conf)
+	net, err := web.NewNetwork(conf)
 	nnet.CheckErr(err)
 
 	t, err := web.NewTemplates()

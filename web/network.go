@@ -36,13 +36,14 @@ type Network struct {
 }
 
 // Load config and data given model name
-func NewNetwork(dev num.Device, conf *Config) (*Network, error) {
+func NewNetwork(conf *Config) (*Network, error) {
 	var err error
 	n := &Network{Conf: conf}
 	if n.Data, err = nnet.LoadData(conf.DataSet); err != nil {
 		return nil, err
 	}
-	n.queue = dev.NewQueue(conf.Threads)
+	dev := num.NewDevice(conf.UseGPU)
+	n.queue = dev.NewQueue()
 	n.Network = nnet.New(n.queue, n.Conf.Config, n.Conf.TrainBatch, n.Data["train"].Shape)
 	if n.DebugLevel >= 1 {
 		fmt.Println(n.Network)
@@ -84,7 +85,7 @@ func (n *Network) Train(restart bool) {
 		n.Unlock()
 		log.Println("train: end")
 		if n.Profile {
-			n.queue.PrintProfile()
+			fmt.Printf("== Profile ==\n%s\n", n.queue.Profile())
 		}
 	}()
 }

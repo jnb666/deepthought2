@@ -9,7 +9,8 @@ import (
 )
 
 func predict(q num.Queue, net *nnet.Network, dset *nnet.Dataset) {
-	x, y, _ := dset.GetBatch(q, 0)
+	dset.Rewind()
+	x, y, _ := dset.NextBatch()
 	classes := q.NewArray(num.Int32, y.Dims()[0])
 	yPred := net.Predict(x, classes)
 	fmt.Print("predict:", yPred.String(q))
@@ -41,7 +42,7 @@ func main() {
 	flag.Parse()
 
 	dev := num.NewDevice(conf.UseGPU)
-	q := dev.NewQueue(conf.Threads)
+	q := dev.NewQueue()
 
 	// load traing and test data
 	data, err := nnet.LoadData(conf.DataSet)
@@ -61,10 +62,13 @@ func main() {
 	// train the network
 	tester := nnet.NewTestLogger(q, conf, data)
 	nnet.Train(trainNet, trainData, tester)
-
 	if conf.DebugLevel >= 1 {
 		fmt.Println("== After ==")
 		predict(q, trainNet, trainData)
 	}
 	q.Shutdown()
+
+	if conf.Profile {
+		fmt.Printf("== Profile ==\n%s\n", q.Profile())
+	}
 }

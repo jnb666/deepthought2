@@ -131,9 +131,10 @@ func (n *Network) Predict(input, classes num.Array) num.Array {
 // if pred slice is not nil then also return the predicted output classes.
 func (n *Network) Error(dset *Dataset, pred []int32) float64 {
 	n.queue.Call(num.Fill(n.total, 0))
-	nbatch := dset.Batches()
-	for batch := 0; batch < nbatch; batch++ {
-		x, y, _ := dset.GetBatch(n.queue, batch)
+	dset.Rewind()
+	for batch := 0; batch < dset.Batches; batch++ {
+		n.queue.Finish()
+		x, y, _ := dset.NextBatch()
 		n.Predict(x, n.classes)
 		n.queue.Call(
 			num.Neq(n.classes, y, n.diffs),
