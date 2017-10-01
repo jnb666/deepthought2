@@ -13,7 +13,6 @@ func main() {
 		MaxEpoch:      10,
 		TrainBatch:    10,
 		TestBatch:     100,
-		Threads:       4,
 		Shuffle:       true,
 	}.AddLayers(
 		nnet.Conv{Nfeats: 20, Size: 5, Pad: 2},

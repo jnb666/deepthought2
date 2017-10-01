@@ -24,14 +24,12 @@ type Network struct {
 	batchLoss num.Array
 	inputGrad num.Array
 	inShape   []int
-	rng       *rand.Rand
 }
 
 // New function creates a new network with the given layers.
 func New(queue num.Queue, conf Config, batchSize int, inShape []int) *Network {
 	n := &Network{Config: conf, queue: queue}
 	n.allocArrays(batchSize)
-	n.SetSeed(conf.RandSeed)
 	if conf.FlattenInput {
 		n.inShape = []int{num.Prod(inShape), batchSize}
 	} else {
@@ -53,21 +51,9 @@ func New(queue num.Queue, conf Config, batchSize int, inShape []int) *Network {
 	return n
 }
 
-// Set random number seed, or random seed if seed <= 0
-func (n *Network) SetSeed(seed int64) {
-	if seed <= 0 {
-		seed = time.Now().UTC().UnixNano()
-	}
-	if n.DebugLevel >= 1 {
-		fmt.Println("random seed =", seed)
-	}
-	source := rand.NewSource(seed)
-	n.rng = rand.New(source)
-}
-
 // Initialise network weights using a linear or normal distribution.
 // Weights for each layer are scaled by 1/sqrt(nin)
-func (n *Network) InitWeights() {
+func (n *Network) InitWeights(rng *rand.Rand) {
 	for i, layer := range n.Layers {
 		if l, ok := layer.(ParamLayer); ok {
 			shape := layer.InShape()
@@ -82,7 +68,7 @@ func (n *Network) InitWeights() {
 			if n.DebugLevel >= 1 {
 				fmt.Printf("layer %d: set weights scale=%.3g bias=%.3g normal=%v\n", i, scale, n.Bias, n.NormalWeights)
 			}
-			l.InitParams(n.queue, float32(scale), float32(n.Bias), n.NormalWeights, n.rng)
+			l.InitParams(n.queue, float32(scale), float32(n.Bias), n.NormalWeights, rng)
 		}
 	}
 	if n.DebugLevel >= 2 {
@@ -187,6 +173,16 @@ func (n *Network) allocArrays(size int) {
 	n.batchLoss = n.queue.NewArray(num.Float32)
 	n.batchErr = n.queue.NewArray(num.Float32)
 	n.total = n.queue.NewArray(num.Float32)
+}
+
+// Set random number seed, or random seed if seed <= 0
+func SetSeed(seed int64) *rand.Rand {
+	if seed <= 0 {
+		seed = time.Now().UTC().UnixNano()
+	}
+	fmt.Println("random seed =", seed)
+	source := rand.NewSource(seed)
+	return rand.New(source)
 }
 
 // Exit in case of error

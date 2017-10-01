@@ -17,8 +17,9 @@ type Config struct {
 	Lambda        float64
 	Bias          float64
 	NormalWeights bool
-	Shuffle       bool
 	FlattenInput  bool
+	Shuffle       bool
+	Distort       float64
 	TrainBatch    int
 	TestBatch     int
 	MaxEpoch      int

@@ -9,7 +9,10 @@ Features:
 * Example data models including MNist digit recognition.
 
 To do:
-* Add image distortion.
+* Early stopping using validation data.
+* Automatic tuning of parameters.
+* Visualisation of network activation and weights.
+* Additional examples.
 
 Dependencies:
 * CPU Blas and DNN libraries <https://software.intel.com/en-us/mkl>

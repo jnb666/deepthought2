@@ -31,6 +31,7 @@ func main() {
 	// override config settings from command line
 	flag.Float64Var(&conf.Eta, "eta", conf.Eta, "learning rate")
 	flag.Float64Var(&conf.Lambda, "lambda", conf.Lambda, "weight decay parameter")
+	flag.Float64Var(&conf.Distort, "distort", conf.Distort, "image distortion severity")
 	flag.Int64Var(&conf.RandSeed, "seed", conf.RandSeed, "random number seed")
 	flag.IntVar(&conf.MaxEpoch, "epochs", conf.MaxEpoch, "max epochs")
 	flag.IntVar(&conf.MaxSamples, "samples", conf.MaxSamples, "max samples")
@@ -43,31 +44,34 @@ func main() {
 
 	dev := num.NewDevice(conf.UseGPU)
 	q := dev.NewQueue()
+	q.Profiling(conf.Profile)
+	rng := nnet.SetSeed(conf.RandSeed)
 
 	// load traing and test data
 	data, err := nnet.LoadData(conf.DataSet)
 	nnet.CheckErr(err)
-	trainData := nnet.NewDataset(dev, data["train"], conf.TrainBatch, conf.MaxSamples)
+	trainData := nnet.NewDataset(dev, data["train"], conf.TrainBatch, conf.MaxSamples, conf.Distort, rng)
 
-	// initialise weights
-	q.Profiling(conf.Profile)
-	trainNet := nnet.New(q, conf, trainData.BatchSize, trainData.Shape)
+	// create network and initialise weights
+	trainNet := nnet.New(q, conf, trainData.BatchSize, trainData.Shape())
 	fmt.Println(trainNet)
-	trainNet.InitWeights()
+	trainNet.InitWeights(rng)
 	if conf.DebugLevel >= 1 {
 		fmt.Println("== Before ==")
 		predict(q, trainNet, trainData)
 	}
 
 	// train the network
-	tester := nnet.NewTestLogger(q, conf, data)
+	rng2 := nnet.SetSeed(conf.RandSeed)
+	tester := nnet.NewTestLogger(q, conf, data, rng2)
 	nnet.Train(trainNet, trainData, tester)
+
+	// exit
 	if conf.DebugLevel >= 1 {
 		fmt.Println("== After ==")
 		predict(q, trainNet, trainData)
 	}
 	q.Shutdown()
-
 	if conf.Profile {
 		fmt.Printf("== Profile ==\n%s\n", q.Profile())
 	}

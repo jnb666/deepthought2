@@ -15,7 +15,6 @@ func main() {
 		MaxEpoch:      20,
 		TrainBatch:    10,
 		TestBatch:     100,
-		Threads:       4,
 		Shuffle:       true,
 	}
 	conf := confBase.AddLayers(

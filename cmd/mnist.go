@@ -3,88 +3,87 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/jnb666/deepthought2/img"
 	"github.com/jnb666/deepthought2/nnet"
+	"image"
 	"os"
 	"path"
 )
 
-const (
-	classes  = 10
-	maxPixel = 255
-)
+const classes = 10
 
-type label struct{ Magic, Num uint32 }
+type labelHeader struct{ Magic, Num uint32 }
 
-type image struct{ Magic, Num, Width, Height uint32 }
+type imageHeader struct{ Magic, Num, Width, Height uint32 }
 
 func main() {
 	train, err := loadData("train-images-idx3-ubyte", "train-labels-idx1-ubyte")
 	nnet.CheckErr(err)
-	err = train.Save("mnist_train")
+	err = nnet.SaveDataFile(train, "mnist_train")
 	nnet.CheckErr(err)
 
 	test, err := loadData("t10k-images-idx3-ubyte", "t10k-labels-idx1-ubyte")
 	nnet.CheckErr(err)
-	err = test.Save("mnist_test")
+	err = nnet.SaveDataFile(test, "mnist_test")
 	nnet.CheckErr(err)
 }
 
-func loadData(imageFile, labelFile string) (d nnet.Data, err error) {
-	d.Classes = classes
-	d.Labels, err = readLabels(labelFile)
+func loadData(imageFile, labelFile string) (nnet.Data, error) {
+	labels, err := readLabels(labelFile)
 	if err != nil {
-		return
+		return nil, err
 	}
-	d.Input, d.Shape, err = readImages(imageFile)
-	return
+	images, err := readImages(imageFile)
+	if err != nil {
+		return nil, err
+	}
+	return img.NewData(classes, labels, images), nil
 }
 
-func readImages(name string) ([]float32, []int, error) {
+func readImages(name string) (images []image.Image, err error) {
+	var f *os.File
 	pathName := path.Join(nnet.DataDir, "mnist", name)
-	f, err := os.Open(pathName)
-	if err != nil {
-		return nil, nil, err
+	if f, err = os.Open(pathName); err != nil {
+		return
 	}
 	defer f.Close()
-	var head image
+	var head imageHeader
 	if err = binary.Read(f, binary.BigEndian, &head); err != nil {
-		return nil, nil, err
+		return
 	}
 	n, h, w := int(head.Num), int(head.Height), int(head.Width)
 	fmt.Printf("read %d %dx%d images from %s\n", n, h, w, name)
-	images := make([]float32, n*h*w)
-	batch := make([]byte, h*w)
-	for i := 0; i < n; i++ {
-		_, err = f.Read(batch)
-		if err != nil {
-			return nil, nil, err
+	images = make([]image.Image, n)
+	shape := image.Rect(0, 0, w, h)
+	for i := range images {
+		img := image.NewGray(shape)
+		if _, err = f.Read(img.Pix); err != nil {
+			return
 		}
-		for j, val := range batch {
-			images[i*w*h+j] = float32(val) / maxPixel
-		}
+		images[i] = img
 	}
-	return images, []int{h, w}, err
+	return
 }
 
-func readLabels(name string) ([]int32, error) {
+func readLabels(name string) (labels []int32, err error) {
+	var f *os.File
 	pathName := path.Join(nnet.DataDir, "mnist", name)
-	f, err := os.Open(pathName)
-	if err != nil {
-		return nil, err
+	if f, err = os.Open(pathName); err != nil {
+		return
 	}
 	defer f.Close()
-	var head label
+	var head labelHeader
 	if err = binary.Read(f, binary.BigEndian, &head); err != nil {
-		return nil, err
+		return
 	}
 	fmt.Printf("read %d labels from %s\n", head.Num, name)
 	bytes := make([]byte, head.Num)
 	if _, err = f.Read(bytes); err != nil {
-		return nil, err
+		return
 	}
-	labels := make([]int32, head.Num)
+	labels = make([]int32, head.Num)
 	for i, label := range bytes {
 		labels[i] = int32(label)
 	}
-	return labels, err
+	return
 }

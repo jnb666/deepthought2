@@ -48,7 +48,7 @@ func main() {
 	r.HandleFunc("/stats", trainPage.Stats())
 	r.HandleFunc("/ws", trainPage.Websocket())
 
-	r.Handle("/images/", http.RedirectHandler("/images/all/train/1", http.StatusFound))
+	r.Handle("/images", http.RedirectHandler("/images/all/train/1", http.StatusFound))
 	r.HandleFunc("/images/{inc:(?:all|errors)}/{dset}/{page:[0-9]+}", imagePage.Base())
 	r.HandleFunc("/img/{dset}/{id:[0-9]+}", imagePage.Image())
 

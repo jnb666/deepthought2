@@ -3,6 +3,7 @@ package nnet
 import (
 	"fmt"
 	"github.com/jnb666/deepthought2/num"
+	"math/rand"
 	"time"
 )
 
@@ -51,17 +52,15 @@ type TestBase struct {
 
 // Create a new base class which implements the Tester interface.
 // If limitSamples flag is set then total no. of samples will be entries in smallest dataset.
-func NewTestBase(queue num.Queue, conf Config, data map[string]Data, limitSamples bool) *TestBase {
+func NewTestBase(queue num.Queue, conf Config, data map[string]Data, limitSamples bool, rng *rand.Rand) *TestBase {
 	t := &TestBase{
 		Data:    make(map[string]*Dataset),
 		Headers: StatsHeaders(data),
-		Samples: min(conf.MaxSamples, len(data["train"].Labels)),
+		Samples: min(conf.MaxSamples, data["train"].Len()),
 	}
 	if limitSamples {
 		for _, d := range data {
-			if len(d.Labels) < t.Samples {
-				t.Samples = len(d.Labels)
-			}
+			t.Samples = min(t.Samples, d.Len())
 		}
 	}
 	if conf.DebugLevel >= 1 {
@@ -71,9 +70,9 @@ func NewTestBase(queue num.Queue, conf Config, data map[string]Data, limitSample
 		if conf.DebugLevel >= 1 {
 			fmt.Println("dataset =>", key)
 		}
-		t.Data[key] = NewDataset(queue.Dev(), d, conf.TestBatch, t.Samples)
+		t.Data[key] = NewDataset(queue.Dev(), d, conf.TestBatch, t.Samples, 0, rng)
 	}
-	t.Net = New(queue, conf, t.Data["train"].BatchSize, t.Data["train"].Shape)
+	t.Net = New(queue, conf, t.Data["train"].BatchSize, t.Data["train"].Shape())
 	return t
 }
 
@@ -88,8 +87,8 @@ func (t *TestBase) Test(net *Network, epoch int, loss float64, start time.Time) 
 	t.Stats.Values = []float64{loss}
 	for _, key := range DataTypes {
 		if dset, ok := t.Data[key]; ok {
-			if dset.Samples < len(dset.Labels) {
-				dset.Shuffle(t.Net.rng)
+			if dset.Samples < dset.Len() {
+				dset.Shuffle()
 			}
 			var pred []int32
 			if t.Predict != nil {
@@ -107,8 +106,8 @@ type testLogger struct {
 }
 
 // Create a new tester which logs stats to stdout.
-func NewTestLogger(queue num.Queue, conf Config, data map[string]Data) Tester {
-	return testLogger{TestBase: NewTestBase(queue, conf, data, true)}
+func NewTestLogger(queue num.Queue, conf Config, data map[string]Data, rng *rand.Rand) Tester {
+	return testLogger{TestBase: NewTestBase(queue, conf, data, true, rng)}
 }
 
 func (t testLogger) Test(net *Network, epoch int, loss float64, start time.Time) bool {
@@ -141,10 +140,10 @@ func Train(net *Network, dset *Dataset, test Tester) {
 func TrainEpoch(net *Network, dset *Dataset, acc num.Array) float64 {
 	q := net.queue
 	if net.inputGrad == nil {
-		net.inputGrad = q.NewArray(num.Float32, dset.Classes, dset.BatchSize)
+		net.inputGrad = q.NewArray(num.Float32, dset.Classes(), dset.BatchSize)
 	}
 	if net.Shuffle {
-		dset.Shuffle(net.rng)
+		dset.Shuffle()
 	}
 	weightDecay := float32(net.Eta*net.Lambda) / float32(dset.Samples)
 	q.Call(num.Fill(acc, 0))
