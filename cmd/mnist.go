@@ -10,25 +10,62 @@ import (
 	"path"
 )
 
-const classes = 10
+const (
+	classes = 10
+	epochs  = 40
+	split   = 50000
+)
 
 type labelHeader struct{ Magic, Num uint32 }
 
 type imageHeader struct{ Magic, Num, Width, Height uint32 }
 
 func main() {
+	// mnist dataset is 60000 train + 10000 test images
 	train, err := loadData("train-images-idx3-ubyte", "train-labels-idx1-ubyte")
 	nnet.CheckErr(err)
-	err = nnet.SaveDataFile(train, "mnist_train")
+	err = nnet.SaveDataFile(train, "mnist_train", false)
 	nnet.CheckErr(err)
 
 	test, err := loadData("t10k-images-idx3-ubyte", "t10k-labels-idx1-ubyte")
 	nnet.CheckErr(err)
-	err = nnet.SaveDataFile(test, "mnist_test")
+	err = nnet.SaveDataFile(test, "mnist_test", false)
+	nnet.CheckErr(err)
+
+	// mnist2 dataset is 50000*40 distorted train + 10000 valid + 10000 test images
+	distort(train, "mnist2_train", split, epochs)
+
+	valid := train.Slice(split, train.Len())
+	err = nnet.SaveDataFile(valid, "mnist2_valid", false)
+	nnet.CheckErr(err)
+
+	err = nnet.SaveDataFile(test, "mnist2_test", false)
 	nnet.CheckErr(err)
 }
 
-func loadData(imageFile, labelFile string) (nnet.Data, error) {
+// apply image distortion
+func distort(d *img.Data, name string, nimg, epochs int) {
+	rng := nnet.SetSeed(0)
+	res := &img.Data{
+		Epochs: epochs,
+		NClass: classes,
+		Dims:   d.Dims,
+		Labels: make([]int32, nimg),
+		Images: make([]image.Image, nimg),
+	}
+	t := img.NewTransformer(d.Dims[1], d.Dims[0], img.ConvAccel, rng)
+	for epoch := 0; epoch < epochs; epoch++ {
+		index := rng.Perm(nimg)
+		d.Label(index, res.Labels)
+		t.TransformBatch(index, d.Images, res.Images)
+		err := nnet.SaveDataFile(res, name, epoch > 0)
+		nnet.CheckErr(err)
+		fmt.Printf("\rdistort: epoch %d/%d  ", epoch+1, epochs)
+	}
+	fmt.Println()
+}
+
+func loadData(imageFile, labelFile string) (*img.Data, error) {
 	labels, err := readLabels(labelFile)
 	if err != nil {
 		return nil, err

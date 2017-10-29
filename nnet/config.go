@@ -19,12 +19,12 @@ type Config struct {
 	NormalWeights bool
 	FlattenInput  bool
 	Shuffle       bool
-	Distort       float64
 	TrainBatch    int
 	TestBatch     int
 	MaxEpoch      int
 	MaxSamples    int
 	LogEvery      int
+	StopAfter     int
 	MinLoss       float64
 	RandSeed      int64
 	DebugLevel    int
@@ -55,15 +55,13 @@ func (c Config) AddLayers(layers ...ConfigLayer) Config {
 	return c
 }
 
-// Save default network definition, also saves current version if not already present
+// Save default network definition and overwites current config
 func (c Config) SaveDefault(name string) error {
 	err := c.Save(name + ".default")
 	if err != nil {
 		return err
 	}
-	if !FileExists(name + ".net") {
-		err = c.Save(name + ".net")
-	}
+	err = c.Save(name + ".net")
 	return err
 }
 

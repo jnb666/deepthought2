@@ -9,11 +9,17 @@ import (
 
 const statsBufferSize = 10
 
+const (
+	emaN = 10
+	emaK = 2.0 / (emaN + 1.0)
+)
+
 // Training statistics
 type Stats struct {
-	Epoch   int
-	Values  []float64
-	Elapsed time.Duration
+	Epoch     int
+	Values    []float64
+	BestSince int
+	Elapsed   time.Duration
 }
 
 func StatsHeaders(d map[string]Data) []string {
@@ -21,8 +27,10 @@ func StatsHeaders(d map[string]Data) []string {
 	for _, key := range DataTypes {
 		if _, ok := d[key]; ok {
 			h = append(h, key+" error")
+			if key == "valid" {
+				h = append(h, "valid avg")
+			}
 		}
-
 	}
 	return h
 }
@@ -35,6 +43,16 @@ func (s Stats) Format() []string {
 	return str
 }
 
+// Calc exponentional moving average
+type EMA float64
+
+func (e EMA) Add(val float64) float64 {
+	if e == 0 {
+		return val
+	}
+	return val*emaK + float64(e)*(1-emaK)
+}
+
 // Tester interface to evaluate the performance after each epoch, Test method returns true if training should stop.
 type Tester interface {
 	Test(net *Network, epoch int, loss float64, start time.Time) bool
@@ -45,7 +63,7 @@ type TestBase struct {
 	Net     *Network
 	Data    map[string]*Dataset
 	Predict map[string][]int32
-	Stats   Stats
+	Stats   []Stats
 	Headers []string
 	Samples int
 }
@@ -55,6 +73,7 @@ type TestBase struct {
 func NewTestBase(queue num.Queue, conf Config, data map[string]Data, limitSamples bool, rng *rand.Rand) *TestBase {
 	t := &TestBase{
 		Data:    make(map[string]*Dataset),
+		Stats:   []Stats{},
 		Headers: StatsHeaders(data),
 		Samples: min(conf.MaxSamples, data["train"].Len()),
 	}
@@ -70,10 +89,14 @@ func NewTestBase(queue num.Queue, conf Config, data map[string]Data, limitSample
 		if conf.DebugLevel >= 1 {
 			fmt.Println("dataset =>", key)
 		}
-		t.Data[key] = NewDataset(queue.Dev(), d, conf.TestBatch, t.Samples, 0, rng)
+		t.Data[key] = NewDataset(queue.Dev(), d, conf.TestBatch, t.Samples, conf.FlattenInput, rng)
 	}
 	t.Net = New(queue, conf, t.Data["train"].BatchSize, t.Data["train"].Shape())
 	return t
+}
+
+func (t *TestBase) Reset() {
+	t.Stats = t.Stats[:0]
 }
 
 // Test performance of the network, called from the Train function on completion of each epoch.
@@ -83,9 +106,8 @@ func (t *TestBase) Test(net *Network, epoch int, loss float64, start time.Time) 
 	if net.DebugLevel >= 1 {
 		fmt.Printf("== TEST EPOCH %d ==\n", epoch)
 	}
-	t.Stats.Epoch = epoch
-	t.Stats.Values = []float64{loss}
-	for _, key := range DataTypes {
+	s := Stats{Epoch: epoch, Values: []float64{loss}, BestSince: -1}
+	for ix, key := range DataTypes {
 		if dset, ok := t.Data[key]; ok {
 			if dset.Samples < dset.Len() {
 				dset.Shuffle()
@@ -94,11 +116,30 @@ func (t *TestBase) Test(net *Network, epoch int, loss float64, start time.Time) 
 			if t.Predict != nil {
 				pred = t.Predict[key]
 			}
-			t.Stats.Values = append(t.Stats.Values, t.Net.Error(dset, pred))
+			errVal := t.Net.Error(dset, pred)
+			s.Values = append(s.Values, errVal)
+			if key == "valid" {
+				// save average validation error
+				avgVal := 0.0
+				if epoch > 1 {
+					avgVal = t.Stats[epoch-2].Values[ix+2]
+				}
+				avgVal = EMA(avgVal).Add(errVal)
+				s.Values = append(s.Values, avgVal)
+				// get number of epochs where average validation error has increased
+				for ep := epoch - 1; ep >= 1; ep-- {
+					prevErr := t.Stats[ep-1].Values[ix+2]
+					if prevErr > avgVal {
+						s.BestSince = epoch - ep - 1
+						break
+					}
+				}
+			}
 		}
 	}
-	t.Stats.Elapsed = time.Since(start)
-	return epoch >= net.MaxEpoch || loss <= net.MinLoss
+	s.Elapsed = time.Since(start)
+	t.Stats = append(t.Stats, s)
+	return epoch >= net.MaxEpoch || loss <= net.MinLoss || (net.StopAfter > 0 && s.BestSince >= net.StopAfter)
 }
 
 type testLogger struct {
@@ -112,15 +153,19 @@ func NewTestLogger(queue num.Queue, conf Config, data map[string]Data, rng *rand
 
 func (t testLogger) Test(net *Network, epoch int, loss float64, start time.Time) bool {
 	done := t.TestBase.Test(net, epoch, loss, start)
+	s := t.Stats[len(t.Stats)-1]
 	if done || net.LogEvery == 0 || epoch%net.LogEvery == 0 {
 		msg := fmt.Sprintf("epoch %3d:", epoch)
-		for i, val := range t.Stats.Format() {
+		for i, val := range s.Format() {
 			msg += fmt.Sprintf("  %s =%s", t.Headers[i], val)
+		}
+		if s.BestSince >= 0 {
+			msg += fmt.Sprintf(" [%d]", s.BestSince)
 		}
 		fmt.Println(msg)
 	}
 	if done {
-		fmt.Printf("run time: %s\n", t.Stats.Elapsed.Round(10*time.Millisecond))
+		fmt.Printf("run time: %s\n", s.Elapsed.Round(10*time.Millisecond))
 	}
 	return done
 }
@@ -147,7 +192,7 @@ func TrainEpoch(net *Network, dset *Dataset, acc num.Array) float64 {
 	}
 	weightDecay := float32(net.Eta*net.Lambda) / float32(dset.Samples)
 	q.Call(num.Fill(acc, 0))
-	dset.Rewind()
+	dset.NextEpoch()
 	for batch := 0; batch < dset.Batches; batch++ {
 		if net.DebugLevel >= 2 || (net.DebugLevel == 1 && batch == 0) {
 			fmt.Printf("== train batch %d ==\n", batch)

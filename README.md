@@ -9,7 +9,6 @@ Features:
 * Example data models including MNist digit recognition.
 
 To do:
-* Early stopping using validation data.
 * Automatic tuning of parameters.
 * Visualisation of network activation and weights.
 * Additional examples.

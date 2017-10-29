@@ -1,7 +1,6 @@
 package img
 
 import (
-	"fmt"
 	"image"
 	"image/color"
 	"math/rand"
@@ -10,63 +9,101 @@ import (
 	"time"
 )
 
-func printArray(in []float32, size int) string {
-	s := make([]string, size)
-	for i := 0; i < size; i++ {
-		s[i] = fmt.Sprintf("%6.3f", in[i*size:(i+1)*size])
+func char(v uint32) string {
+	v = v >> 8
+	switch {
+	case v == 0:
+		return "  "
+	case v <= 64:
+		return ". "
+	case v <= 128:
+		return "+ "
+	default:
+		return "* "
+	}
+}
+
+func printImage(in image.Image) string {
+	r := in.Bounds()
+	s := make([]string, r.Dy())
+	for y := range s {
+		s[y] = "| "
+		for x := 0; x < r.Dx(); x++ {
+			v, _, _, _ := in.At(x, y).RGBA()
+			s[y] += char(v)
+		}
+		s[y] += "|"
 	}
 	return strings.Join(s, "\n")
 }
 
-func runTest(t *testing.T, accel bool) {
+func runTest(t *testing.T, mode ConvMode) {
+	size := 10
 	seed := time.Now().UTC().UnixNano()
 	rng := rand.New(rand.NewSource(seed))
-	trans := NewTransformer(8, 8, 1, rng, accel)
+	trans := NewTransformer(size, size, mode, rng)
 
-	src := image.NewGray(image.Rect(0, 0, 8, 8))
-	for i := 1; i < 7; i++ {
-		src.Set(7-i, i, color.Gray{Y: 255})
+	src := image.NewGray(image.Rect(0, 0, size, size))
+	for i := 1; i < size-1; i++ {
+		src.Set(size-i-1, i, color.Gray{Y: 255})
 	}
-	data := make([]float32, 64)
-	Unpack(src, data)
-	t.Logf("\n%s", printArray(data, 8))
+	t.Logf("\n%s", printImage(src))
 
-	trans.Transform(src, Scale, data, 0)
-	t.Logf("scale\n%s", printArray(data, 8))
+	trans.Trans = Scale
+	dst := trans.Transform(src, 0)
+	t.Logf("scale\n%s", printImage(dst))
 
-	trans.Transform(src, Rotate, data, 0)
-	t.Logf("rotate\n%s", printArray(data, 8))
+	trans.Trans = Rotate
+	dst = trans.Transform(src, 0)
+	t.Logf("rotate\n%s", printImage(dst))
 
-	trans.Transform(src, Elastic, data, 0)
-	t.Logf("elastic\n%s", printArray(data, 8))
+	trans.Trans = Elastic
+	dst = trans.Transform(src, 0)
+	t.Logf("elastic\n%s", printImage(dst))
 }
 
 func TestImage(t *testing.T) {
-	runTest(t, false)
+	runTest(t, ConvDefault)
 }
 
 func TestAccel(t *testing.T) {
-	runTest(t, true)
+	runTest(t, ConvAccel)
 }
 
-func runBench(b *testing.B, accel bool) {
+func TestBoxBlur(t *testing.T) {
+	runTest(t, ConvBoxBlur)
+}
+
+var dst image.Image
+
+func runBench(b *testing.B, mode ConvMode, dis TransType) {
+	size := 28
 	seed := time.Now().UTC().UnixNano()
 	rng := rand.New(rand.NewSource(seed))
-	data := make([]float32, 28*28)
+	data := make([]float32, size*size)
 	for i := range data {
 		data[i] = rng.Float32()
 	}
-	src := NewGray(image.Rect(0, 0, 28, 28), data)
-	trans := NewTransformer(28, 28, 1, rng, accel)
+	src := NewGray(image.Rect(0, 0, size, size), data)
+	trans := NewTransformer(size, size, mode, rng)
+	trans.Trans = dis
 	for i := 0; i < b.N; i++ {
-		trans.Transform(src, Scale+Rotate+Elastic, data, 0)
+		dst = trans.Transform(src, 0)
 	}
 }
 
-func BenchmarkImage(b *testing.B) {
-	runBench(b, false)
+func BenchmarkAffine(b *testing.B) {
+	runBench(b, ConvDefault, Scale+Rotate)
+}
+
+func BenchmarkStandard(b *testing.B) {
+	runBench(b, ConvDefault, Scale+Rotate+Elastic)
 }
 
 func BenchmarkAccel(b *testing.B) {
-	runBench(b, true)
+	runBench(b, ConvAccel, Scale+Rotate+Elastic)
+}
+
+func BenchmarkBoxBlur(b *testing.B) {
+	runBench(b, ConvBoxBlur, Scale+Rotate+Elastic)
 }

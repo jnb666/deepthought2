@@ -6,6 +6,7 @@ package num
 import "C"
 
 import (
+	"fmt"
 	"github.com/jnb666/deepthought2/num/cuda"
 	"github.com/jnb666/deepthought2/num/mkl"
 	"unsafe"
@@ -64,6 +65,9 @@ func (l *convCuda) SetParamData(W, B, dW, dB Array) {
 }
 
 func (l *convCuda) Fprop(que Queue, in, work Array) Array {
+	if !SameShape(in.Dims(), l.InShape()) {
+		panic(fmt.Errorf("fprop conv: invalid input shape: have %v, expect %v", in.Dims(), l.InShape()))
+	}
 	l.src = in
 	q := que.(*gpuQueue)
 	q.Call(
@@ -75,6 +79,9 @@ func (l *convCuda) Fprop(que Queue, in, work Array) Array {
 }
 
 func (l *convCuda) Bprop(que Queue, grad, work Array) Array {
+	if !SameShape(grad.Dims(), l.OutShape()) {
+		panic(fmt.Errorf("bprop conv: invalid input shape: have %v, expect %v", grad.Dims(), l.OutShape()))
+	}
 	q := que.(*gpuQueue)
 	q.Call(
 		args(C.CUDNN_EXECUTE+cuda.ConvBpropBias, l.Dst.Ptr(), l.Bias.Ptr(), grad.Data(), l.db),
@@ -118,6 +125,9 @@ type poolCuda struct {
 }
 
 func (l *poolCuda) Fprop(q Queue, in, work Array) Array {
+	if !SameShape(in.Dims(), l.InShape()) {
+		panic(fmt.Errorf("fprop pool: invalid input shape: have %v, expect %v", in.Dims(), l.InShape()))
+	}
 	l.src = in
 	q.Call(
 		args(C.CUDNN_EXECUTE+cuda.PoolFprop, l.Ptr(), l.Src.Ptr(), l.Dst.Ptr(), in.Data(), l.dst.Data()),
@@ -126,6 +136,9 @@ func (l *poolCuda) Fprop(q Queue, in, work Array) Array {
 }
 
 func (l *poolCuda) Bprop(q Queue, grad, work Array) Array {
+	if !SameShape(grad.Dims(), l.OutShape()) {
+		panic(fmt.Errorf("bprop pool: invalid input shape: have %v, expect %v", grad.Dims(), l.OutShape()))
+	}
 	q.Call(
 		args(C.CUDNN_EXECUTE+cuda.PoolBprop, l.Ptr(), l.Src.Ptr(), l.Dst.Ptr(), l.dst.Data(), grad.Data(), l.src.Data(), l.diffSrc.Data()),
 	)
@@ -231,6 +244,9 @@ func (l layerMKL) SetParamData(W, B, dW, dB Array) {
 }
 
 func (l layerMKL) Fprop(q Queue, in, work Array) Array {
+	if !SameShape(in.Dims(), l.InShape()) {
+		panic(fmt.Errorf("fprop: invalid input shape: have %v, expect %v", in.Dims(), l.InShape()))
+	}
 	l.SetSrc(in.Data())
 	q.Call(
 		dnnExecute(l.Fwd, l.ResPtr(), l.Type()+"_fprop"),
@@ -239,6 +255,9 @@ func (l layerMKL) Fprop(q Queue, in, work Array) Array {
 }
 
 func (l layerMKL) Bprop(q Queue, grad, work Array) Array {
+	if !SameShape(grad.Dims(), l.OutShape()) {
+		panic(fmt.Errorf("bprop: invalid input shape: have %v, expect %v", grad.Dims(), l.OutShape()))
+	}
 	l.SetDiffDst(grad.Data())
 	if l.HasParams() {
 		q.Call(

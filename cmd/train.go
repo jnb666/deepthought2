@@ -8,7 +8,8 @@ import (
 	"os"
 )
 
-func predict(q num.Queue, net *nnet.Network, dset *nnet.Dataset) {
+func predict(q num.Queue, net *nnet.Network, d nnet.Data) {
+	dset := nnet.NewDataset(q.Dev(), d, 10, 10, net.FlattenInput, nil)
 	dset.Rewind()
 	x, y, _ := dset.NextBatch()
 	classes := q.NewArray(num.Int32, y.Dims()[0])
@@ -31,7 +32,6 @@ func main() {
 	// override config settings from command line
 	flag.Float64Var(&conf.Eta, "eta", conf.Eta, "learning rate")
 	flag.Float64Var(&conf.Lambda, "lambda", conf.Lambda, "weight decay parameter")
-	flag.Float64Var(&conf.Distort, "distort", conf.Distort, "image distortion severity")
 	flag.Int64Var(&conf.RandSeed, "seed", conf.RandSeed, "random number seed")
 	flag.IntVar(&conf.MaxEpoch, "epochs", conf.MaxEpoch, "max epochs")
 	flag.IntVar(&conf.MaxSamples, "samples", conf.MaxSamples, "max samples")
@@ -50,7 +50,7 @@ func main() {
 	// load traing and test data
 	data, err := nnet.LoadData(conf.DataSet)
 	nnet.CheckErr(err)
-	trainData := nnet.NewDataset(dev, data["train"], conf.TrainBatch, conf.MaxSamples, conf.Distort, rng)
+	trainData := nnet.NewDataset(dev, data["train"], conf.TrainBatch, conf.MaxSamples, conf.FlattenInput, rng)
 
 	// create network and initialise weights
 	trainNet := nnet.New(q, conf, trainData.BatchSize, trainData.Shape())
@@ -58,7 +58,7 @@ func main() {
 	trainNet.InitWeights(rng)
 	if conf.DebugLevel >= 1 {
 		fmt.Println("== Before ==")
-		predict(q, trainNet, trainData)
+		predict(q, trainNet, data["train"])
 	}
 
 	// train the network
@@ -69,7 +69,7 @@ func main() {
 	// exit
 	if conf.DebugLevel >= 1 {
 		fmt.Println("== After ==")
-		predict(q, trainNet, trainData)
+		predict(q, trainNet, data["train"])
 	}
 	q.Shutdown()
 	if conf.Profile {

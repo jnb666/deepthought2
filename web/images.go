@@ -11,11 +11,6 @@ import (
 	"strconv"
 )
 
-const (
-	distort   = img.Scale + img.Rotate + img.Elastic
-	accelConv = true
-)
-
 type ImagePage struct {
 	*Templates
 	Heading string
@@ -164,10 +159,7 @@ func (p *ImagePage) Image() func(w http.ResponseWriter, r *http.Request) {
 		}
 		image := data.Image(id - 1)
 		if r.FormValue("d") != "" {
-			r := image.Bounds()
-			data := make([]float32, r.Dx()*r.Dy())
-			p.net.trans.Transform(image, distort, data, 0)
-			image = img.NewGray(r, data)
+			image = p.net.trans.Transform(image, 0)
 		}
 		image = img.Highlight(image, p.Label(id) != p.Predict(id))
 		w.Header().Set("Content-type", "image/png")

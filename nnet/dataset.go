@@ -6,6 +6,7 @@ import (
 	_ "github.com/jnb666/deepthought2/img"
 	"github.com/jnb666/deepthought2/num"
 	"image"
+	"io"
 	"math/rand"
 	"os"
 	"path"
@@ -13,7 +14,6 @@ import (
 )
 
 var (
-	AccelConv = true
 	DataDir   = os.Getenv("GOPATH") + "/src/github.com/jnb666/deepthought2/data"
 	DataTypes = []string{"train", "test", "valid"}
 )
@@ -30,7 +30,8 @@ type Data interface {
 	Label(index []int, label []int32)
 	Input(index []int, buf []float32)
 	Image(i int) image.Image
-	Distort(amount float64, rng *rand.Rand, accel bool)
+	SetFile(io.ReadSeeker)
+	File() io.ReadSeeker
 }
 
 // Dataset type encapsulates a set of training, test or validation data.
@@ -45,14 +46,14 @@ type Dataset struct {
 	x, y, y1H [2]num.Array
 	indexes   []int
 	buf       int
-	nfeat     int
+	epoch     int
 	batch     int
 	rng       *rand.Rand
 	sync.WaitGroup
 }
 
 // Create a new Dataset struct, allocate array buffers  and set the batch size and maxSamples
-func NewDataset(dev num.Device, data Data, batchSize, maxSamples int, distort float64, rng *rand.Rand) *Dataset {
+func NewDataset(dev num.Device, data Data, batchSize, maxSamples int, flattenInput bool, rng *rand.Rand) *Dataset {
 	d := &Dataset{Data: data, Samples: data.Len(), rng: rng}
 	if maxSamples > 0 && d.Samples > maxSamples {
 		d.Samples = maxSamples
@@ -70,7 +71,11 @@ func NewDataset(dev num.Device, data Data, batchSize, maxSamples int, distort fl
 	d.xBuffer = make([]float32, nfeat*d.BatchSize)
 	d.yBuffer = make([]int32, d.BatchSize)
 	for i := range d.x {
-		d.x[i] = dev.NewArray(num.Float32, nfeat, d.BatchSize)
+		if flattenInput {
+			d.x[i] = dev.NewArray(num.Float32, nfeat, d.BatchSize)
+		} else {
+			d.x[i] = dev.NewArray(num.Float32, append(data.Shape(), d.BatchSize)...)
+		}
 		d.y[i] = dev.NewArray(num.Int32, d.BatchSize)
 		d.y1H[i] = dev.NewArray(num.Float32, d.Classes(), d.BatchSize)
 	}
@@ -79,9 +84,6 @@ func NewDataset(dev num.Device, data Data, batchSize, maxSamples int, distort fl
 		d.indexes[i] = i
 	}
 	d.queue = dev.NewQueue()
-	if distort > 0 {
-		d.Distort(distort, rng, AccelConv)
-	}
 	return d
 }
 
@@ -119,7 +121,28 @@ func (d *Dataset) NextBatch() (x, y, yOneHot num.Array) {
 // Rewind to start of data
 func (d *Dataset) Rewind() {
 	d.Wait()
+	d.epoch = 0
 	d.batch = 0
+	d.loadBatch()
+}
+
+// Called at start of each epoch
+func (d *Dataset) NextEpoch() {
+	d.Wait()
+	d.epoch++
+	d.batch = 0
+	if f := d.File(); f != nil && d.epoch > 1 {
+		err := gob.NewDecoder(f).Decode(&d.Data)
+		if err == io.EOF {
+			fmt.Println("rewind file")
+			f.Seek(0, io.SeekStart)
+			err = gob.NewDecoder(f).Decode(&d.Data)
+		}
+		if err != nil {
+			panic(err)
+		}
+		d.SetFile(f)
+	}
 	d.loadBatch()
 }
 
@@ -129,14 +152,14 @@ func (d *Dataset) Shuffle() {
 }
 
 // Load data from disk given the model name.
-func LoadData(model string) (map[string]Data, error) {
-	d := make(map[string]Data)
+func LoadData(model string) (d map[string]Data, err error) {
+	var data Data
+	d = make(map[string]Data)
 	for _, key := range DataTypes {
 		name := model + "_" + key
 		if FileExists(name + ".dat") {
-			data, err := LoadDataFile(name)
-			if err != nil {
-				return nil, err
+			if data, err = LoadDataFile(name); err != nil {
+				return
 			}
 			d[key] = data
 		}
@@ -145,30 +168,39 @@ func LoadData(model string) (map[string]Data, error) {
 }
 
 // Decode data from file in gob format under DataDir
-func LoadDataFile(name string) (d Data, err error) {
-	var f *os.File
+func LoadDataFile(name string) (Data, error) {
 	filePath := path.Join(DataDir, name+".dat")
-	if f, err = os.Open(filePath); err != nil {
-		return
+	f, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
 	}
-	defer f.Close()
 	fmt.Printf("loading data from %s.dat:\t", name)
+	var d Data
 	if err = gob.NewDecoder(f).Decode(&d); err != nil {
-		return
+		return nil, err
 	}
+	d.SetFile(f)
 	fmt.Println(append(d.Shape(), d.Len()))
-	return
+	return d, nil
 }
 
 // Encode in gob format and save to file under DataDir
-func SaveDataFile(d Data, name string) error {
+func SaveDataFile(d Data, name string, append bool) error {
 	filePath := path.Join(DataDir, name+".dat")
-	f, err := os.Create(filePath)
+	var flags int
+	if append {
+		flags = os.O_WRONLY | os.O_CREATE | os.O_APPEND
+	} else {
+		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	}
+	f, err := os.OpenFile(filePath, flags, 0644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	fmt.Println("saving data to", name+".dat")
+	if !append {
+		fmt.Println("saving data to", name+".dat")
+	}
 	return gob.NewEncoder(f).Encode(&d)
 }
 
@@ -212,4 +244,6 @@ func (d data) Input(index []int, buf []float32) {
 
 func (d data) Image(i int) image.Image { return nil }
 
-func (d data) Distort(amount float64, rng *rand.Rand, accel bool) {}
+func (d data) SetFile(io.ReadSeeker) {}
+
+func (d data) File() io.ReadSeeker { return nil }

@@ -14,6 +14,14 @@ import (
 	"unsafe"
 )
 
+type ConvMode int
+
+const (
+	ConvDefault = iota
+	ConvAccel
+	ConvBoxBlur
+)
+
 func gaussian1d(sigma float64, size int) []float32 {
 	kernel := make([]float32, 2*size+1)
 	for x := -size; x <= size; x++ {
@@ -41,18 +49,23 @@ type Convolution interface {
 }
 
 // Convolution implemented in go assuming 1d seperable kernel
+func NewConv(kernel []float32, ksize, width, height int) Convolution {
+	return &conv{w: width, h: height, ksize: ksize, kdata: kernel}
+}
+
 type conv struct {
 	w, h  int
 	ksize int
 	kdata []float32
 }
 
-func NewConv(kernel []float32, ksize, width, height int) Convolution {
-	return &conv{w: width, h: height, ksize: ksize, kdata: kernel}
+func (c *conv) Apply(in, out []float32) {
+	copy(out, in)
+	c.convH(out, in)
+	c.convV(in, out)
 }
 
-func (c *conv) Apply(in, out []float32) {
-	temp := make([]float32, c.w*c.h)
+func (c *conv) convH(in, out []float32) {
 	for x := 0; x < c.w; x++ {
 		start := max(x-c.ksize, 0)
 		end := min(x+c.ksize, c.w-1)
@@ -65,9 +78,12 @@ func (c *conv) Apply(in, out []float32) {
 			for ix := start; ix <= end; ix++ {
 				val += in[ix+y*c.w] * c.kdata[x-ix+c.ksize]
 			}
-			temp[x+y*c.w] = val / sum
+			out[x+y*c.w] = val / sum
 		}
 	}
+}
+
+func (c *conv) convV(in, out []float32) {
 	for y := 0; y < c.h; y++ {
 		start := max(y-c.ksize, 0)
 		end := min(y+c.ksize, c.h-1)
@@ -78,19 +94,120 @@ func (c *conv) Apply(in, out []float32) {
 		for x := 0; x < c.w; x++ {
 			var val float32
 			for iy := start; iy <= end; iy++ {
-				val += temp[x+iy*c.w] * c.kdata[y-iy+c.ksize]
+				val += in[x+iy*c.w] * c.kdata[y-iy+c.ksize]
 			}
 			out[x+y*c.w] = val / sum
 		}
 	}
 }
 
-// Accelerated convolution using Intel MKL libraries
-type mklConv struct {
-	task  C.VSLConvTaskPtr
-	kdata []float32
+// Gaussian convolution using box blur
+func NewConvBox(sigma float64, width, height int) Convolution {
+	return &boxConv{w: width, h: height, boxes: boxSize(sigma, 3)}
 }
 
+func boxSize(sigma float64, n int) []int {
+	wIdeal := math.Sqrt((12 * sigma * sigma / float64(n)) + 1)
+	wl := int(wIdeal)
+	if wl%2 == 0 {
+		wl--
+	}
+	wu := wl + 2
+	mIdeal := (12*sigma*sigma - float64(n*wl*wl-4*n*wl-3*n)) / float64(-4*wl-4)
+	m := int(mIdeal + 0.5)
+	sizes := make([]int, n)
+	for i := range sizes {
+		if i < m {
+			sizes[i] = wl
+		} else {
+			sizes[i] = wu
+		}
+	}
+	return sizes
+}
+
+type boxConv struct {
+	w, h  int
+	boxes []int
+}
+
+func (c *boxConv) Apply(in, out []float32) {
+	for _, size := range c.boxes {
+		copy(out, in)
+		boxBlurH(out, in, c.w, c.h, (size-1)/2)
+		boxBlurV(in, out, c.w, c.h, (size-1)/2)
+	}
+}
+
+func boxBlurH(in, out []float32, w, h, r int) {
+	iarr := 1 / float32(r+r+1)
+	for i := 0; i < h; i++ {
+		ti := i * w
+		li := ti
+		ri := ti + r
+		fv := in[ti]
+		lv := in[ti+w-1]
+		val := float32(r+1) * fv
+		for j := 0; j < r; j++ {
+			val += in[ti+j]
+		}
+		for j := 0; j <= r; j++ {
+			val += in[ri] - fv
+			out[ti] = val * iarr
+			ri++
+			ti++
+		}
+		for j := r + 1; j < w-r; j++ {
+			val += in[ri] - in[li]
+			out[ti] = val * iarr
+			ri++
+			li++
+			ti++
+		}
+		for j := w - r; j < w; j++ {
+			val += lv - in[li]
+			out[ti] = val * iarr
+			li++
+			ti++
+		}
+	}
+}
+
+func boxBlurV(in, out []float32, w, h, r int) {
+	iarr := 1 / float32(r+r+1)
+	for i := 0; i < w; i++ {
+		ti := i
+		li := ti
+		ri := ti + r*w
+		fv := in[ti]
+		lv := in[ti+w*(h-1)]
+		val := float32(r+1) * fv
+		for j := 0; j < r; j++ {
+			val += in[ti+j*w]
+		}
+		for j := 0; j <= r; j++ {
+			val += in[ri] - fv
+			out[ti] = val * iarr
+			ri += w
+			ti += w
+		}
+		for j := r + 1; j < h-r; j++ {
+			val += in[ri] - in[li]
+			out[ti] = val * iarr
+			ri += w
+			li += w
+			ti += w
+		}
+		for j := h - r; j < h; j++ {
+			val += lv - in[li]
+			out[ti] = val * iarr
+			li += w
+			ti += w
+		}
+	}
+}
+
+// Accelerated convolution using Intel MKL libraries
 func NewConvMkl(kernel []float32, ksize, width, height int) Convolution {
 	c := &mklConv{kdata: kernel}
 	dims := shape(width, height)
@@ -98,6 +215,11 @@ func NewConvMkl(kernel []float32, ksize, width, height int) Convolution {
 	chk(C.vslsConvNewTaskX(&c.task, C.VSL_CONV_MODE_AUTO, 2, &kdims[0], &dims[0], &dims[0], fptr(c.kdata), nil))
 	runtime.SetFinalizer(c, func(obj *mklConv) { obj.Release() })
 	return c
+}
+
+type mklConv struct {
+	task  C.VSLConvTaskPtr
+	kdata []float32
 }
 
 func (c *mklConv) Apply(in, out []float32) {

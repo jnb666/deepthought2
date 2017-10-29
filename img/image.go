@@ -5,6 +5,7 @@ import (
 	"encoding/gob"
 	"fmt"
 	"image"
+	"io"
 	"math"
 	"math/rand"
 	"runtime"
@@ -32,11 +33,12 @@ var gaussian1, gaussian2 []float32
 
 // Image data set which implements the nnet.Data interface
 type Data struct {
+	Epochs int
 	NClass int
 	Dims   []int
 	Labels []int32
 	Images []image.Image
-	trans  *Transformer
+	file   io.ReadSeeker
 }
 
 func init() {
@@ -49,8 +51,8 @@ func init() {
 // Create a new image set
 func NewData(classes int, labels []int32, images []image.Image) *Data {
 	b := images[0].Bounds()
-	dims := []int{b.Dy(), b.Dx()}
-	return &Data{NClass: classes, Dims: dims, Labels: labels, Images: images}
+	dims := []int{b.Dy(), b.Dx(), 1}
+	return &Data{Epochs: 1, NClass: classes, Dims: dims, Labels: labels, Images: images}
 }
 
 // Len function returns number of images
@@ -72,39 +74,32 @@ func (d *Data) Label(index []int, label []int32) {
 	}
 }
 
-// Input returns scaled input data in buf array, optionally applying transform if set
+// Input returns scaled input data in buf array
 func (d *Data) Input(index []int, buf []float32) {
-	w, h := d.Dims[1], d.Dims[0]
-	nfeat := w * h
-	if d.trans == nil {
-		for i, ix := range index {
-			Unpack(d.Images[ix], buf[i*nfeat:(i+1)*nfeat])
-		}
-		return
+	nfeat := d.Dims[0] * d.Dims[1]
+	for i, ix := range index {
+		Unpack(d.Images[ix], buf[i*nfeat:(i+1)*nfeat])
 	}
-	var wg sync.WaitGroup
-	queue := make(chan int, len(d.trans.rng))
-	for thread := range d.trans.rng {
-		wg.Add(1)
-		go func(thread int) {
-			for i := range queue {
-				ix := index[i]
-				d.trans.Transform(d.Images[ix], Scale+Rotate+Elastic, buf[i*nfeat:(i+1)*nfeat], thread)
-			}
-			wg.Done()
-		}(thread)
-	}
-	for i := range index {
-		queue <- i
-	}
-	close(queue)
-	wg.Wait()
 }
 
-// Setup new image transformer to apply distortion
-func (d *Data) Distort(amount float64, rng *rand.Rand, accel bool) {
-	dims := d.Shape()
-	d.trans = NewTransformer(dims[1], dims[0], amount, rng, accel)
+// Slice returns images from start to end
+func (d *Data) Slice(start, end int) *Data {
+	return &Data{
+		Epochs: d.Epochs,
+		NClass: d.NClass,
+		Dims:   d.Dims,
+		Labels: d.Labels[start:end],
+		Images: d.Images[start:end],
+	}
+}
+
+func (d *Data) SetFile(f io.ReadSeeker) { d.file = f }
+
+func (d *Data) File() io.ReadSeeker {
+	if d.Epochs > 1 {
+		return d.file
+	}
+	return nil
 }
 
 // Create a new grayscale image from data buffer
@@ -151,33 +146,60 @@ func Highlight(in image.Image, on bool) image.Image {
 
 type Transformer struct {
 	Amount float64
+	Trans  TransType
 	w, h   int
 	rng    []*rand.Rand
 	conv   Convolution
 }
 
-// Create a new transformer object, if accel is set then use Intel MKL convolution libraries
-func NewTransformer(w, h int, intensity float64, rng *rand.Rand, accel bool) *Transformer {
+// Create a new transformer object which applies a sequency of image transformations
+func NewTransformer(w, h int, mode ConvMode, rng *rand.Rand) *Transformer {
 	threads := runtime.GOMAXPROCS(0)
-	t := &Transformer{Amount: intensity, w: w, h: h, rng: make([]*rand.Rand, threads)}
+	t := &Transformer{Amount: 1, Trans: Scale + Rotate + Elastic, w: w, h: h, rng: make([]*rand.Rand, threads)}
 	for i := range t.rng {
 		t.rng[i] = rand.New(rand.NewSource(rng.Int63()))
 	}
-	if accel {
-		t.conv = NewConvMkl(gaussian2, KernelSize, w, h)
-	} else {
+	switch mode {
+	case ConvDefault:
 		t.conv = NewConv(gaussian1, KernelSize, w, h)
+	case ConvAccel:
+		t.conv = NewConvMkl(gaussian2, KernelSize, w, h)
+	case ConvBoxBlur:
+		t.conv = NewConvBox(KernelSigma, w, h)
+	default:
+		panic("invalid convolution mode")
 	}
 	return t
 }
 
+// Transform a batch of images in parallel
+func (t *Transformer) TransformBatch(index []int, src, dst []image.Image) {
+	var wg sync.WaitGroup
+	queue := make(chan int, len(t.rng))
+	for thread := range t.rng {
+		wg.Add(1)
+		go func(thread int) {
+			for i := range queue {
+				ix := index[i]
+				dst[i] = t.Transform(src[ix], thread)
+			}
+			wg.Done()
+		}(thread)
+	}
+	for i := range index {
+		queue <- i
+	}
+	close(queue)
+	wg.Wait()
+}
+
 // Generate a scaling, rotation or elastic image transformation
-func (t *Transformer) Transform(src image.Image, trans TransType, data []float32, thread int) {
+func (t *Transformer) Transform(src image.Image, thread int) image.Image {
 	rng := t.rng[thread]
 	dx := make([]float32, t.w*t.h)
 	dy := make([]float32, t.w*t.h)
 	var elX, elY float32
-	if trans&Elastic != 0 {
+	if t.Trans&Elastic != 0 {
 		ux := make([]float32, t.w*t.h)
 		uy := make([]float32, t.w*t.h)
 		for i := range ux {
@@ -190,12 +212,12 @@ func (t *Transformer) Transform(src image.Image, trans TransType, data []float32
 		elY = float32(t.Amount*ElasticScale) * float32(t.h)
 	}
 	var sx, sy float32
-	if trans&Scale != 0 {
+	if t.Trans&Scale != 0 {
 		sx = float32(t.Amount*MaxScale) * (2*rng.Float32() - 1)
 		sy = float32(t.Amount*MaxScale) * (2*rng.Float32() - 1)
 	}
 	var sina, cosa float32
-	if trans&Rotate != 0 {
+	if t.Trans&Rotate != 0 {
 		angle := t.Amount * MaxRotate * (math.Pi / 180) * (2*rng.Float64() - 1)
 		sa, ca := math.Sincos(angle)
 		sina, cosa = float32(sa), float32(ca-1)
@@ -208,18 +230,19 @@ func (t *Transformer) Transform(src image.Image, trans TransType, data []float32
 			dy[x+y*t.w] = dy[x+y*t.w]*elY + ym*(sy+cosa) + xm*sina
 		}
 	}
-	t.sample(src, dx, dy, data)
+	return t.Sample(src, dx, dy)
 }
 
 // Apply the transform to the image and interpolate the results
-func (t *Transformer) sample(in image.Image, dx, dy, data []float32) {
-	switch src := in.(type) {
+func (t *Transformer) Sample(src image.Image, dx, dy []float32) image.Image {
+	switch in := src.(type) {
 	case *image.Gray:
+		out := image.NewGray(src.Bounds())
 		pixel := func(ix, iy int) float32 {
 			if ix < 0 || ix >= t.w || iy < 0 || iy >= t.h {
 				return 0
 			}
-			return float32(src.Pix[iy*t.w+ix]) / 255
+			return float32(in.Pix[iy*t.w+ix]) / 255
 		}
 		for y := 0; y < t.h; y++ {
 			for x := 0; x < t.w; x++ {
@@ -230,10 +253,10 @@ func (t *Transformer) sample(in image.Image, dx, dy, data []float32) {
 				xf, yf := xv-float32(ix), yv-float32(iy)
 				avg0 := pixel(ix, iy)*(1-xf) + pixel(ix+1, iy)*xf
 				avg1 := pixel(ix, iy+1)*(1-xf) + pixel(ix+1, iy+1)*xf
-				data[y*t.w+x] = clampf(avg0*(1-yf) + avg1*yf)
+				out.Pix[y*t.w+x] = toInt8(avg0*(1-yf) + avg1*yf)
 			}
 		}
-
+		return out
 	default:
 		panic(fmt.Sprintf("image type %T not supported", src))
 	}
@@ -247,14 +270,4 @@ func toInt8(x float32) uint8 {
 		return 255
 	}
 	return uint8(255 * x)
-}
-
-func clampf(x float32) float32 {
-	if x <= 0 {
-		return 0
-	}
-	if x >= 1 {
-		return 1
-	}
-	return x
 }

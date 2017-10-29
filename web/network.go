@@ -57,7 +57,7 @@ func (n *Network) Init() error {
 	dev := num.NewDevice(n.Conf.UseGPU)
 	n.queue = dev.NewQueue()
 	n.rng = nnet.SetSeed(n.Conf.RandSeed)
-	n.trainData = nnet.NewDataset(n.queue.Dev(), n.Data["train"], n.Conf.TrainBatch, n.Conf.MaxSamples, n.Conf.Distort, n.rng)
+	n.trainData = nnet.NewDataset(n.queue.Dev(), n.Data["train"], n.Conf.TrainBatch, n.Conf.MaxSamples, n.Conf.FlattenInput, n.rng)
 	n.Network = nnet.New(n.queue, n.Conf.Config, n.trainData.BatchSize, n.trainData.Shape())
 	if n.DebugLevel >= 1 {
 		fmt.Println(n.Network)
@@ -106,7 +106,6 @@ func (n *Network) Train(restart bool) {
 // Network tester which evaluates the error and stores the stats
 type Tester struct {
 	Epoch   int
-	Stats   []nnet.Stats
 	Pred    map[string][]int32
 	Labels  map[string][]int32
 	trans   *img.Transformer
@@ -118,7 +117,7 @@ type Tester struct {
 
 // Create new tester instance and get initial prediction
 func NewTester(queue num.Queue, conf nnet.Config, data map[string]nnet.Data) *Tester {
-	t := &Tester{Stats: []nnet.Stats{}, Pred: map[string][]int32{}, Labels: map[string][]int32{}}
+	t := &Tester{Pred: map[string][]int32{}, Labels: map[string][]int32{}}
 	return t.Init(queue, data, conf)
 }
 
@@ -128,7 +127,7 @@ func (t *Tester) Init(queue num.Queue, data map[string]nnet.Data, conf nnet.Conf
 	t.base = nnet.NewTestBase(queue, conf, data, false, rng)
 	t.base.Predict = map[string][]int32{}
 	t.Epoch = 0
-	t.Stats = t.Stats[:0]
+	t.base.Reset()
 	for key, dset := range t.base.Data {
 		t.Labels[key] = make([]int32, dset.Samples)
 		dset.Label(seq(dset.Samples), t.Labels[key])
@@ -137,7 +136,7 @@ func (t *Tester) Init(queue num.Queue, data map[string]nnet.Data, conf nnet.Conf
 		t.base.Net.Error(dset, t.Pred[key])
 	}
 	dims := t.base.Data["train"].Shape()
-	t.trans = img.NewTransformer(dims[1], dims[0], conf.Distort, rng, accelConv)
+	t.trans = img.NewTransformer(dims[1], dims[0], img.ConvAccel, rng)
 	return t
 }
 
@@ -146,7 +145,6 @@ func (t *Tester) Test(net *nnet.Network, epoch int, loss float64, start time.Tim
 	done := t.base.Test(net, epoch, loss, start)
 	t.Lock()
 	t.Epoch = epoch
-	t.Stats = append(t.Stats, t.base.Stats)
 	for key, pred := range t.base.Predict {
 		copy(t.Pred[key], pred)
 	}

@@ -24,8 +24,7 @@ var upgrader = websocket.Upgrader{
 
 type TrainPage struct {
 	*Templates
-	Headers []string
-	net     *Network
+	net *Network
 }
 
 // Base data for handler functions to perform network training and display the stats
@@ -35,7 +34,6 @@ func NewTrainPage(t *Templates, net *Network) *TrainPage {
 	p.AddOption(Link{Name: "start", Url: "/train/start"})
 	p.AddOption(Link{Name: "stop", Url: "/train/stop"})
 	p.AddOption(Link{Name: "continue", Url: "/train/continue"})
-	p.Headers = nnet.StatsHeaders(net.Data)
 	return p
 }
 
@@ -90,26 +88,30 @@ func (p *TrainPage) Heading() template.HTML {
 	return template.HTML(s)
 }
 
+func (p *TrainPage) Headers() []string {
+	return nnet.StatsHeaders(p.net.Data)
+}
+
 func (p *TrainPage) LatestStats(n int) []nnet.Stats {
-	last := len(p.net.Stats) - 1
+	last := len(p.net.base.Stats) - 1
 	res := []nnet.Stats{}
 	for i := last; i >= 0 && i > last-n; i-- {
-		res = append(res, p.net.Stats[i])
+		res = append(res, p.net.base.Stats[i])
 	}
 	return res
 }
 
 func (p *TrainPage) RunTime() string {
-	if len(p.net.Stats) == 0 {
+	if len(p.net.base.Stats) == 0 {
 		return ""
 	}
-	elapsed := p.net.Stats[len(p.net.Stats)-1].Elapsed
+	elapsed := p.net.base.Stats[len(p.net.base.Stats)-1].Elapsed
 	return fmt.Sprintf("run time: %s", elapsed.Round(10*time.Millisecond))
 }
 
 func (p *TrainPage) LossPlot(width, height int) template.HTML {
 	plt := newPlot()
-	line := newLinePlot(p.net.Stats, 0, 1)
+	line := newLinePlot(p.net.base.Stats, 0, 1)
 	plt.Add(line)
 	plt.Legend.Add("training loss ", line)
 	return writePlot(plt, width, height)
@@ -117,8 +119,8 @@ func (p *TrainPage) LossPlot(width, height int) template.HTML {
 
 func (p *TrainPage) ErrorPlot(width, height int) template.HTML {
 	plt := newPlot()
-	for i, name := range p.Headers[1:] {
-		line := newLinePlot(p.net.Stats, i+1, 100)
+	for i, name := range p.Headers()[1:] {
+		line := newLinePlot(p.net.base.Stats, i+1, 100)
 		plt.Add(line)
 		plt.Legend.Add(name+" % ", line)
 	}

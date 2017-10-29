@@ -33,7 +33,7 @@ func New(queue num.Queue, conf Config, batchSize int, inShape []int) *Network {
 	if conf.FlattenInput {
 		n.inShape = []int{num.Prod(inShape), batchSize}
 	} else {
-		n.inShape = append(inShape, []int{1, batchSize}...)
+		n.inShape = append(inShape, batchSize)
 	}
 	shape := n.inShape
 	wsize := 0
