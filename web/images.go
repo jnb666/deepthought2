@@ -3,8 +3,8 @@ package web
 import (
 	"fmt"
 	"github.com/gorilla/mux"
+	"github.com/gorilla/sessions"
 	"github.com/jnb666/deepthought2/img"
-	"github.com/jnb666/deepthought2/nnet"
 	"image/png"
 	"math/rand"
 	"net/http"
@@ -30,22 +30,19 @@ type ImagePage struct {
 // Base data for handler functions to view input image dataset
 func NewImagePage(t *Templates, net *Network, scale float64, rows, cols int) *ImagePage {
 	p := &ImagePage{net: net, Dset: "train"}
-	p.Templates = t.Select("images")
-	p.AddOption(Link{Name: "all"})
-	p.AddOption(Link{Name: "errors"})
-	p.AddOption(Link{Name: "prev"})
-	p.AddOption(Link{Name: "next"})
-	p.AddOption(Link{Name: "distort"})
-	for _, key := range nnet.DataTypes {
-		if _, ok := net.Data[key]; ok {
-			p.AddOption(Link{Name: key, Url: "/images/all/" + key + "/1", Selected: key == p.Dset})
-		}
-	}
+	p.Templates = t.Select("/images/train")
+	p.AddOption(Link{Name: "all", Url: "./all", Selected: true})
+	p.AddOption(Link{Name: "errors", Url: "./errors"})
+	p.AddOption(Link{Name: "prev", Url: "./prev"})
+	p.AddOption(Link{Name: "next", Url: "./next"})
+	p.AddOption(Link{Name: "distort", Url: "./distort"})
 	dims := net.Data["train"].Shape()
-	p.Width = int(float64(dims[1]) * scale)
-	p.Height = int(float64(dims[0]) * scale)
-	p.Rows = seq(rows)
-	p.Cols = seq(cols)
+	if len(dims) >= 2 {
+		p.Width = int(float64(dims[1]) * scale)
+		p.Height = int(float64(dims[0]) * scale)
+		p.Rows = seq(rows)
+		p.Cols = seq(cols)
+	}
 	return p
 }
 
@@ -54,37 +51,109 @@ func (p *ImagePage) Base() func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p.net.Lock()
 		defer p.net.Unlock()
-		vars := mux.Vars(r)
-		inc := vars["inc"]
-		p.errors = (inc == "errors")
-		p.Dset = vars["dset"]
-		p.page, _ = strconv.Atoi(vars["page"])
-		p.Distort = r.FormValue("d")
-		//log.Printf("imageBase: %s errors=%v dset=%s page=%d", r.URL.Path, p.errors, p.Dset, p.page)
-		if _, ok := p.net.Data[p.Dset]; !ok {
-			http.NotFound(w, r)
+		session, err := p.getSession(r)
+		if err != nil {
+			logError(w, err)
 			return
 		}
-		p.setPageCount()
-		p.Heading = fmt.Sprintf("page %d of %d", p.page, p.pages)
-		p.Options[0].Url = "/images/all/" + p.Dset + "/1"
-		p.Options[1].Url = "/images/errors/" + p.Dset + "/1"
-		p.Options[2].Url = fmt.Sprintf("/images/%s/%s/%d", inc, p.Dset, mod(p.page-1, 1, p.pages))
-		p.Options[3].Url = fmt.Sprintf("/images/%s/%s/%d", inc, p.Dset, mod(p.page+1, 1, p.pages))
-		p.Options[4].Url = fmt.Sprintf("/images/%s/%s/%d", inc, p.Dset, p.page)
-		if p.Distort == "" {
-			p.Options[4].Url += "?d=" + strconv.Itoa(rand.Intn(999999))
-		} else {
-			p.Options[4].Selected = true
+		vars := mux.Vars(r)
+		p.Dset = vars["dset"]
+		//log.Printf("imageBase: %s errors=%v dset=%s page=%d distort=%s", r.URL.Path, p.errors, p.Dset, p.page, p.Distort)
+		p.Select("/images/" + p.Dset)
+		sel := []string{"all"}
+		if p.errors {
+			sel = []string{"errors"}
 		}
-		p.SelectOption(inc, p.Dset)
-		if err := p.ExecuteTemplate(w, "images", p); err != nil {
+		if p.Distort != "" {
+			sel = append(sel, "distort")
+		}
+		p.SelectOptions(sel)
+		p.setPageCount()
+		if p.page > p.pages || p.page < 1 {
+			p.page = 1
+		}
+		p.Heading = fmt.Sprintf("page %d of %d", p.page, p.pages)
+		template := "images"
+		if _, ok := p.net.Data[p.Dset]; !ok {
+			template = "blank"
+		}
+		if err := p.saveSession(r, w, session); err != nil {
+			logError(w, err)
+			return
+		}
+		if err := p.ExecuteTemplate(w, template, p); err != nil {
 			logError(w, err)
 		}
 	}
 }
 
+// Set option from top menu
+func (p *ImagePage) Setopt() func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p.net.Lock()
+		defer p.net.Unlock()
+		session, err := p.getSession(r)
+		if err != nil {
+			logError(w, err)
+			return
+		}
+		vars := mux.Vars(r)
+		p.Dset = vars["dset"]
+		p.setPageCount()
+		switch vars["opt"] {
+		case "all":
+			p.errors = false
+		case "errors":
+			p.errors = true
+		case "prev":
+			p.page = mod(p.page-1, 1, p.pages)
+		case "next":
+			p.page = mod(p.page+1, 1, p.pages)
+		case "distort":
+			if p.Distort == "" {
+				p.Distort = strconv.Itoa(rand.Intn(999999))
+			} else {
+				p.Distort = ""
+			}
+		}
+		if err := p.saveSession(r, w, session); err != nil {
+			logError(w, err)
+			return
+		}
+		http.Redirect(w, r, "/images/"+p.Dset+"/", http.StatusFound)
+	}
+}
+
+func (p *ImagePage) getSession(r *http.Request) (*sessions.Session, error) {
+	s, err := p.store.Get(r, "deepthought")
+	if err != nil {
+		return nil, err
+	}
+	var ok bool
+	if p.page, ok = s.Values["page"].(int); !ok {
+		s.Values["page"] = 1
+	}
+	if p.errors, ok = s.Values["errors"].(bool); !ok {
+		s.Values["errors"] = false
+	}
+	if p.Distort = s.Values["distort"].(string); !ok {
+		s.Values["distort"] = ""
+	}
+	return s, nil
+}
+
+func (p *ImagePage) saveSession(r *http.Request, w http.ResponseWriter, s *sessions.Session) error {
+	s.Values["page"] = p.page
+	s.Values["errors"] = p.errors
+	s.Values["distort"] = p.Distort
+	return s.Save(r, w)
+}
+
 func (p *ImagePage) setPageCount() {
+	if _, ok := p.net.Data[p.Dset]; !ok {
+		p.pages = 1
+		return
+	}
 	if p.errors {
 		p.nimg = p.errorImageCount(-1)
 	} else {

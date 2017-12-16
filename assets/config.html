@@ -4,9 +4,8 @@
 {{ template "header" . -}}
 <body>
 <form name="loadConfig" id="loadConfig" action="/config/load"></form>
-<div class="root-container">
-  {{ template "menu" . -}}
-  <div class="body-container pure-g">
+{{ template "menu" . -}}
+  <div class="pure-g">
     <div class="pure-u-1-2">
       <div class="l-box">
         <form class="pure-form pure-form-aligned" name="xform" action="/config/save" method="post">
@@ -36,8 +35,9 @@
         </tbody>
         </table>
       </div>
-    </div>  
+    </div>
   </div>
+</div>
 </div>
 </body>
 </html>

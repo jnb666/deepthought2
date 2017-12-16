@@ -35,7 +35,7 @@ type Layer struct {
 // Base data for handler functions to view and update the network config
 func NewConfigPage(t *Templates, conf *Config) *ConfigPage {
 	p := &ConfigPage{conf: conf}
-	p.Templates = t.Select("config")
+	p.Templates = t.Select("/config")
 	p.AddOption(Link{Name: "save", Url: "/config/save", Submit: true})
 	p.AddOption(Link{Name: "reset", Url: "/config/reset"})
 	p.Fields = getFields(&conf.Config)

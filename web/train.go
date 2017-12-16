@@ -30,7 +30,7 @@ type TrainPage struct {
 // Base data for handler functions to perform network training and display the stats
 func NewTrainPage(t *Templates, net *Network) *TrainPage {
 	p := &TrainPage{net: net}
-	p.Templates = t.Select("train")
+	p.Templates = t.Select("/train")
 	p.AddOption(Link{Name: "start", Url: "/train/start"})
 	p.AddOption(Link{Name: "stop", Url: "/train/stop"})
 	p.AddOption(Link{Name: "continue", Url: "/train/continue"})
@@ -51,11 +51,14 @@ func (p *TrainPage) Base() func(w http.ResponseWriter, r *http.Request) {
 			} else {
 				p.net.Train(cmd == "start")
 			}
+			http.Redirect(w, r, "/train/stats", http.StatusFound)
 		case "stop":
 			p.net.running = false
-		}
-		if err := p.ExecuteTemplate(w, "train", p); err != nil {
-			logError(w, err)
+			http.Redirect(w, r, "/train/stats", http.StatusFound)
+		default:
+			if err := p.ExecuteTemplate(w, "train", p); err != nil {
+				logError(w, err)
+			}
 		}
 	}
 }

@@ -34,24 +34,29 @@ func main() {
 
 	t, err := web.NewTemplates()
 	nnet.CheckErr(err)
-
-	trainPage := web.NewTrainPage(t.Clone(), net)
-	imagePage := web.NewImagePage(t.Clone(), net, scale, rows, cols)
-	configPage := web.NewConfigPage(t.Clone(), conf)
+	t.AddMenuItem(web.Link{Url: "/train", Name: "train net"})
+	for _, key := range nnet.DataTypes {
+		t.AddMenuItem(web.Link{Url: "/images/" + key + "/", Name: key + " images"})
+	}
+	t.AddMenuItem(web.Link{Url: "/config", Name: "edit config"})
 
 	r := mux.NewRouter()
 	r.Handle("/", http.RedirectHandler("/train/stats", http.StatusFound))
 	r.PathPrefix("/static/").Handler(http.FileServer(http.Dir(web.AssetDir)))
 
+	trainPage := web.NewTrainPage(t.Clone(), net)
 	r.Handle("/train", http.RedirectHandler("/train/stats", http.StatusFound))
-	r.HandleFunc("/train/{cmd:(?:stats|start|stop|continue)}", trainPage.Base())
+	r.HandleFunc("/train/{cmd}", trainPage.Base())
 	r.HandleFunc("/stats", trainPage.Stats())
 	r.HandleFunc("/ws", trainPage.Websocket())
 
-	r.Handle("/images", http.RedirectHandler("/images/all/train/1", http.StatusFound))
-	r.HandleFunc("/images/{inc:(?:all|errors)}/{dset}/{page:[0-9]+}", imagePage.Base())
+	imagePage := web.NewImagePage(t.Clone(), net, scale, rows, cols)
+	r.Handle("/images", http.RedirectHandler("/images/train/", http.StatusFound))
+	r.HandleFunc("/images/{dset}/", imagePage.Base())
+	r.HandleFunc("/images/{dset}/{opt}", imagePage.Setopt())
 	r.HandleFunc("/img/{dset}/{id:[0-9]+}", imagePage.Image())
 
+	configPage := web.NewConfigPage(t.Clone(), conf)
 	r.HandleFunc("/config", configPage.Base())
 	r.HandleFunc("/config/load", configPage.Load())
 	r.HandleFunc("/config/save", configPage.Save()).Methods("POST")

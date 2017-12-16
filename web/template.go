@@ -2,19 +2,24 @@ package web
 
 import (
 	"fmt"
+	"github.com/gorilla/sessions"
 	"html/template"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 )
 
 var AssetDir = os.Getenv("GOPATH") + "/src/github.com/jnb666/deepthought2/assets"
+
+var authKey = []byte("uekahcahziem2Tha")
 
 // Template and main menu definition
 type Templates struct {
 	*template.Template
 	Menu    []Link
 	Options []Link
+	store   sessions.Store
 }
 
 type Link struct {
@@ -27,15 +32,13 @@ type Link struct {
 // Load and parse templates and initialise main menu
 func NewTemplates() (*Templates, error) {
 	var err error
-	t := &Templates{Options: []Link{}}
+	t := &Templates{Menu: []Link{}, Options: []Link{}}
 	t.Template, err = template.ParseGlob(AssetDir + "/*.html")
 	if err != nil {
 		return nil, err
 	}
-	for _, name := range []string{"train", "images", "config"} {
-		t.Menu = append(t.Menu, Link{Name: name, Url: "/" + name})
-	}
-	return t, nil
+	t.store = sessions.NewCookieStore(authKey)
+	return t, err
 }
 
 func (t *Templates) Clone() *Templates {
@@ -43,13 +46,19 @@ func (t *Templates) Clone() *Templates {
 		Template: t.Template,
 		Menu:     append([]Link{}, t.Menu...),
 		Options:  append([]Link{}, t.Options...),
+		store:    t.store,
 	}
 }
 
-func (t *Templates) Select(name string) *Templates {
+func (t *Templates) Select(url string) *Templates {
 	for i, key := range t.Menu {
-		t.Menu[i].Selected = (key.Name == name)
+		t.Menu[i].Selected = strings.HasPrefix(key.Url, url)
 	}
+	return t
+}
+
+func (t *Templates) AddMenuItem(l Link) *Templates {
+	t.Menu = append(t.Menu, l)
 	return t
 }
 
@@ -58,7 +67,7 @@ func (t *Templates) AddOption(l Link) *Templates {
 	return t
 }
 
-func (t *Templates) SelectOption(names ...string) *Templates {
+func (t *Templates) SelectOptions(names []string) *Templates {
 	for i, key := range t.Options {
 		t.Options[i].Selected = false
 		for _, name := range names {

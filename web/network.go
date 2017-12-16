@@ -136,7 +136,9 @@ func (t *Tester) Init(queue num.Queue, data map[string]nnet.Data, conf nnet.Conf
 		t.base.Net.Error(dset, t.Pred[key])
 	}
 	dims := t.base.Data["train"].Shape()
-	t.trans = img.NewTransformer(dims[1], dims[0], img.ConvAccel, rng)
+	if len(dims) >= 2 {
+		t.trans = img.NewTransformer(dims[1], dims[0], img.ConvAccel, rng)
+	}
 	return t
 }
 
