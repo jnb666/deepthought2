@@ -1,0 +1,39 @@
+{{ define "grid" -}}
+<!DOCTYPE html>
+<html lang="en">
+{{ template "header" . -}}
+<body>
+<div class="pure-g">
+  <div class="pure-u-1">
+    <div class="l-box">
+      <table border="1" class="h-center">
+      {{ $p := . -}}
+      {{ range $row := $p.Rows -}}
+        <tr>
+        {{ range $col := $p.Cols -}}
+          {{ $i := $p.Index $row $col -}}
+          <td>
+            {{ if $i -}}
+            <div class="digit-image">
+              {{ if $p.Distort -}}
+              <image src="/img/{{$p.Dset}}/{{$i}}?d={{$p.Distort}}" width="{{$p.Width}}" height="{{$p.Height}}" alt="{{$i}}" title="{{$i}}"></image>
+              {{ else -}}
+              <image src="/img/{{$p.Dset}}/{{$i}}" width="{{$p.Width}}" height="{{$p.Height}}" alt="{{$i}}" title="{{$i}}"></image>
+              {{ end -}}
+              <span class="digit-label-left">{{$p.Label $i}}</span>
+              {{ $pred := $p.Predict $i -}}
+              {{if ge $pred 0}}<span class="digit-label-right">{{$pred}}</span>{{end}}
+            </div>
+            {{ end -}}
+          </td>
+        {{ end -}}
+        </tr>
+      {{ end -}}
+      </table>
+      <center><h3>{{.Total}} images - page {{.Page}} of {{.Pages}}</h3></center>
+    </div>
+  </div>
+</div>
+</body>
+</html>
+{{ end -}}

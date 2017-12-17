@@ -24,6 +24,6 @@ func main() {
 		nnet.LogRegression{},
 	)
 	fmt.Println(conf)
-	err := conf.SaveDefault("mnist_mlp")
+	err := conf.Save("mnist_mlp.conf")
 	nnet.CheckErr(err)
 }

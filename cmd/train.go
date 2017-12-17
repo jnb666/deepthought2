@@ -26,7 +26,7 @@ func main() {
 	}
 	model := os.Args[len(os.Args)-1]
 	fmt.Println("load model:", model)
-	conf, err := nnet.LoadConfig(model + ".net")
+	conf, err := nnet.LoadConfig(model + ".conf")
 	nnet.CheckErr(err)
 
 	// override config settings from command line

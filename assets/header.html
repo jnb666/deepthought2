@@ -8,13 +8,14 @@
 <link rel="stylesheet" type="text/css" href="/static/pure-min.css">
 <link rel="stylesheet" type="text/css" href="/static/custom.css">
 
+{{ if .Toplevel -}}
 <script type="text/javascript">
 window.onload = function () {
     var conn;
     if (window["WebSocket"]) {
         conn = new WebSocket("ws://" + document.location.host + "/ws"); 
         conn.onmessage = function (e) {
-            var iframe = document.getElementById('statsFrame');
+            var iframe = document.getElementById('contentFrame');
             if (iframe) {
                 iframe.contentWindow.location.reload(true);
             }
@@ -26,5 +27,6 @@ window.onload = function () {
     }
 };
 </script>
+{{ end -}}
 </head>
 {{ end -}}

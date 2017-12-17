@@ -14,6 +14,7 @@ func main() {
 		TrainBatch:    10,
 		TestBatch:     100,
 		Shuffle:       true,
+		UseGPU:        true,
 	}.AddLayers(
 		nnet.Conv{Nfeats: 20, Size: 5, Pad: 2},
 		nnet.Activation{Atype: "relu"},
@@ -25,6 +26,6 @@ func main() {
 		nnet.LogRegression{},
 	)
 	fmt.Println(conf)
-	err := conf.SaveDefault("mnist_cnn")
+	err := conf.Save("mnist_cnn.conf")
 	nnet.CheckErr(err)
 }

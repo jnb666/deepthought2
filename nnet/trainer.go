@@ -62,26 +62,23 @@ type Tester interface {
 type TestBase struct {
 	Net     *Network
 	Data    map[string]*Dataset
-	Predict map[string][]int32
+	Pred    map[string][]int32
 	Stats   []Stats
 	Headers []string
 	Samples int
 }
 
 // Create a new base class which implements the Tester interface.
-// If limitSamples flag is set then total no. of samples will be entries in smallest dataset.
-func NewTestBase(queue num.Queue, conf Config, data map[string]Data, limitSamples bool, rng *rand.Rand) *TestBase {
-	t := &TestBase{
-		Data:    make(map[string]*Dataset),
-		Stats:   []Stats{},
-		Headers: StatsHeaders(data),
-		Samples: min(conf.MaxSamples, data["train"].Len()),
-	}
-	if limitSamples {
-		for _, d := range data {
-			t.Samples = min(t.Samples, d.Len())
-		}
-	}
+func NewTestBase() *TestBase {
+	return &TestBase{Stats: []Stats{}}
+}
+
+// Initialise the test dataset, network and other configuration.
+func (t *TestBase) Init(queue num.Queue, conf Config, data map[string]Data, rng *rand.Rand) *TestBase {
+	t.Data = make(map[string]*Dataset)
+	t.Headers = StatsHeaders(data)
+	t.Samples = min(conf.MaxSamples, data["train"].Len())
+	t.Pred = nil
 	if conf.DebugLevel >= 1 {
 		fmt.Printf("init tester: samples=%d batch size=%d\n", t.Samples, conf.TestBatch)
 	}
@@ -95,12 +92,21 @@ func NewTestBase(queue num.Queue, conf Config, data map[string]Data, limitSample
 	return t
 }
 
+// Generate the predicted results when test is next run.
+func (t *TestBase) Predict() *TestBase {
+	t.Pred = make(map[string][]int32)
+	for key, dset := range t.Data {
+		t.Pred[key] = make([]int32, dset.Samples)
+	}
+	return t
+}
+
+// Reset stats prior to new run
 func (t *TestBase) Reset() {
 	t.Stats = t.Stats[:0]
 }
 
 // Test performance of the network, called from the Train function on completion of each epoch.
-// If Predict map is not nil then save predicted results.
 func (t *TestBase) Test(net *Network, epoch int, loss float64, start time.Time) bool {
 	net.CopyTo(t.Net)
 	if net.DebugLevel >= 1 {
@@ -114,7 +120,7 @@ func (t *TestBase) Test(net *Network, epoch int, loss float64, start time.Time) 
 			}
 			var pred []int32
 			if t.Predict != nil {
-				pred = t.Predict[key]
+				pred = t.Pred[key]
 			}
 			errVal := t.Net.Error(dset, pred)
 			s.Values = append(s.Values, errVal)
@@ -148,7 +154,7 @@ type testLogger struct {
 
 // Create a new tester which logs stats to stdout.
 func NewTestLogger(queue num.Queue, conf Config, data map[string]Data, rng *rand.Rand) Tester {
-	return testLogger{TestBase: NewTestBase(queue, conf, data, true, rng)}
+	return testLogger{TestBase: NewTestBase().Init(queue, conf, data, rng)}
 }
 
 func (t testLogger) Test(net *Network, epoch int, loss float64, start time.Time) bool {

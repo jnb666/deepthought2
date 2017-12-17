@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"github.com/gorilla/mux"
 	"github.com/jnb666/deepthought2/nnet"
@@ -24,12 +23,7 @@ func main() {
 		os.Exit(1)
 	}
 	model := os.Args[len(os.Args)-1]
-	conf, err := web.NewConfig(model)
-	nnet.CheckErr(err)
-	flag.BoolVar(&conf.UseGPU, "gpu", conf.UseGPU, "use Cuda GPU acceleration")
-	flag.Parse()
-
-	net, err := web.NewNetwork(conf)
+	net, err := web.NewNetwork(model)
 	nnet.CheckErr(err)
 
 	t, err := web.NewTemplates()
@@ -45,22 +39,25 @@ func main() {
 	r.PathPrefix("/static/").Handler(http.FileServer(http.Dir(web.AssetDir)))
 
 	trainPage := web.NewTrainPage(t.Clone(), net)
-	r.Handle("/train", http.RedirectHandler("/train/stats", http.StatusFound))
-	r.HandleFunc("/train/{cmd}", trainPage.Base())
+	r.HandleFunc("/train", trainPage.Base())
+	r.HandleFunc("/train/{cmd}", trainPage.Command())
 	r.HandleFunc("/stats", trainPage.Stats())
 	r.HandleFunc("/ws", trainPage.Websocket())
 
 	imagePage := web.NewImagePage(t.Clone(), net, scale, rows, cols)
-	r.Handle("/images", http.RedirectHandler("/images/train/", http.StatusFound))
 	r.HandleFunc("/images/{dset}/", imagePage.Base())
 	r.HandleFunc("/images/{dset}/{opt}", imagePage.Setopt())
+	r.HandleFunc("/grid/{dset}", imagePage.Grid())
 	r.HandleFunc("/img/{dset}/{id:[0-9]+}", imagePage.Image())
 
-	configPage := web.NewConfigPage(t.Clone(), conf)
+	configPage := web.NewConfigPage(t.Clone(), net)
 	r.HandleFunc("/config", configPage.Base())
 	r.HandleFunc("/config/load", configPage.Load())
 	r.HandleFunc("/config/save", configPage.Save()).Methods("POST")
 	r.HandleFunc("/config/reset", configPage.Reset())
+
+	r.Handle("/favicon.ico", http.NotFoundHandler())
+	r.NotFoundHandler = t.ErrorHandler(http.StatusNotFound, web.ErrNotFound)
 
 	fmt.Println("serving web page at http://localhost:8080")
 	http.ListenAndServe(":8080", r)

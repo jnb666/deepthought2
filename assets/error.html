@@ -1,12 +1,10 @@
-{{ define "images" -}}
+{{ define "error" -}}
 <!DOCTYPE html>
 <html lang="en">
 {{ template "header" . -}}
 <body>
 {{ template "menu" . -}}
-  <div class="body-container">
-    <iframe id="contentFrame" src="/grid/{{.Dset}}"></iframe>
-  </div>
+<div class="l-box">Error: {{ .Error -}}</div>
 </div>
 </div>
 </body>

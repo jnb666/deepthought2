@@ -37,11 +37,21 @@ func NewTrainPage(t *Templates, net *Network) *TrainPage {
 	return p
 }
 
-// Handler function for the train template
+// Handler function for the train base template
 func (p *TrainPage) Base() func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
+		p.net.Lock()
+		defer p.net.Unlock()
+		p.Toplevel = true
+		p.Heading = p.net.heading()
+		p.Exec(w, "train", p)
+	}
+}
+
+// Handler function for the train command options
+func (p *TrainPage) Command() func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
 		cmd := mux.Vars(r)["cmd"]
-		//log.Printf("trainBase: %s cmd=%s", r.URL.Path, cmd)
 		p.net.Lock()
 		defer p.net.Unlock()
 		switch cmd {
@@ -49,17 +59,16 @@ func (p *TrainPage) Base() func(w http.ResponseWriter, r *http.Request) {
 			if p.net.running {
 				log.Println("skip start - already running")
 			} else {
-				p.net.Train(cmd == "start")
+				err := p.net.Train(cmd == "start")
+				if err != nil {
+					p.logError(w, http.StatusInternalServerError, err)
+					return
+				}
 			}
-			http.Redirect(w, r, "/train/stats", http.StatusFound)
 		case "stop":
-			p.net.running = false
-			http.Redirect(w, r, "/train/stats", http.StatusFound)
-		default:
-			if err := p.ExecuteTemplate(w, "train", p); err != nil {
-				logError(w, err)
-			}
+			p.net.stop = true
 		}
+		http.Redirect(w, r, "/train", http.StatusFound)
 	}
 }
 
@@ -68,10 +77,8 @@ func (p *TrainPage) Stats() func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p.net.Lock()
 		defer p.net.Unlock()
-		//log.Println("trainStats:", r.URL.Path)
-		if err := p.ExecuteTemplate(w, "stats", p); err != nil {
-			logError(w, err)
-		}
+		p.Toplevel = false
+		p.Exec(w, "stats", p)
 	}
 }
 
@@ -81,14 +88,9 @@ func (p *TrainPage) Websocket() func(w http.ResponseWriter, r *http.Request) {
 		var err error
 		p.net.conn, err = upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			logError(w, err)
+			log.Println("websocket connection error:", err)
 		}
 	}
-}
-
-func (p *TrainPage) Heading() template.HTML {
-	s := fmt.Sprintf(`%s: epoch <span id="epoch">%d</span> of %d`, p.net.Conf.Model, p.net.Epoch, p.net.MaxEpoch)
-	return template.HTML(s)
 }
 
 func (p *TrainPage) Headers() []string {

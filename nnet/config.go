@@ -55,32 +55,18 @@ func (c Config) AddLayers(layers ...ConfigLayer) Config {
 	return c
 }
 
-// Save default network definition and overwites current config
-func (c Config) SaveDefault(name string) error {
-	err := c.Save(name + ".default")
-	if err != nil {
-		return err
-	}
-	err = c.Save(name + ".net")
-	return err
-}
-
 // Save config to JSON file under DataDir
 func (c Config) Save(name string) error {
-	filePath := path.Join(DataDir, "."+name)
+	filePath := path.Join(DataDir, name)
 	f, err := os.Create(filePath)
 	if err != nil {
 		return err
 	}
+	defer f.Close()
 	fmt.Println("saving network config to", name)
 	enc := json.NewEncoder(f)
 	enc.SetIndent("", "  ")
-	if err = enc.Encode(c); err != nil {
-		f.Close()
-		return err
-	}
-	f.Close()
-	return os.Rename(filePath, path.Join(DataDir, name))
+	return enc.Encode(c)
 }
 
 func (c Config) Fields() []string {

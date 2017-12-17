@@ -27,6 +27,6 @@ func main() {
 	)
 	fmt.Println(conf)
 
-	err = conf.SaveDefault("xor")
+	err = conf.Save("xor.conf")
 	nnet.CheckErr(err)
 }

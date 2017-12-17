@@ -8,15 +8,13 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"sync"
 )
 
 type ConfigPage struct {
 	*Templates
 	Fields []Field
 	Layers []Layer
-	conf   *Config
-	sync.Mutex
+	net    *Network
 }
 
 type Field struct {
@@ -33,45 +31,55 @@ type Layer struct {
 }
 
 // Base data for handler functions to view and update the network config
-func NewConfigPage(t *Templates, conf *Config) *ConfigPage {
-	p := &ConfigPage{conf: conf}
+func NewConfigPage(t *Templates, net *Network) *ConfigPage {
+	p := &ConfigPage{net: net}
 	p.Templates = t.Select("/config")
 	p.AddOption(Link{Name: "save", Url: "/config/save", Submit: true})
 	p.AddOption(Link{Name: "reset", Url: "/config/reset"})
-	p.Fields = getFields(&conf.Config)
-	p.Layers = getLayers(&conf.Config)
+	p.init(nil)
 	return p
+}
+
+func (p *ConfigPage) init(data *NetworkData) error {
+	if data != nil {
+		p.net.NetworkData = data
+		if err := p.net.Init(); err != nil {
+			return err
+		}
+		if err := p.net.Import(); err != nil {
+			return err
+		}
+	}
+	p.Fields = getFields(&p.net.Conf)
+	p.Layers = getLayers(&p.net.Conf)
+	return nil
 }
 
 // Handler function for the config template
 func (p *ConfigPage) Base() func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		p.Lock()
-		defer p.Unlock()
-		//log.Println("configBase:", r.URL.Path, r.Method)
-		if err := p.ExecuteTemplate(w, "config", p); err != nil {
-			logError(w, err)
-		}
+		p.net.Lock()
+		defer p.net.Unlock()
+		p.Heading = p.getHeading()
+		p.Exec(w, "config", p)
 	}
 }
 
 // Handler function for the action to load a new model
 func (p *ConfigPage) Load() func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		p.Lock()
-		defer p.Unlock()
-		//log.Println("configLoad:", r.URL.Path, r.Method)
+		p.net.Lock()
+		defer p.net.Unlock()
 		model := r.FormValue("model")
-		log.Println("load model:", model)
-		conf, err := nnet.LoadConfig(model + ".net")
+		data, err := LoadNetwork(model, false)
 		if err != nil {
-			logError(w, err)
+			p.logError(w, http.StatusBadRequest, err)
 			return
 		}
-		p.conf.Config = conf
-		p.conf.Model = model
-		p.Fields = getFields(&p.conf.Config)
-		p.Layers = getLayers(&p.conf.Config)
+		if err = p.init(data); err != nil {
+			p.logError(w, http.StatusInternalServerError, err)
+			return
+		}
 		http.Redirect(w, r, "/config", http.StatusFound)
 	}
 }
@@ -79,12 +87,11 @@ func (p *ConfigPage) Load() func(w http.ResponseWriter, r *http.Request) {
 // Handler function for the config form save action
 func (p *ConfigPage) Save() func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		p.Lock()
-		defer p.Unlock()
-		//log.Println("configSave:", r.URL.Path, r.Method)
+		p.net.Lock()
+		defer p.net.Unlock()
 		r.ParseForm()
 		haveErrors := false
-		conf := p.conf.Config
+		conf := p.net.Conf
 		for i, fld := range p.Fields {
 			val := r.Form.Get(fld.Name)
 			var err error
@@ -102,11 +109,12 @@ func (p *ConfigPage) Save() func(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !haveErrors {
-			if err := conf.Save(p.conf.Model + ".net"); err != nil {
-				logError(w, err)
+			p.net.Conf = conf
+			p.net.Export()
+			if err := SaveNetwork(p.net.NetworkData); err != nil {
+				p.logError(w, http.StatusBadRequest, err)
 				return
 			}
-			p.conf.Config = conf
 		}
 		http.Redirect(w, r, "/config", http.StatusFound)
 	}
@@ -115,35 +123,37 @@ func (p *ConfigPage) Save() func(w http.ResponseWriter, r *http.Request) {
 // Handler function for the config form save action
 func (p *ConfigPage) Reset() func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		p.Lock()
-		defer p.Unlock()
-		//log.Println("configReset:", r.URL.Path, r.Method)
-		conf, err := nnet.LoadConfig(p.conf.Model + ".default")
+		p.net.Lock()
+		defer p.net.Unlock()
+		data, err := LoadNetwork(p.net.Model, true)
 		if err != nil {
-			logError(w, err)
+			p.logError(w, http.StatusBadRequest, err)
 			return
 		}
-		if err = conf.Save(p.conf.Model + ".net"); err != nil {
-			logError(w, err)
+		if err = p.init(data); err != nil {
+			p.logError(w, http.StatusInternalServerError, err)
 			return
 		}
-		p.conf.Config = conf
-		p.Fields = getFields(&conf)
+		if err := SaveNetwork(data); err != nil {
+			p.logError(w, http.StatusBadRequest, err)
+			return
+		}
 		http.Redirect(w, r, "/config", http.StatusFound)
 	}
 }
 
-func (p *ConfigPage) Heading() template.HTML {
+func (p *ConfigPage) getHeading() template.HTML {
 	files, err := ioutil.ReadDir(nnet.DataDir)
 	if err != nil {
-		log.Fatal(err)
+		log.Println("Error reading DataDir:", err)
+		return ""
 	}
 	html := `model: <select name="model" class="model-select" form="loadConfig" onchange="this.form.submit()">`
 	for _, file := range files {
 		name := file.Name()
-		if strings.HasSuffix(name, ".net") {
-			name = name[:len(name)-4]
-			if name == p.conf.Model {
+		if strings.HasSuffix(name, ".conf") {
+			name = name[:len(name)-5]
+			if name == p.net.Model {
 				html += "<option selected>" + name + "</option>"
 			} else {
 				html += "<option>" + name + "</option>"
@@ -158,11 +168,9 @@ func getFields(conf *nnet.Config) []Field {
 	keys := conf.Fields()
 	var flds []Field
 	for _, key := range keys {
-		if key != "UseGPU" {
-			f := Field{Name: key, Value: fmt.Sprint(conf.Get(key))}
-			f.On, f.Boolean = conf.Get(key).(bool)
-			flds = append(flds, f)
-		}
+		f := Field{Name: key, Value: fmt.Sprint(conf.Get(key))}
+		f.On, f.Boolean = conf.Get(key).(bool)
+		flds = append(flds, f)
 	}
 	return flds
 }

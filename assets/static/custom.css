@@ -25,6 +25,7 @@ body, html {
 
 .top-nav {
   width: 100%;
+  min-height: 32px;
 }
 
 .menu-selected {
