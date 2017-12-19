@@ -10,7 +10,6 @@ Features:
 
 To do:
 * Automatic tuning of parameters.
-* Visualisation of network activation and weights.
 * Additional examples.
 
 Dependencies:
