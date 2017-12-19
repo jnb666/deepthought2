@@ -16,9 +16,9 @@
             {{ if $i -}}
             <div class="digit-image">
               {{ if $p.Distort -}}
-              <image src="/img/{{$p.Dset}}/{{$i}}?d={{$p.Distort}}" width="{{$p.Width}}" height="{{$p.Height}}" alt="{{$i}}" title="{{$i}}"></image>
+              <img src="/img/{{$p.Dset}}/{{$i}}?d={{$p.Distort}}" width="{{$p.Width}}" height="{{$p.Height}}" alt="{{$i}}" title="{{$i}}">
               {{ else -}}
-              <image src="/img/{{$p.Dset}}/{{$i}}" width="{{$p.Width}}" height="{{$p.Height}}" alt="{{$i}}" title="{{$i}}"></image>
+              <img src="/img/{{$p.Dset}}/{{$i}}" width="{{$p.Width}}" height="{{$p.Height}}" alt="{{$i}}" title="{{$i}}">
               {{ end -}}
               <span class="digit-label-left">{{$p.Label $i}}</span>
               {{ $pred := $p.Predict $i -}}

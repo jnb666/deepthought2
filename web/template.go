@@ -3,19 +3,15 @@ package web
 import (
 	"errors"
 	"fmt"
-	"github.com/gorilla/sessions"
 	"html/template"
 	"log"
 	"net/http"
 	"os"
-	"strings"
 )
 
 var AssetDir = os.Getenv("GOPATH") + "/src/github.com/jnb666/deepthought2/assets"
 
 var ErrNotFound = errors.New("page not found")
-
-var authKey = []byte("uekahcahziem2Tha")
 
 // Template and main menu definition
 type Templates struct {
@@ -25,7 +21,6 @@ type Templates struct {
 	Toplevel bool
 	Heading  template.HTML
 	Error    string
-	store    sessions.Store
 }
 
 type Link struct {
@@ -40,29 +35,24 @@ func NewTemplates() (*Templates, error) {
 	var err error
 	t := &Templates{Menu: []Link{}, Options: []Link{}, Toplevel: true}
 	t.Template, err = template.ParseGlob(AssetDir + "/*.html")
-	if err != nil {
-		return nil, err
-	}
-	t.store = sessions.NewCookieStore(authKey)
 	return t, err
 }
 
 func (t *Templates) Clone() *Templates {
 	temp := *t
-	temp.Menu = append([]Link{}, t.Menu...)
 	temp.Options = append([]Link{}, t.Options...)
 	return &temp
 }
 
 func (t *Templates) Select(url string) *Templates {
 	for i, key := range t.Menu {
-		t.Menu[i].Selected = strings.HasPrefix(key.Url, url)
+		t.Menu[i].Selected = key.Url == url
 	}
 	return t
 }
 
-func (t *Templates) AddMenuItem(l Link) *Templates {
-	t.Menu = append(t.Menu, l)
+func (t *Templates) AddMenuItem(url, name string) *Templates {
+	t.Menu = append(t.Menu, Link{Url: url, Name: name})
 	return t
 }
 

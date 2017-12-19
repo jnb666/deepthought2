@@ -1,0 +1,38 @@
+{{ define "net" -}}
+<!DOCTYPE html>
+<html lang="en">
+{{ template "header" . -}}
+<body>
+<div class="pure-g">
+  <div class="pure-u-1">
+    <table class="image-table">
+    <tbody>
+      {{ range .Layers -}}
+      <tr>
+        <td>
+          <table class="image-table2">
+            <tr><td colspan="2">{{.Desc}}</td></tr>
+            <tr>
+              <td width="{{.Width}}%">
+                {{ if .Image -}}
+                <img class="pixels" src="{{.Image}}">
+                {{ end -}}
+                {{ if .Values -}}
+                  <table class="image-table3">
+                    <tr>{{ range .Values -}}<td>{{.}}</td>{{ end -}}</tr>
+                  </table>
+                {{ end -}}
+              </td>
+              <td width="{{.PadWidth}}%"></td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      {{ end -}}
+    </tbody>
+    </table>
+  </div>
+</div>
+</body>
+</html>
+{{ end -}}

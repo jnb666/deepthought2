@@ -1,13 +1,26 @@
-body, html {
-  width: 100%; 
-  height: 100%; 
+body, html { 
+  width: 100%;
+  height: 100%;
   margin: 0; 
   padding: 0;
 }
 
+.root-container {
+  display: table;
+  empty-cells: show; 
+  border-collapse: collapse; 
+  height: 100%;
+}
+
+.head-container {
+  display: table-row;
+  overflow: auto;
+}
+
 .body-container {
-  width: 100%;
+  display: table-row;
   height: 100%; 
+  overflow: hidden 
 }
 
 .body-container iframe {
@@ -29,7 +42,7 @@ body, html {
 }
 
 .menu-selected {
-  background: blue;
+  background: #0000D0;
 }
 
 .menu-item {
@@ -39,10 +52,11 @@ body, html {
 
 .nav-heading {
   color: white;
+  background-color: black;
 }
 
 .nav-menu {
-  background: #000080;
+  background: #000070;
   color: white;
 }
 
@@ -61,12 +75,49 @@ body, html {
 }
 
 .model-select {
-  background: blue;
+  background: #0000C0;
 }
 
 .stats-table td,
 .stats-table th {
   font-size: 0.875em;
+  vertical-align: top;
+}
+
+.image-table {
+  border-collapse: collapse;
+  border: 1px solid #cbcbcb;
+  width: 100%;
+}
+
+.image-table td {
+  padding: 5px;
+  border: 1px solid #cbcbcb;
+}
+
+.image-table2 {
+  border-collapse: collapse;
+  border: 0;
+  width: 100%;
+}
+
+.image-table2 td {
+  font-size: 0.875em;
+  padding: 0;
+  border: 0;
+}
+
+.image-table3 {
+  border-collapse: collapse;
+  border: 0;
+  width: 100%;
+}
+
+.image-table3 td {
+  font-size: 1em;
+  padding: 0;
+  border: 0;
+  text-align: center;
 }
 
 .h-center {
@@ -94,4 +145,10 @@ body, html {
 
 .error-text {
   color: red;
+}
+
+img.pixels {
+  width: 100%;
+  height: auto;
+  image-rendering: pixelated;
 }

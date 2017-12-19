@@ -11,7 +11,7 @@
         <tr>
           <th>epoch</th>{{ range .Headers }}<th>{{.}}</th>{{ end -}}
         </tr>
-        </thead>
+      </thead>
       <tbody>
         {{ range $s := .LatestStats 20 -}}
         <tr>
@@ -25,8 +25,8 @@
     <div class="l-box" id="log"></div>
   </div>
   <div class="pure-u-1-2">
-    <div class="l-box">{{ .LossPlot 400 250 }}</div> 
-    <div class="l-box">{{ .ErrorPlot 400 250 }}</div>
+    <div class="l-box">{{ .LossPlot 500 300 }}</div> 
+    <div class="l-box">{{ .ErrorPlot 500 300 }}</div>
   </div>
 </div>
 </body>

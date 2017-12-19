@@ -2,7 +2,6 @@ package web
 
 import (
 	"github.com/gorilla/mux"
-	"github.com/gorilla/sessions"
 	"github.com/jnb666/deepthought2/img"
 	"image/png"
 	"math/rand"
@@ -13,22 +12,21 @@ import (
 type ImagePage struct {
 	*Templates
 	Dset    string
+	Page    int
+	Errors  bool
+	Distort string
 	Rows    []int
 	Cols    []int
 	Width   int
 	Height  int
 	Pages   int
-	Page    int
 	Total   int
-	Distort string
 	net     *Network
-	errors  bool
 }
 
 // Base data for handler functions to view input image dataset
 func NewImagePage(t *Templates, net *Network, scale float64, rows, cols int) *ImagePage {
-	p := &ImagePage{net: net, Dset: "train"}
-	p.Templates = t.Select("/images/train")
+	p := &ImagePage{net: net, Templates: t, Page: 1}
 	p.AddOption(Link{Name: "all", Url: "./all", Selected: true})
 	p.AddOption(Link{Name: "errors", Url: "./errors"})
 	p.AddOption(Link{Name: "prev", Url: "./prev"})
@@ -49,15 +47,11 @@ func (p *ImagePage) Base() func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p.net.Lock()
 		defer p.net.Unlock()
-		session, err := p.getSession(r, w)
-		if err != nil {
-			return
-		}
 		vars := mux.Vars(r)
 		p.Dset = vars["dset"]
-		p.Select("/images/" + p.Dset)
+		p.Select("/images/" + p.Dset + "/")
 		sel := []string{"all"}
-		if p.errors {
+		if p.Errors {
 			sel = []string{"errors"}
 		}
 		if p.Distort != "" {
@@ -69,9 +63,6 @@ func (p *ImagePage) Base() func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := p.net.Data[p.Dset]; !ok {
 			template = "blank"
 		}
-		if err := p.saveSession(r, w, session); err != nil {
-			return
-		}
 		p.Toplevel = true
 		p.Exec(w, template, p)
 	}
@@ -82,18 +73,11 @@ func (p *ImagePage) Grid() func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p.net.Lock()
 		defer p.net.Unlock()
-		session, err := p.getSession(r, w)
-		if err != nil {
-			return
-		}
 		vars := mux.Vars(r)
 		p.Dset = vars["dset"]
 		p.Total, p.Pages = p.pageCount()
 		if p.Page > p.Pages || p.Page < 1 {
 			p.Page = 1
-		}
-		if err := p.saveSession(r, w, session); err != nil {
-			return
 		}
 		p.Toplevel = false
 		p.Exec(w, "grid", p)
@@ -105,18 +89,14 @@ func (p *ImagePage) Setopt() func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p.net.Lock()
 		defer p.net.Unlock()
-		session, err := p.getSession(r, w)
-		if err != nil {
-			return
-		}
 		vars := mux.Vars(r)
 		p.Dset = vars["dset"]
 		p.Total, p.Pages = p.pageCount()
 		switch vars["opt"] {
 		case "all":
-			p.errors = false
+			p.Errors = false
 		case "errors":
-			p.errors = true
+			p.Errors = true
 		case "prev":
 			p.Page = mod(p.Page-1, 1, p.Pages)
 		case "next":
@@ -128,48 +108,15 @@ func (p *ImagePage) Setopt() func(w http.ResponseWriter, r *http.Request) {
 				p.Distort = ""
 			}
 		}
-		if err := p.saveSession(r, w, session); err != nil {
-			return
-		}
 		http.Redirect(w, r, "/images/"+p.Dset+"/", http.StatusFound)
 	}
-}
-
-func (p *ImagePage) getSession(r *http.Request, w http.ResponseWriter) (*sessions.Session, error) {
-	s, err := p.store.Get(r, "deepthought")
-	if err != nil {
-		p.logError(w, http.StatusBadRequest, err)
-		return nil, err
-	}
-	var ok bool
-	if p.Page, ok = s.Values["page"].(int); !ok {
-		s.Values["page"] = 1
-	}
-	if p.errors, ok = s.Values["errors"].(bool); !ok {
-		s.Values["errors"] = false
-	}
-	if p.Distort = s.Values["distort"].(string); !ok {
-		s.Values["distort"] = ""
-	}
-	return s, nil
-}
-
-func (p *ImagePage) saveSession(r *http.Request, w http.ResponseWriter, s *sessions.Session) error {
-	s.Values["page"] = p.Page
-	s.Values["errors"] = p.errors
-	s.Values["distort"] = p.Distort
-	err := s.Save(r, w)
-	if err != nil {
-		p.logError(w, http.StatusBadRequest, err)
-	}
-	return err
 }
 
 func (p *ImagePage) pageCount() (nimg, pages int) {
 	if _, ok := p.net.Data[p.Dset]; !ok {
 		return 0, 1
 	}
-	if p.errors {
+	if p.Errors {
 		nimg = p.errorImageCount(-1)
 	} else {
 		nimg = p.net.Data[p.Dset].Len()
@@ -207,7 +154,7 @@ func (p *ImagePage) Index(row, col int) int {
 	if index >= p.Total {
 		return 0
 	}
-	if p.errors {
+	if p.Errors {
 		return p.errorImageCount(index)
 	}
 	return index + 1

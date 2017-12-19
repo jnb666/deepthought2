@@ -77,12 +77,15 @@ func (n *Network) InitWeights(rng *rand.Rand) {
 }
 
 // Copy weights and bias arrays to destination net
-func (n *Network) CopyTo(net *Network) {
+func (n *Network) CopyTo(net *Network, sync bool) {
 	for i, layer := range n.Layers {
 		if l, ok := layer.(ParamLayer); ok {
 			W, B := l.Params()
 			net.Layers[i].(ParamLayer).SetParams(n.queue, W, B)
 		}
+	}
+	if sync {
+		n.queue.Finish()
 	}
 }
 

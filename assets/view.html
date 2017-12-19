@@ -1,10 +1,12 @@
-{{ define "error" -}}
+{{ define "view" -}}
 <!DOCTYPE html>
 <html lang="en">
 {{ template "header" . -}}
 <body>
 {{ template "menu" . -}}
-<div class="l-box error-text">Error: {{ .Error -}}</div>
+  <div class="body-container">
+    <iframe id="contentFrame" src="/net/{{.Page}}"></iframe>
+  </div>
 </div>
 </div>
 </body>

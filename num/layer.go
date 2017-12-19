@@ -18,6 +18,7 @@ type Layer interface {
 	OutShape() []int
 	Fprop(q Queue, in, work Array) Array
 	Bprop(q Queue, grad, work Array) Array
+	Output() Array
 }
 
 // Param layer also has weights and biases
@@ -63,6 +64,8 @@ type convCuda struct {
 func (l *convCuda) SetParamData(W, B, dW, dB Array) {
 	l.w, l.b, l.dw, l.db = W.Data(), B.Data(), dW.Data(), dB.Data()
 }
+
+func (l *convCuda) Output() Array { return l.dst }
 
 func (l *convCuda) Fprop(que Queue, in, work Array) Array {
 	if !SameShape(in.Dims(), l.InShape()) {
@@ -124,6 +127,8 @@ type poolCuda struct {
 	diffSrc  Array
 }
 
+func (l *poolCuda) Output() Array { return l.dst }
+
 func (l *poolCuda) Fprop(q Queue, in, work Array) Array {
 	if !SameShape(in.Dims(), l.InShape()) {
 		panic(fmt.Errorf("fprop pool: invalid input shape: have %v, expect %v", in.Dims(), l.InShape()))
@@ -177,6 +182,8 @@ type activationCuda struct {
 	diffSrc  Array
 }
 
+func (l *activationCuda) Output() Array { return l.dst }
+
 func (l *activationCuda) Fprop(q Queue, in, work Array) Array {
 	l.src = in
 	q.Call(
@@ -211,6 +218,8 @@ func (a *activation) InShape() []int { return a.dst.Dims() }
 
 func (a *activation) OutShape() []int { return a.dst.Dims() }
 
+func (a *activation) Output() Array { return a.dst }
+
 func (a *activation) Fprop(q Queue, in, work Array) Array {
 	a.src = in
 	q.Call(a.fwd.setData(a.src, a.dst))
@@ -242,6 +251,8 @@ func newLayerMKL(layer *mkl.Layer, bpropData bool) layerMKL {
 func (l layerMKL) SetParamData(W, B, dW, dB Array) {
 	l.Layer.SetParams(W.Data(), B.Data(), dW.Data(), dB.Data())
 }
+
+func (l layerMKL) Output() Array { return l.dst }
 
 func (l layerMKL) Fprop(q Queue, in, work Array) Array {
 	if !SameShape(in.Dims(), l.InShape()) {

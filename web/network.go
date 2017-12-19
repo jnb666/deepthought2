@@ -9,7 +9,10 @@ import (
 	"github.com/jnb666/deepthought2/nnet"
 	"github.com/jnb666/deepthought2/num"
 	"html/template"
+	"image"
+	"image/color"
 	"log"
+	"math"
 	"math/rand"
 	"os"
 	"path"
@@ -17,6 +20,19 @@ import (
 	"sync"
 	"time"
 )
+
+const (
+	aspectOutput     = 0.125
+	aspectWeights    = 0.25
+	factorMinOutput  = 20
+	factorMinWeights = 20
+)
+
+// color map definition
+const cmin = -1
+const cmax = 1
+
+var cmap = [][3]float32{{0, 0, .5}, {0, 0, 1}, {0, .5, 1}, {0, 1, 1}, {.5, 1, .5}, {1, 1, 0}, {1, .5, 0}, {1, 0, 0}, {.5, 0, 0}}
 
 // Network and associated training / test data and configuration
 type Network struct {
@@ -30,6 +46,7 @@ type Network struct {
 	trainData *nnet.Dataset
 	queue     num.Queue
 	rng       *rand.Rand
+	view      *viewData
 }
 
 // Embedded structs used to persist state to file
@@ -86,6 +103,19 @@ func (n *Network) Init() error {
 	if len(dims) >= 2 {
 		n.trans = img.NewTransformer(dims[1], dims[0], img.ConvAccel, n.testRng)
 	}
+	n.view = newViewData(n.queue, n.Data, n.Conf)
+	return nil
+}
+
+// Initialise for new training run
+func (n *Network) Start() error {
+	if err := n.Init(); err != nil {
+		return err
+	}
+	n.Tester.base.Reset()
+	n.InitWeights(n.rng)
+	n.Network.CopyTo(n.view.Network, true)
+	n.Epoch = 0
 	return nil
 }
 
@@ -93,11 +123,9 @@ func (n *Network) Init() error {
 func (n *Network) Train(restart bool) error {
 	log.Printf("train: start %s - restart=%v\n", n.Model, restart)
 	if restart {
-		if err := n.Init(); err != nil {
+		if err := n.Start(); err != nil {
 			return err
 		}
-		n.InitWeights(n.rng)
-		n.Tester.base.Reset()
 		n.Epoch = 1
 	} else if n.Epoch > 0 {
 		n.Epoch++
@@ -134,6 +162,7 @@ func (n *Network) nextEpoch(epoch int) int {
 	n.Lock()
 	n.Epoch = epoch
 	n.predict(n.Pred)
+	n.Network.CopyTo(n.view.Network, true)
 	n.Unlock()
 	// notify via websocket
 	if n.conn != nil {
@@ -216,7 +245,7 @@ func (n *Network) Import() error {
 				num.Write(B, p.Biases),
 			)
 		}
-		n.queue.Finish()
+		n.Network.CopyTo(n.view.Network, true)
 	}
 	return nil
 }
@@ -320,4 +349,241 @@ func loadGob(name string, data *NetworkData) error {
 	defer f.Close()
 	log.Println("loading network config from", name)
 	return gob.NewDecoder(f).Decode(data)
+}
+
+// Data used for network visualtion of weights and outputs
+type viewData struct {
+	*nnet.Network
+	queue   num.Queue
+	layers  []viewLayer
+	dset    string
+	data    nnet.Data
+	input   num.Array
+	inShape []int
+	inData  []float32
+	inImage *image.NRGBA
+}
+
+type viewLayer struct {
+	ltype    string
+	outShape []int
+	outData  []float32
+	outImage *image.NRGBA
+	ox, oy   int
+	wShape   []int
+	bShape   []int
+	wData    []float32
+	bData    []float32
+	wImage   *image.NRGBA
+	wix, wiy int
+	wox, woy int
+	wborder  int
+}
+
+func newViewData(dev num.Device, data map[string]nnet.Data, conf nnet.Config) *viewData {
+	v := &viewData{queue: dev.NewQueue()}
+	if _, ok := data["test"]; ok {
+		v.dset, v.data = "test", data["test"]
+	} else {
+		v.dset, v.data = "train", data["train"]
+	}
+	v.Network = nnet.New(v.queue, conf, 1, v.data.Shape())
+
+	v.inShape = v.data.Shape()
+	v.inData = make([]float32, num.Prod(v.inShape))
+	if conf.FlattenInput {
+		v.input = dev.NewArray(num.Float32, len(v.inData), 1)
+	} else {
+		v.input = dev.NewArray(num.Float32, append(v.inShape, 1)...)
+	}
+	v.inShape = v.inShape[:len(v.inShape)-1]
+	if len(v.inShape) == 2 {
+		v.inImage = image.NewNRGBA(image.Rect(0, 0, v.inShape[1], v.inShape[0]))
+	}
+
+	for i, layer := range v.Layers {
+		l := viewLayer{ltype: layer.Type()}
+		// filter output layers
+		if l.ltype != "maxPool" {
+			l.outShape = layer.OutShape()
+			l.outShape = l.outShape[:len(l.outShape)-1]
+		}
+		prev := len(v.layers) - 1
+		if prev >= 0 && layer.IsActiv() && num.SameShape(v.layers[prev].outShape, l.outShape) {
+			l.ltype = v.layers[prev].ltype + " " + l.ltype
+			v.layers[prev].outShape = nil
+		}
+		// allocate buffers and images for weights and biases
+		if pLayer, ok := layer.(nnet.ParamLayer); ok {
+			W, B := pLayer.Params()
+			l.addWeightImage(i, W.Dims(), B.Dims())
+		}
+		v.layers = append(v.layers, l)
+	}
+	// allocate buffers and output images
+	for i, l := range v.layers {
+		if l.outShape != nil {
+			v.layers[i].addOutputImage(i, l.outShape)
+		}
+	}
+	return v
+}
+
+// update outputs with given index from test set and update the images
+func (v *viewData) update(index int) {
+	v.data.Input([]int{index}, v.inData)
+	v.queue.Call(
+		num.Write(v.input, v.inData),
+	)
+	v.Fprop(v.input)
+
+	for i, l := range v.layers {
+		if l.outImage != nil {
+			v.queue.Call(
+				num.Read(v.Layers[i].Output(), l.outData),
+			).Finish()
+			// draw output
+			switch len(l.outShape) {
+			case 1:
+				height := l.outImage.Bounds().Dy()
+				for i, val := range l.outData {
+					l.outImage.Set(i/height, i%height, mapColor(val))
+				}
+			case 3:
+				bw, bh := l.outShape[0], l.outShape[1]
+				for i := 0; i < l.ox*l.oy; i++ {
+					xb := (bw + 1) * (i % l.ox)
+					yb := (bh + 1) * (i / l.ox)
+					for j := 0; j < bw*bh; j++ {
+						col := mapColor(l.outData[i*bw*bh+j])
+						l.outImage.Set(xb+j%bw+1, yb+j/bw+1, col)
+					}
+				}
+			}
+		}
+		if l.wImage != nil {
+			W, B := v.Layers[i].(nnet.ParamLayer).Params()
+			v.queue.Call(
+				num.Read(W, l.wData),
+				num.Read(B, l.bData),
+			).Finish()
+			// draw bias
+			for i := 0; i < l.wox*l.woy; i++ {
+				xb, yb := l.block(i)
+				biasCol := mapColor(l.bData[i])
+				for j := 0; j < l.wix; j++ {
+					l.wImage.Set(xb+j, yb, biasCol)
+				}
+				for j := 0; j < l.wiy; j++ {
+					l.wImage.Set(xb, yb+j, biasCol)
+				}
+			}
+			// draw weights
+			bsize := l.wix * l.wiy
+			for i := 0; i < l.wox*l.woy; i++ {
+				xb, yb := l.block(i)
+				for j := 0; j < bsize; j++ {
+					l.wImage.Set(xb+j%l.wix+1, yb+j/l.wix+1, mapColor(l.wData[i*bsize+j]))
+				}
+			}
+		}
+	}
+}
+
+func (v *viewData) lastLayer() *viewLayer {
+	if len(v.layers) == 0 {
+		return nil
+	}
+	return &v.layers[len(v.layers)-1]
+}
+
+func (l *viewLayer) addOutputImage(layer int, dims []int) {
+	var width, height int
+	switch len(dims) {
+	case 1:
+		// fully connected layer
+		height, width = factorise(dims[0], factorMinOutput, aspectOutput)
+	case 3:
+		// convolutional layer
+		l.oy, l.ox = factorise(dims[2], factorMinOutput, aspectOutput)
+		height = (dims[1] + 1) * l.oy
+		width = (dims[0] + 1) * l.ox
+	default:
+		log.Printf("viewLayer: output shape not supported %v", dims)
+	}
+	l.outData = make([]float32, num.Prod(dims))
+	//log.Printf("viewLayer: %d output %v => %dx%d\n", layer, dims, width, height)
+	l.outImage = image.NewNRGBA(image.Rect(0, 0, width, height))
+}
+
+func (l *viewLayer) addWeightImage(layer int, wDims, bDims []int) {
+	if len(bDims) != 1 || len(wDims) < 1 || bDims[0] != wDims[len(wDims)-1] {
+		log.Printf("viewLayer %d: weight shape not supported %v %v", layer, wDims, bDims)
+		return
+	}
+	l.wShape, l.bShape = wDims, bDims
+	switch len(wDims) {
+	case 2:
+		// fully connected layer
+		l.wiy, l.wix = factorise(wDims[0], 0, 1)
+		l.woy, l.wox = factorise(wDims[1], factorMinWeights, aspectWeights)
+		l.wborder = 1
+	case 4:
+		// convolutional layer
+		l.wix, l.wiy = wDims[0], wDims[1]*wDims[2]
+		if wDims[2] == 1 {
+			l.woy, l.wox = factorise(wDims[3], factorMinWeights, aspectWeights)
+		} else {
+			l.woy, l.wox = 1, wDims[3]
+		}
+		l.wborder = 2
+	default:
+		log.Printf("viewLayer %d: weight shape not supported %v %v", layer, wDims, bDims)
+		return
+	}
+	l.wData = make([]float32, num.Prod(wDims))
+	l.bData = make([]float32, num.Prod(bDims))
+	//log.Printf("viewLayer: %d %v %v in=%dx%d out=%dx%d\n", layer, wDims, bDims, l.wix, l.wiy, l.wox, l.woy)
+	l.wImage = image.NewNRGBA(image.Rect(0, 0, (l.wix+l.wborder)*l.wox, (l.wiy+l.wborder)*l.woy))
+}
+
+func (l *viewLayer) block(i int) (x, y int) {
+	x = (l.wix + l.wborder) * (i % l.wox)
+	y = (l.wiy + l.wborder) * (i / l.wox)
+	return
+}
+
+// if n > nmin returns f1, f2 where f1*f2 = n and f1 <= aspect * f2 else 1, n
+func factorise(n, nmin int, aspect float64) (f1, f2 int) {
+	if n < 1 {
+		panic("factorise: input must be >= 1")
+	}
+	if n > nmin {
+		for f1 = int(math.Sqrt(float64(n) * aspect)); f1 > 1; f1-- {
+			if n%f1 == 0 {
+				return f1, n / f1
+			}
+		}
+	}
+	return 1, n
+}
+
+// convert value in range cmin:cmax to interpolated color from cmap
+func mapColor(val float32) color.NRGBA {
+	var col [3]float32
+	ncol := len(cmap)
+	switch {
+	case val <= cmin:
+		col = cmap[0]
+	case val >= cmax:
+		col = cmap[ncol-1]
+	default:
+		vsc := float32(ncol-1) * (val - cmin) / (cmax - cmin)
+		ix := int(vsc)
+		fx := vsc - float32(ix)
+		for i := range col {
+			col[i] = cmap[ix][i]*(1-fx) + cmap[ix+1][i]*fx
+		}
+	}
+	return color.NRGBA{uint8(col[0] * 255), uint8(col[1] * 255), uint8(col[2] * 255), 255}
 }

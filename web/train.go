@@ -14,6 +14,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -24,16 +25,13 @@ var upgrader = websocket.Upgrader{
 
 type TrainPage struct {
 	*Templates
-	net *Network
+	net     *Network
+	disable map[int]bool
 }
 
 // Base data for handler functions to perform network training and display the stats
 func NewTrainPage(t *Templates, net *Network) *TrainPage {
-	p := &TrainPage{net: net}
-	p.Templates = t.Select("/train")
-	p.AddOption(Link{Name: "start", Url: "/train/start"})
-	p.AddOption(Link{Name: "stop", Url: "/train/stop"})
-	p.AddOption(Link{Name: "continue", Url: "/train/continue"})
+	p := &TrainPage{net: net, Templates: t, disable: map[int]bool{0: true}}
 	return p
 }
 
@@ -42,9 +40,25 @@ func (p *TrainPage) Base() func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p.net.Lock()
 		defer p.net.Unlock()
+		p.Options = []Link{}
+		for i, opt := range p.Headers() {
+			p.AddOption(Link{Name: opt, Url: fmt.Sprintf("/train/set/%d", i), Selected: !p.disable[i]})
+		}
 		p.Toplevel = true
+		p.Select("/train")
 		p.Heading = p.net.heading()
 		p.Exec(w, "train", p)
+	}
+}
+
+// Handler function to toggle options
+func (p *TrainPage) Setopt() func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, _ := strconv.Atoi(mux.Vars(r)["id"])
+		p.net.Lock()
+		defer p.net.Unlock()
+		p.disable[id] = !p.disable[id]
+		http.Redirect(w, r, "/train", http.StatusFound)
 	}
 }
 
@@ -67,8 +81,24 @@ func (p *TrainPage) Command() func(w http.ResponseWriter, r *http.Request) {
 			}
 		case "stop":
 			p.net.stop = true
+		case "reset":
+			if p.net.running {
+				log.Println("skip reset - trainer is running")
+			} else {
+				if err := p.net.Start(); err != nil {
+					p.logError(w, http.StatusInternalServerError, err)
+					return
+				}
+			}
 		}
-		http.Redirect(w, r, "/train", http.StatusFound)
+		next := "/train"
+		for _, item := range p.Menu {
+			if item.Selected {
+				next = item.Url
+			}
+		}
+
+		http.Redirect(w, r, next, http.StatusFound)
 	}
 }
 
@@ -115,6 +145,9 @@ func (p *TrainPage) RunTime() string {
 }
 
 func (p *TrainPage) LossPlot(width, height int) template.HTML {
+	if p.disable[0] {
+		return ""
+	}
 	plt := newPlot()
 	line := newLinePlot(p.net.base.Stats, 0, 1)
 	plt.Add(line)
@@ -123,11 +156,19 @@ func (p *TrainPage) LossPlot(width, height int) template.HTML {
 }
 
 func (p *TrainPage) ErrorPlot(width, height int) template.HTML {
+	lines := 0
 	plt := newPlot()
 	for i, name := range p.Headers()[1:] {
+		if p.disable[i+1] {
+			continue
+		}
 		line := newLinePlot(p.net.base.Stats, i+1, 100)
 		plt.Add(line)
 		plt.Legend.Add(name+" % ", line)
+		lines++
+	}
+	if lines == 0 {
+		return ""
 	}
 	return writePlot(plt, width, height)
 }

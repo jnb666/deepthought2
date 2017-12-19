@@ -14,7 +14,10 @@ type Layer interface {
 	OutShape() []int
 	Fprop(q num.Queue, in, work num.Array) num.Array
 	Bprop(q num.Queue, grad, work num.Array) num.Array
+	IsActiv() bool
+	Type() string
 	ToString() string
+	Output() num.Array
 }
 
 // ParamLayer is a layer with weight and bias parameters
@@ -87,6 +90,10 @@ func (c Conv) ToString() string {
 	return fmt.Sprintf("conv %+v", c)
 }
 
+func (c Conv) Type() string {
+	return "conv"
+}
+
 func (c *Conv) unmarshal(data json.RawMessage) Layer {
 	unmarshal(data, c)
 	return &convDNN{Conv: *c}
@@ -108,6 +115,14 @@ func (c MaxPool) ToString() string {
 	return fmt.Sprintf("maxPool %+v", c)
 }
 
+func (c MaxPool) Type() string {
+	return "maxPool"
+}
+
+func (c MaxPool) IsActiv() bool {
+	return false
+}
+
 func (c *MaxPool) unmarshal(data json.RawMessage) Layer {
 	unmarshal(data, c)
 	return &poolDNN{MaxPool: *c}
@@ -126,6 +141,10 @@ func (c Linear) ToString() string {
 	return fmt.Sprintf("linear %+v", c)
 }
 
+func (c Linear) Type() string {
+	return "linear"
+}
+
 func (c *Linear) unmarshal(data json.RawMessage) Layer {
 	unmarshal(data, c)
 	return &linear{Linear: *c}
@@ -142,6 +161,14 @@ func (c Activation) Marshal() LayerConfig {
 
 func (c Activation) ToString() string {
 	return fmt.Sprintf("activation %+v", c)
+}
+
+func (c Activation) Type() string {
+	return c.Atype
+}
+
+func (c Activation) IsActiv() bool {
+	return true
 }
 
 func (c *Activation) unmarshal(data json.RawMessage) Layer {
@@ -192,6 +219,8 @@ func (l *linear) Init(q num.Queue, inShape []int, ix int) int {
 	}
 	return 0
 }
+
+func (l *linear) Output() num.Array { return l.dst }
 
 func (l *linear) Fprop(q num.Queue, in, work num.Array) num.Array {
 	l.src = in
@@ -272,7 +301,11 @@ type logRegression struct {
 	loss num.Array
 }
 
-func (l *logRegression) ToString() string { return fmt.Sprintf("logRegression") }
+func (l *logRegression) IsActiv() bool { return true }
+
+func (l *logRegression) Type() string { return "logr" }
+
+func (l *logRegression) ToString() string { return "logRegression" }
 
 func (l *logRegression) Init(q num.Queue, inShape []int, ix int) int {
 	l.dst = q.NewArray(num.Float32, inShape...)
@@ -284,6 +317,8 @@ func (l *logRegression) Init(q num.Queue, inShape []int, ix int) int {
 func (l *logRegression) InShape() []int { return l.dst.Dims() }
 
 func (l *logRegression) OutShape() []int { return l.dst.Dims() }
+
+func (l *logRegression) Output() num.Array { return l.dst }
 
 func (l *logRegression) Fprop(q num.Queue, in, work num.Array) num.Array {
 	q.Call(num.Softmax(in, l.dst))
@@ -303,9 +338,14 @@ func (l *logRegression) Loss(q num.Queue, yOneHot, yPred num.Array) num.Array {
 type flatten struct {
 	inShape  []int
 	outShape []int
+	dst      num.Array
 }
 
-func (l *flatten) ToString() string { return fmt.Sprintf("flatten") }
+func (l *flatten) IsActiv() bool { return false }
+
+func (l *flatten) Type() string { return "flatten" }
+
+func (l *flatten) ToString() string { return "flatten" }
 
 func (l *flatten) InShape() []int { return l.inShape }
 
@@ -317,8 +357,11 @@ func (l *flatten) Init(q num.Queue, inShape []int, ix int) int {
 	return 0
 }
 
+func (l *flatten) Output() num.Array { return l.dst }
+
 func (l *flatten) Fprop(q num.Queue, in, work num.Array) num.Array {
-	return in.Reshape(l.outShape...)
+	l.dst = in.Reshape(l.outShape...)
+	return l.dst
 }
 
 func (l *flatten) Bprop(q num.Queue, grad, work num.Array) num.Array {
@@ -342,6 +385,8 @@ func newParams(q num.Queue, filterShape []int, nBatch int) paramBase {
 		nBatch: float32(nBatch),
 	}
 }
+
+func (p paramBase) IsActiv() bool { return false }
 
 func (p paramBase) Params() (W, B num.Array) {
 	return p.w, p.b

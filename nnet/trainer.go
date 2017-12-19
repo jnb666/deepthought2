@@ -108,7 +108,7 @@ func (t *TestBase) Reset() {
 
 // Test performance of the network, called from the Train function on completion of each epoch.
 func (t *TestBase) Test(net *Network, epoch int, loss float64, start time.Time) bool {
-	net.CopyTo(t.Net)
+	net.CopyTo(t.Net, false)
 	if net.DebugLevel >= 1 {
 		fmt.Printf("== TEST EPOCH %d ==\n", epoch)
 	}
