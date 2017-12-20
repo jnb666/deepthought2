@@ -14,7 +14,6 @@ import (
 	"html/template"
 	"log"
 	"net/http"
-	"strconv"
 	"time"
 )
 
@@ -25,13 +24,15 @@ var upgrader = websocket.Upgrader{
 
 type TrainPage struct {
 	*Templates
-	net     *Network
-	disable map[int]bool
+	net *Network
 }
 
 // Base data for handler functions to perform network training and display the stats
 func NewTrainPage(t *Templates, net *Network) *TrainPage {
-	p := &TrainPage{net: net, Templates: t, disable: map[int]bool{0: true}}
+	p := &TrainPage{net: net, Templates: t}
+	for _, opt := range []string{"loss", "errors"} {
+		p.AddOption(Link{Name: opt, Url: "/train/set/" + opt, Selected: opt == "errors"})
+	}
 	return p
 }
 
@@ -40,10 +41,6 @@ func (p *TrainPage) Base() func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p.net.Lock()
 		defer p.net.Unlock()
-		p.Options = []Link{}
-		for i, opt := range p.Headers() {
-			p.AddOption(Link{Name: opt, Url: fmt.Sprintf("/train/set/%d", i), Selected: !p.disable[i]})
-		}
 		p.Toplevel = true
 		p.Select("/train")
 		p.Heading = p.net.heading()
@@ -54,10 +51,14 @@ func (p *TrainPage) Base() func(w http.ResponseWriter, r *http.Request) {
 // Handler function to toggle options
 func (p *TrainPage) Setopt() func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, _ := strconv.Atoi(mux.Vars(r)["id"])
+		opt := mux.Vars(r)["opt"]
 		p.net.Lock()
 		defer p.net.Unlock()
-		p.disable[id] = !p.disable[id]
+		for i, option := range p.Options {
+			if option.Name == opt {
+				p.Options[i].Selected = !option.Selected
+			}
+		}
 		http.Redirect(w, r, "/train", http.StatusFound)
 	}
 }
@@ -145,7 +146,7 @@ func (p *TrainPage) RunTime() string {
 }
 
 func (p *TrainPage) LossPlot(width, height int) template.HTML {
-	if p.disable[0] {
+	if !p.OptionSelected("loss") {
 		return ""
 	}
 	plt := newPlot()
@@ -156,19 +157,16 @@ func (p *TrainPage) LossPlot(width, height int) template.HTML {
 }
 
 func (p *TrainPage) ErrorPlot(width, height int) template.HTML {
+	if !p.OptionSelected("errors") {
+		return ""
+	}
 	lines := 0
 	plt := newPlot()
 	for i, name := range p.Headers()[1:] {
-		if p.disable[i+1] {
-			continue
-		}
 		line := newLinePlot(p.net.base.Stats, i+1, 100)
 		plt.Add(line)
 		plt.Legend.Add(name+" % ", line)
 		lines++
-	}
-	if lines == 0 {
-		return ""
 	}
 	return writePlot(plt, width, height)
 }

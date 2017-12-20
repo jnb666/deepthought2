@@ -62,15 +62,24 @@ func (t *Templates) AddOption(l Link) *Templates {
 }
 
 func (t *Templates) SelectOptions(names []string) *Templates {
-	for i, key := range t.Options {
+	for i, opt := range t.Options {
 		t.Options[i].Selected = false
 		for _, name := range names {
-			if key.Name == name {
+			if opt.Name == name {
 				t.Options[i].Selected = true
 			}
 		}
 	}
 	return t
+}
+
+func (t *Templates) OptionSelected(name string) bool {
+	for _, opt := range t.Options {
+		if opt.Name == name {
+			return opt.Selected
+		}
+	}
+	return false
 }
 
 // Return custom error response

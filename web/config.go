@@ -1,14 +1,18 @@
 package web
 
 import (
+	"errors"
 	"fmt"
 	"github.com/jnb666/deepthought2/nnet"
 	"html/template"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 )
+
+var ErrMissingField = errors.New("value is required")
 
 type ConfigPage struct {
 	*Templates
@@ -49,7 +53,7 @@ func (p *ConfigPage) init(data *NetworkData) error {
 			return err
 		}
 	}
-	p.Fields = getFields(&p.net.Conf)
+	p.Fields = getFields(&p.net.Conf, p.net.Model)
 	p.Layers = getLayers(&p.net.Conf)
 	return nil
 }
@@ -92,10 +96,18 @@ func (p *ConfigPage) Save() func(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
 		haveErrors := false
 		conf := p.net.Conf
+		model := p.net.Model
 		for i, fld := range p.Fields {
 			val := r.Form.Get(fld.Name)
 			var err error
-			if fld.Boolean {
+			if fld.Name == "Model" {
+				if val != "" {
+					p.Fields[i].Value = val
+					model = val
+				} else {
+					err = ErrMissingField
+				}
+			} else if fld.Boolean {
 				p.Fields[i].On = (val == "true")
 				conf, err = conf.SetBool(fld.Name, p.Fields[i].On)
 			} else {
@@ -109,8 +121,10 @@ func (p *ConfigPage) Save() func(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !haveErrors {
+			p.net.Model = model
 			p.net.Conf = conf
 			p.net.Export()
+			p.net.updated = true
 			if err := SaveNetwork(p.net.NetworkData); err != nil {
 				p.logError(w, http.StatusBadRequest, err)
 				return
@@ -148,25 +162,35 @@ func (p *ConfigPage) getHeading() template.HTML {
 		log.Println("Error reading DataDir:", err)
 		return ""
 	}
-	html := `model: <select name="model" class="model-select" form="loadConfig" onchange="this.form.submit()">`
+	models := make(map[string]bool)
 	for _, file := range files {
 		name := file.Name()
-		if strings.HasSuffix(name, ".conf") {
-			name = name[:len(name)-5]
-			if name == p.net.Model {
-				html += "<option selected>" + name + "</option>"
-			} else {
-				html += "<option>" + name + "</option>"
+		for _, suffix := range []string{".conf", ".net"} {
+			if strings.HasSuffix(name, suffix) {
+				models[name[:len(name)-len(suffix)]] = true
 			}
+		}
+	}
+	names := make([]string, 0, len(models))
+	for name := range models {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	html := `model: <select name="model" class="model-select" form="loadConfig" onchange="this.form.submit()">`
+	for _, name := range names {
+		if name == p.net.Model {
+			html += "<option selected>" + name + "</option>"
+		} else {
+			html += "<option>" + name + "</option>"
 		}
 	}
 	html += "</select>"
 	return template.HTML(html)
 }
 
-func getFields(conf *nnet.Config) []Field {
+func getFields(conf *nnet.Config, model string) []Field {
+	flds := []Field{{Name: "Model", Value: model}}
 	keys := conf.Fields()
-	var flds []Field
 	for _, key := range keys {
 		f := Field{Name: key, Value: fmt.Sprint(conf.Get(key))}
 		f.On, f.Boolean = conf.Get(key).(bool)

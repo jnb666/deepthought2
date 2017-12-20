@@ -56,16 +56,18 @@ func (e EMA) Add(val float64) float64 {
 // Tester interface to evaluate the performance after each epoch, Test method returns true if training should stop.
 type Tester interface {
 	Test(net *Network, epoch int, loss float64, start time.Time) bool
+	Epilogue() bool
 }
 
 // Tester which evaluates the loss and error for each of the data sets and updates the stats.
 type TestBase struct {
-	Net     *Network
-	Data    map[string]*Dataset
-	Pred    map[string][]int32
-	Stats   []Stats
-	Headers []string
-	Samples int
+	Net      *Network
+	Data     map[string]*Dataset
+	Pred     map[string][]int32
+	Stats    []Stats
+	Headers  []string
+	Samples  int
+	epilogue bool
 }
 
 // Create a new base class which implements the Tester interface.
@@ -79,6 +81,7 @@ func (t *TestBase) Init(queue num.Queue, conf Config, data map[string]Data, rng 
 	t.Headers = StatsHeaders(data)
 	t.Samples = min(conf.MaxSamples, data["train"].Len())
 	t.Pred = nil
+	t.epilogue = false
 	if conf.DebugLevel >= 1 {
 		fmt.Printf("init tester: samples=%d batch size=%d\n", t.Samples, conf.TestBatch)
 	}
@@ -104,6 +107,7 @@ func (t *TestBase) Predict() *TestBase {
 // Reset stats prior to new run
 func (t *TestBase) Reset() {
 	t.Stats = t.Stats[:0]
+	t.epilogue = false
 }
 
 // Test performance of the network, called from the Train function on completion of each epoch.
@@ -145,7 +149,26 @@ func (t *TestBase) Test(net *Network, epoch int, loss float64, start time.Time) 
 	}
 	s.Elapsed = time.Since(start)
 	t.Stats = append(t.Stats, s)
-	return epoch >= net.MaxEpoch || loss <= net.MinLoss || (net.StopAfter > 0 && s.BestSince >= net.StopAfter)
+	done := false
+	if epoch >= net.MaxEpoch || loss <= net.MinLoss {
+		done = true
+	} else if net.StopAfter > 0 && s.BestSince >= net.StopAfter {
+		// auto stopping based on performance on validation set
+		if net.ExtraEpochs > 0 {
+			// rewind data and perform additional training on undistorted training samples
+			fmt.Printf("training for %d extra epochs\n", net.ExtraEpochs)
+			t.epilogue = true
+			net.StopAfter = 0
+			net.MaxEpoch = epoch + net.ExtraEpochs - 1
+		} else {
+			done = true
+		}
+	}
+	return done
+}
+
+func (t *TestBase) Epilogue() bool {
+	return t.epilogue
 }
 
 type testLogger struct {
@@ -165,9 +188,6 @@ func (t testLogger) Test(net *Network, epoch int, loss float64, start time.Time)
 		for i, val := range s.Format() {
 			msg += fmt.Sprintf("  %s =%s", t.Headers[i], val)
 		}
-		if s.BestSince >= 0 {
-			msg += fmt.Sprintf(" [%d]", s.BestSince)
-		}
 		fmt.Println(msg)
 	}
 	if done {
@@ -182,6 +202,9 @@ func Train(net *Network, dset *Dataset, test Tester) {
 	done := false
 	start := time.Now()
 	for epoch := 1; epoch <= net.MaxEpoch && !done; epoch++ {
+		if test.Epilogue() {
+			dset.Rewind()
+		}
 		loss := TrainEpoch(net, dset, acc)
 		done = test.Test(net, epoch, loss, start)
 	}

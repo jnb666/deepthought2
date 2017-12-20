@@ -50,7 +50,7 @@ func main() {
 	trainPage := web.NewTrainPage(t.Clone(), net)
 	r.HandleFunc("/train", trainPage.Base())
 	r.HandleFunc("/train/{cmd:[a-z]+}", trainPage.Command())
-	r.HandleFunc("/train/set/{id:[0-9]+}", trainPage.Setopt())
+	r.HandleFunc("/train/set/{opt:[a-z]+}", trainPage.Setopt())
 	r.HandleFunc("/stats", trainPage.Stats())
 	r.HandleFunc("/ws", trainPage.Websocket())
 

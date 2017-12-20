@@ -47,6 +47,7 @@ type Network struct {
 	queue     num.Queue
 	rng       *rand.Rand
 	view      *viewData
+	updated   bool
 }
 
 // Embedded structs used to persist state to file
@@ -113,9 +114,11 @@ func (n *Network) Start() error {
 		return err
 	}
 	n.Tester.base.Reset()
+	log.Println("init weights")
 	n.InitWeights(n.rng)
 	n.Network.CopyTo(n.view.Network, true)
 	n.Epoch = 0
+	n.updated = false
 	return nil
 }
 
@@ -123,8 +126,10 @@ func (n *Network) Start() error {
 func (n *Network) Train(restart bool) error {
 	log.Printf("train: start %s - restart=%v\n", n.Model, restart)
 	if restart {
-		if err := n.Start(); err != nil {
-			return err
+		if n.Epoch != 0 || n.updated {
+			if err := n.Start(); err != nil {
+				return err
+			}
 		}
 		n.Epoch = 1
 	} else if n.Epoch > 0 {
@@ -142,6 +147,9 @@ func (n *Network) Train(restart bool) error {
 		epoch := n.Epoch
 		start := time.Now()
 		for !done {
+			if n.Tester.base.Epilogue() {
+				n.trainData.Rewind()
+			}
 			loss := nnet.TrainEpoch(n.Network, n.trainData, acc)
 			done = n.Tester.Test(n.Network, epoch, loss, start)
 			epoch = n.nextEpoch(epoch)

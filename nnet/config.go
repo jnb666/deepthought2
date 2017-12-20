@@ -25,6 +25,7 @@ type Config struct {
 	MaxSamples    int
 	LogEvery      int
 	StopAfter     int
+	ExtraEpochs   int
 	MinLoss       float64
 	RandSeed      int64
 	DebugLevel    int
