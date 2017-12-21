@@ -32,7 +32,7 @@ type TrainPage struct {
 type HistoryRow struct {
 	Params template.HTML
 	Runs   int
-	Stats  []string
+	Stats  []template.HTML
 	Color  string
 }
 
@@ -152,13 +152,13 @@ func (p *TrainPage) LatestStats(n int) []nnet.Stats {
 }
 
 func (p *TrainPage) HistoryHeaders() []string {
-	head := []string{"params", "runs", "epochs"}
+	head := []string{"params", "epochs"}
 	for _, h := range nnet.StatsHeaders(p.net.Data) {
 		if strings.HasSuffix(h, " error") {
 			head = append(head, h)
 		}
 	}
-	return append(head, "run time", "")
+	return append(head, "run time", "runs")
 }
 
 // sort into groups for each set of runs with given params
@@ -205,7 +205,7 @@ func (p *TrainPage) History() []HistoryRow {
 			Color:  htmlColor(plotutil.Color(i)),
 		}
 		for _, s := range stats.avg {
-			r.Stats = append(r.Stats, s.String())
+			r.Stats = append(r.Stats, s.HTML())
 		}
 		table = append(table, r)
 	}

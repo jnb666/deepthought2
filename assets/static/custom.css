@@ -83,9 +83,14 @@ body, html {
   background: #0000C0;
 }
 
-.stats-table td,
 .stats-table th {
-  font-size: 0.875em;
+  padding: 0.5em;
+  font-size: 0.8em;
+}
+
+.stats-table td {
+  padding: 0.5em;
+  font-size: 0.825em;
   vertical-align: top;
 }
 

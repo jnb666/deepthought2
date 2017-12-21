@@ -3,6 +3,7 @@ package nnet
 import (
 	"fmt"
 	"github.com/jnb666/deepthought2/num"
+	"html/template"
 	"math"
 	"math/rand"
 	"time"
@@ -89,11 +90,21 @@ func (s *Average) Add(x float64) {
 	}
 }
 
-func (s *Average) String() string {
-	if s.StdDev < 0.01 {
-		return fmt.Sprintf("%.2f", s.Mean)
+func (s *Average) HTML() template.HTML {
+	var text string
+	if s.Mean > 10 {
+		if s.StdDev < 0.1 {
+			text = fmt.Sprintf("%.1f", s.Mean)
+		} else {
+			text = fmt.Sprintf("%.1f&PlusMinus;%.1f", s.Mean, s.StdDev)
+		}
 	}
-	return fmt.Sprintf("%.2f+-%.2f", s.Mean, s.StdDev)
+	if s.StdDev < 0.01 {
+		text = fmt.Sprintf("%.2f", s.Mean)
+	} else {
+		text = fmt.Sprintf("%.2f&PlusMinus;%.2f", s.Mean, s.StdDev)
+	}
+	return template.HTML(text)
 }
 
 // Tester interface to evaluate the performance after each epoch, Test method returns true if training should stop.
