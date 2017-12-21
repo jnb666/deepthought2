@@ -76,7 +76,8 @@ body, html {
 
 .img-box {
   float: right;
-  padding: 1em
+  padding-top: 0.5em;
+  padding-right: 1em;
 }
 
 .model-select {

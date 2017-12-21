@@ -51,7 +51,6 @@ type Network struct {
 	rng       *rand.Rand
 	testRng   *rand.Rand
 	view      *viewData
-	run       int
 	updated   bool
 	running   bool
 	stop      bool
@@ -63,6 +62,8 @@ type Network struct {
 type NetworkData struct {
 	Model   string
 	Conf    nnet.Config
+	MaxRun  int
+	Run     int
 	Epoch   int
 	Stats   []nnet.Stats
 	Pred    map[string][]int32
@@ -156,9 +157,10 @@ func (n *Network) Train(restart bool) error {
 	if n.tuneMode {
 		runs = getRunConfig(n.Conf, n.Tuners)
 	}
+	n.MaxRun = len(runs)
 	if restart {
-		if n.Epoch != 0 || n.run != 0 || n.updated {
-			n.run = 0
+		if n.Epoch != 0 || n.Run != 0 || n.updated {
+			n.Run = 0
 			if err := n.Start(runs[0]); err != nil {
 				return err
 			}
@@ -176,15 +178,15 @@ func (n *Network) Train(restart bool) error {
 		n.queue.Profiling(n.Profile)
 		acc := n.queue.NewArray(num.Float32)
 		quit := false
-		for n.run < len(runs) && !quit {
-			if n.run > 0 {
-				if err := n.Start(runs[n.run]); err != nil {
+		for n.Run < n.MaxRun && !quit {
+			if n.Run > 0 {
+				if err := n.Start(runs[n.Run]); err != nil {
 					log.Println(err)
 					return
 				}
 				n.Epoch = 1
 			}
-			log.Printf("train run %d / %d epoch=%d\n", n.run+1, len(runs), n.Epoch)
+			log.Printf("train run %d / %d epoch=%d\n", n.Run+1, len(runs), n.Epoch)
 			epoch := n.Epoch
 			done := false
 			for !done && !quit {
@@ -197,7 +199,7 @@ func (n *Network) Train(restart bool) error {
 				epoch, quit = n.nextEpoch(epoch, done)
 			}
 			if !quit {
-				n.run++
+				n.Run++
 			}
 		}
 		n.Lock()
@@ -241,7 +243,7 @@ func (n *Network) nextEpoch(epoch int, done bool) (int, bool) {
 	n.Unlock()
 	// notify via websocket
 	if n.conn != nil {
-		msg := []byte(strconv.Itoa(epoch))
+		msg := []byte(strconv.Itoa(n.Run+1) + ":" + strconv.Itoa(epoch))
 		err := n.conn.WriteMessage(websocket.TextMessage, msg)
 		if err != nil {
 			log.Println("nextEpoch: error writing to websocket", err)
@@ -261,7 +263,7 @@ func (n *Network) nextEpoch(epoch int, done bool) (int, bool) {
 }
 
 func (n *Network) heading() template.HTML {
-	s := fmt.Sprintf(`%s: epoch <span id="epoch">%d</span> of %d`, n.Model, n.Epoch, n.MaxEpoch)
+	s := fmt.Sprintf(`%s: run <span id="run">%d</span>/%d  epoch <span id="epoch">%d</span>/%d`, n.Model, n.Run, n.MaxRun, n.Epoch, n.MaxEpoch)
 	return template.HTML(s)
 }
 
@@ -348,6 +350,7 @@ func SaveNetwork(data *NetworkData, reset bool) error {
 func LoadNetwork(model string, reset bool) (data *NetworkData, err error) {
 	data = &NetworkData{
 		Model:   model,
+		MaxRun:  1,
 		Stats:   []nnet.Stats{},
 		Pred:    map[string][]int32{},
 		Params:  []LayerData{},

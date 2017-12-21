@@ -19,9 +19,12 @@ window.onload = function () {
             if (iframe) {
                 iframe.contentWindow.location.reload(true);
             }
-            var epoch = document.getElementById('epoch');
-            if (epoch) {
-              epoch.innerHTML = e.data;
+            var msg = e.data.split(':');
+            if (msg.length == 2) {
+                var run = document.getElementById('run');
+                if (run) run.innerHTML = msg[0];
+                var epoch = document.getElementById('epoch');
+                if (epoch) epoch.innerHTML = msg[1];
             }
         };
     }
