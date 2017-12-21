@@ -52,6 +52,7 @@ func main() {
 	r.HandleFunc("/train/{cmd:[a-z]+}", trainPage.Command())
 	r.HandleFunc("/train/set/{opt:[a-z]+}", trainPage.Setopt())
 	r.HandleFunc("/stats", trainPage.Stats())
+	r.HandleFunc("/stats/update", trainPage.Filter()).Methods("POST")
 	r.HandleFunc("/ws", trainPage.Websocket())
 
 	imagePage := web.NewImagePage(t.Clone(), net, scale, rows, cols)

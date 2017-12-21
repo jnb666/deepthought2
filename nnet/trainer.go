@@ -98,11 +98,12 @@ func (s *Average) HTML() template.HTML {
 		} else {
 			text = fmt.Sprintf("%.1f&PlusMinus;%.1f", s.Mean, s.StdDev)
 		}
-	}
-	if s.StdDev < 0.01 {
-		text = fmt.Sprintf("%.2f", s.Mean)
 	} else {
-		text = fmt.Sprintf("%.2f&PlusMinus;%.2f", s.Mean, s.StdDev)
+		if s.StdDev < 0.01 {
+			text = fmt.Sprintf("%.2f", s.Mean)
+		} else {
+			text = fmt.Sprintf("%.2f&PlusMinus;%.2f", s.Mean, s.StdDev)
+		}
 	}
 	return template.HTML(text)
 }

@@ -263,7 +263,7 @@ func (n *Network) nextEpoch(epoch int, done bool) (int, bool) {
 }
 
 func (n *Network) heading() template.HTML {
-	s := fmt.Sprintf(`%s: run <span id="run">%d</span>/%d  epoch <span id="epoch">%d</span>/%d`, n.Model, n.Run, n.MaxRun, n.Epoch, n.MaxEpoch)
+	s := fmt.Sprintf(`%s: run <span id="run">%d</span>/%d  epoch <span id="epoch">%d</span>/%d`, n.Model, n.Run+1, n.MaxRun, n.Epoch, n.MaxEpoch)
 	return template.HTML(s)
 }
 

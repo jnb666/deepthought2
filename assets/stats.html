@@ -23,10 +23,12 @@
     </div>
     {{ if .OptionSelected "history" -}}
     <div class="l-box">
+      <form class="pure-form" action="/stats/update" method="post">
+      <fieldset>
       <table class="stats-table pure-table pure-table-bordered">
         <thead>
           <tr>
-          {{ range .HistoryHeaders }}<th>{{.}}</th>{{ end }}
+          {{ range .HistoryHeaders }}<th>{{.}}</th>{{ end }}<th colspan="2">runs</th>
           </tr>
         </thead>
         <tbody>
@@ -34,11 +36,17 @@
           <tr>
             <td width="15%">{{$h.Params}}</td>
             {{ range $h.Stats }}<td>{{.}}</td>{{ end -}}
-            <td>{{.Runs}} <span style="color:{{$h.Color}};">&FilledSmallSquare;</span></td>
+            <td>{{.Runs}}</td>
+            <td>
+              <input type="checkbox" name="r{{.Id}}" {{if .Enabled}}checked{{end}} onchange="this.form.submit()">
+              {{ if .Enabled }}<br><span style="color:{{$h.Color}};">&FilledSmallSquare;</span>{{ end -}}
+            </td>
           </tr>
           {{ end -}}          
         </tbody>
       </table>
+      </fieldset>
+      </form>
     </div>
     {{ end -}}
   </div>

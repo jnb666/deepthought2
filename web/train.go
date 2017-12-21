@@ -26,14 +26,19 @@ var upgrader = websocket.Upgrader{
 
 type TrainPage struct {
 	*Templates
-	net *Network
+	net      *Network
+	groups   map[string][]int
+	keys     []string
+	disabled map[string]bool
 }
 
 type HistoryRow struct {
-	Params template.HTML
-	Runs   int
-	Stats  []template.HTML
-	Color  string
+	Id      int
+	Params  template.HTML
+	Runs    int
+	Stats   []template.HTML
+	Color   string
+	Enabled bool
 }
 
 func init() {
@@ -42,7 +47,7 @@ func init() {
 
 // Base data for handler functions to perform network training and display the stats
 func NewTrainPage(t *Templates, net *Network) *TrainPage {
-	p := &TrainPage{net: net, Templates: t}
+	p := &TrainPage{net: net, Templates: t, disabled: map[string]bool{}}
 	for _, opt := range []string{"loss", "errors", "history", "clear", "tune"} {
 		p.AddOption(Link{Name: opt, Url: "/train/set/" + opt, Selected: opt == "errors"})
 	}
@@ -123,7 +128,21 @@ func (p *TrainPage) Stats() func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p.net.Lock()
 		defer p.net.Unlock()
+		p.getHistory()
 		p.Exec(w, "stats", p, false)
+	}
+}
+
+// Handler function for the form to filter the stats values
+func (p *TrainPage) Filter() func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p.net.Lock()
+		defer p.net.Unlock()
+		r.ParseForm()
+		for i, key := range p.keys {
+			p.disabled[key] = r.Form.Get(fmt.Sprintf("r%d", i)) == ""
+		}
+		http.Redirect(w, r, "/stats", http.StatusFound)
 	}
 }
 
@@ -158,37 +177,36 @@ func (p *TrainPage) HistoryHeaders() []string {
 			head = append(head, h)
 		}
 	}
-	return append(head, "run time", "runs")
+	return append(head, "run time")
 }
 
 // sort into groups for each set of runs with given params
-func (p *TrainPage) historyGroup() (map[string][]int, []string) {
-	keys := []string{}
-	groups := make(map[string][]int)
+func (p *TrainPage) getHistory() {
+	p.keys = []string{}
+	p.groups = make(map[string][]int)
 	for i, h := range p.net.History {
 		plist := make([]string, len(tuneOpts))
 		for i, p := range tuneOpts {
 			plist[i] = fmt.Sprintf("%s=%v", tuneOptHtml[i], h.Conf.Get(p))
 		}
 		params := strings.Join(plist, " ")
-		if val, ok := groups[params]; ok {
-			groups[params] = append(val, i)
+		if val, ok := p.groups[params]; ok {
+			p.groups[params] = append(val, i)
 		} else {
-			groups[params] = []int{i}
-			keys = append(keys, params)
+			p.groups[params] = []int{i}
+			p.keys = append(p.keys, params)
 		}
 	}
-	sort.Strings(keys)
-	return groups, keys
+	sort.Strings(p.keys)
 }
 
 func (p *TrainPage) History() []HistoryRow {
-	groups, keys := p.historyGroup()
 	statsHead := p.StatsHeaders()
 	table := []HistoryRow{}
-	for i, params := range keys {
+	setId := 0
+	for i, params := range p.keys {
 		stats := new(statsTable)
-		for _, i := range groups[params] {
+		for _, i := range p.groups[params] {
 			h := p.net.History[i]
 			stats.add(float64(h.Stats.Epoch))
 			for j, val := range h.Stats.Values {
@@ -200,9 +218,14 @@ func (p *TrainPage) History() []HistoryRow {
 			stats.next()
 		}
 		r := HistoryRow{
-			Runs:   len(groups[params]),
-			Params: template.HTML(params),
-			Color:  htmlColor(plotutil.Color(i)),
+			Id:      i,
+			Runs:    len(p.groups[params]),
+			Params:  template.HTML(params),
+			Enabled: !p.disabled[params],
+		}
+		if r.Enabled {
+			r.Color = htmlColor(plotutil.Color(setId))
+			setId++
 		}
 		for _, s := range stats.avg {
 			r.Stats = append(r.Stats, s.HTML())
@@ -248,10 +271,13 @@ func (p *TrainPage) HistoryPlot(width, height int) template.HTML {
 		}
 	}
 	var pt struct{ X, Y float64 }
-	groups, keys := p.historyGroup()
-	for setId, params := range keys {
+	setId := 0
+	for _, params := range p.keys {
+		if p.disabled[params] {
+			continue
+		}
 		var pts plotter.XYs
-		for _, i := range groups[params] {
+		for _, i := range p.groups[params] {
 			h := p.net.History[i]
 			if ix < len(h.Stats.Values) {
 				pt.X = h.Stats.Elapsed.Seconds()
@@ -262,8 +288,9 @@ func (p *TrainPage) HistoryPlot(width, height int) template.HTML {
 		s, _ := plotter.NewScatter(pts)
 		s.GlyphStyle.Shape = draw.BoxGlyph{}
 		s.GlyphStyle.Color = plotutil.Color(setId)
-		s.GlyphStyle.Radius *= 1.25
+		s.GlyphStyle.Radius *= 1.5
 		plt.Add(s)
+		setId++
 	}
 	return writePlot(plt, width, height)
 }
