@@ -9,7 +9,6 @@ Features:
 * Example data models including MNist digit recognition.
 
 To do:
-* Automatic tuning of parameters.
 * Additional examples.
 
 Dependencies:

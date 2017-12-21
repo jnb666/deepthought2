@@ -11,6 +11,7 @@ func main() {
 		Eta:           0.03,
 		Lambda:        0.1,
 		NormalWeights: true,
+		TrainRuns:     1,
 		MaxEpoch:      10,
 		TrainBatch:    10,
 		TestBatch:     100,

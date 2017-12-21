@@ -15,6 +15,7 @@ func main() {
 	conf := nnet.Config{
 		DataSet:      "xor",
 		Eta:          10,
+		TrainRuns:    1,
 		MaxEpoch:     500,
 		LogEvery:     25,
 		MinLoss:      0.05,

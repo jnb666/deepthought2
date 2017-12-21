@@ -10,6 +10,7 @@ func main() {
 		DataSet:       "mnist",
 		Eta:           0.1,
 		NormalWeights: true,
+		TrainRuns:     1,
 		MaxEpoch:      10,
 		TrainBatch:    10,
 		TestBatch:     100,

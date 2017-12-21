@@ -5,6 +5,7 @@ import (
 	"github.com/gorilla/mux"
 	"html/template"
 	"image"
+	"image/color"
 	"image/png"
 	"log"
 	"net/http"
@@ -47,8 +48,7 @@ func (p *ViewPage) Base() func(w http.ResponseWriter, r *http.Request) {
 		p.Page = vars["page"]
 		p.Select("/view/" + p.Page + "/")
 		p.Heading = p.net.heading()
-		p.Toplevel = true
-		p.Exec(w, "view", p)
+		p.Exec(w, "view", p, true)
 	}
 }
 
@@ -76,8 +76,7 @@ func (p *ViewPage) Network() func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		p.Page = vars["page"]
 		p.net.view.update(p.Index - 1)
-		p.Toplevel = false
-		p.Exec(w, "net", p)
+		p.Exec(w, "net", p, false)
 	}
 }
 
@@ -110,8 +109,8 @@ func (p *ViewPage) Layers() []LayerInfo {
 		out := len(p.info) - 1
 		if l := p.net.view.lastLayer(); l != nil && out >= 0 {
 			for i, val := range l.outData {
-				v := int(255 * (1 - val))
-				tag := fmt.Sprintf(`<span style="color:#%02x%02x%02x;">%d</span>`, v, v, v, i)
+				col := color.Gray{Y: uint8(255 * (1 - val))}
+				tag := fmt.Sprintf(`<span style="color:%s;">%d</span>`, htmlColor(col), i)
 				p.info[out].Values = append(p.info[out].Values, template.HTML(tag))
 			}
 

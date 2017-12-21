@@ -74,6 +74,11 @@ body, html {
   font-size: 0.875em;
 }
 
+.img-box {
+  float: right;
+  padding: 1em
+}
+
 .model-select {
   background: #0000C0;
 }
@@ -145,6 +150,12 @@ body, html {
 
 .error-text {
   color: red;
+  font-weight: bold;
+}
+
+.read-only input[readonly] {
+  color: black;
+  background-color: white;
 }
 
 img.pixels {

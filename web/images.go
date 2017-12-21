@@ -63,8 +63,7 @@ func (p *ImagePage) Base() func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := p.net.Data[p.Dset]; !ok {
 			template = "blank"
 		}
-		p.Toplevel = true
-		p.Exec(w, template, p)
+		p.Exec(w, template, p, true)
 	}
 }
 
@@ -79,8 +78,7 @@ func (p *ImagePage) Grid() func(w http.ResponseWriter, r *http.Request) {
 		if p.Page > p.Pages || p.Page < 1 {
 			p.Page = 1
 		}
-		p.Toplevel = false
-		p.Exec(w, "grid", p)
+		p.Exec(w, "grid", p, false)
 	}
 }
 

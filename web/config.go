@@ -16,9 +16,10 @@ var ErrMissingField = errors.New("value is required")
 
 type ConfigPage struct {
 	*Templates
-	Fields []Field
-	Layers []Layer
-	net    *Network
+	Fields     []Field
+	Layers     []Layer
+	TuneFields []Field
+	net        *Network
 }
 
 type Field struct {
@@ -46,7 +47,7 @@ func NewConfigPage(t *Templates, net *Network) *ConfigPage {
 func (p *ConfigPage) init(data *NetworkData) error {
 	if data != nil {
 		p.net.NetworkData = data
-		if err := p.net.Init(); err != nil {
+		if err := p.net.Init(p.net.Conf); err != nil {
 			return err
 		}
 		if err := p.net.Import(); err != nil {
@@ -55,6 +56,7 @@ func (p *ConfigPage) init(data *NetworkData) error {
 	}
 	p.Fields = getFields(&p.net.Conf, p.net.Model)
 	p.Layers = getLayers(&p.net.Conf)
+	p.TuneFields = getTuneFields(p.net.Tuners)
 	return nil
 }
 
@@ -65,7 +67,7 @@ func (p *ConfigPage) Base() func(w http.ResponseWriter, r *http.Request) {
 		defer p.net.Unlock()
 		p.Select("/config")
 		p.Heading = p.getHeading()
-		p.Exec(w, "config", p)
+		p.Exec(w, "config", p, true)
 	}
 }
 
@@ -98,7 +100,7 @@ func (p *ConfigPage) Save() func(w http.ResponseWriter, r *http.Request) {
 		conf := p.net.Conf
 		model := p.net.Model
 		for i, fld := range p.Fields {
-			val := r.Form.Get(fld.Name)
+			val := strings.TrimSpace(r.Form.Get(fld.Name))
 			var err error
 			if fld.Name == "Model" {
 				if val != "" {
@@ -121,11 +123,15 @@ func (p *ConfigPage) Save() func(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !haveErrors {
-			p.net.Model = model
+			newModel := model != p.net.Model
+			if newModel {
+				p.net.Model = model
+				p.net.ClearHistory()
+			}
 			p.net.Conf = conf
 			p.net.Export()
 			p.net.updated = true
-			if err := SaveNetwork(p.net.NetworkData); err != nil {
+			if err := SaveNetwork(p.net.NetworkData, newModel); err != nil {
 				p.logError(w, http.StatusBadRequest, err)
 				return
 			}
@@ -148,9 +154,48 @@ func (p *ConfigPage) Reset() func(w http.ResponseWriter, r *http.Request) {
 			p.logError(w, http.StatusInternalServerError, err)
 			return
 		}
-		if err := SaveNetwork(data); err != nil {
+		if err := SaveNetwork(data, false); err != nil {
 			p.logError(w, http.StatusBadRequest, err)
 			return
+		}
+		http.Redirect(w, r, "/config", http.StatusFound)
+	}
+}
+
+// Handler function for the tune form
+func (p *ConfigPage) Tune() func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p.net.Lock()
+		defer p.net.Unlock()
+		r.ParseForm()
+		haveErrors := false
+		vals := make([][]string, len(p.TuneFields))
+		var conf nnet.Config
+		for i, f := range p.TuneFields {
+			sval := r.Form.Get(f.Name)
+			//log.Println("update tuner", f.Name, "=>", sval)
+			p.TuneFields[i].Value = sval
+			vals[i] = strings.Fields(sval)
+			var err error
+			if len(vals[i]) == 0 {
+				err = ErrMissingField
+			}
+			for _, v := range vals[i] {
+				if _, err = conf.SetString(f.Name, v); err != nil {
+					break
+				}
+			}
+			p.TuneFields[i].Error = ""
+			if err != nil {
+				p.TuneFields[i].Error = "invalid syntax"
+				haveErrors = true
+			}
+		}
+		if !haveErrors {
+			for i, val := range vals {
+				p.net.Tuners[i].Values = val
+			}
+			p.TuneFields = getTuneFields(p.net.Tuners)
 		}
 		http.Redirect(w, r, "/config", http.StatusFound)
 	}
@@ -206,4 +251,16 @@ func getLayers(conf *nnet.Config) []Layer {
 		layers[i].Desc = l.Unmarshal().ToString()
 	}
 	return layers
+}
+
+func getTuneFields(tuners []TuneParams) []Field {
+	flds := make([]Field, len(tuners))
+	for i, f := range tuners {
+		val := make([]string, len(f.Values))
+		for i, v := range f.Values {
+			val[i] = fmt.Sprint(v)
+		}
+		flds[i] = Field{Name: f.Name, Value: strings.Join(val, " ")}
+	}
+	return flds
 }

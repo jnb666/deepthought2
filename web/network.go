@@ -28,6 +28,9 @@ const (
 	factorMinWeights = 20
 )
 
+var tuneOpts = []string{"Eta", "Lambda", "TrainBatch"}
+var tuneOptHtml = []string{"&eta;", "&lambda;", "batch"}
+
 // color map definition
 const cmin = -1
 const cmax = 1
@@ -38,26 +41,34 @@ var cmap = [][3]float32{{0, 0, .5}, {0, 0, 1}, {0, .5, 1}, {0, 1, 1}, {.5, 1, .5
 type Network struct {
 	*NetworkData
 	*nnet.Network
-	*Tester
 	Data      map[string]nnet.Data
 	Labels    map[string][]int32
+	test      *nnet.TestBase
 	trans     *img.Transformer
 	conn      *websocket.Conn
 	trainData *nnet.Dataset
 	queue     num.Queue
 	rng       *rand.Rand
+	testRng   *rand.Rand
 	view      *viewData
+	run       int
 	updated   bool
+	running   bool
+	stop      bool
+	tuneMode  bool
+	sync.Mutex
 }
 
 // Embedded structs used to persist state to file
 type NetworkData struct {
-	Model  string
-	Conf   nnet.Config
-	Epoch  int
-	Stats  []nnet.Stats
-	Pred   map[string][]int32
-	Params []LayerData
+	Model   string
+	Conf    nnet.Config
+	Epoch   int
+	Stats   []nnet.Stats
+	Pred    map[string][]int32
+	Params  []LayerData
+	History []HistoryData
+	Tuners  []TuneParams
 }
 
 type LayerData struct {
@@ -66,16 +77,26 @@ type LayerData struct {
 	Biases  []float32
 }
 
+type HistoryData struct {
+	Stats nnet.Stats
+	Conf  nnet.Config
+}
+
+type TuneParams struct {
+	Name   string
+	Values []string
+}
+
 // Create a new network and load config from data given model name
 func NewNetwork(model string) (*Network, error) {
-	n := &Network{Tester: NewTester()}
+	n := &Network{test: nnet.NewTestBase()}
 	log.Println("load model:", model)
 	var err error
 	n.NetworkData, err = LoadNetwork(model, false)
 	if err != nil {
 		return nil, err
 	}
-	if err := n.Init(); err != nil {
+	if err := n.Init(n.Conf); err != nil {
 		return nil, err
 	}
 	if err := n.Import(); err != nil {
@@ -85,35 +106,41 @@ func NewNetwork(model string) (*Network, error) {
 }
 
 // Initialise the network
-func (n *Network) Init() error {
-	log.Printf("init network: dataSet=%s useGPU=%v\n", n.Conf.DataSet, n.Conf.UseGPU)
+func (n *Network) Init(conf nnet.Config) error {
+	log.Printf("init network: dataSet=%s useGPU=%v\n", conf.DataSet, conf.UseGPU)
 	var err error
-	if n.Data, err = nnet.LoadData(n.Conf.DataSet); err != nil {
+	if n.Data, err = nnet.LoadData(conf.DataSet); err != nil {
 		return err
 	}
-	dev := num.NewDevice(n.Conf.UseGPU)
+	dev := num.NewDevice(conf.UseGPU)
 	n.queue = dev.NewQueue()
-	n.rng = nnet.SetSeed(n.Conf.RandSeed)
-	n.trainData = nnet.NewDataset(n.queue.Dev(), n.Data["train"], n.Conf.TrainBatch, n.Conf.MaxSamples, n.Conf.FlattenInput, n.rng)
-	n.Network = nnet.New(n.queue, n.Conf, n.trainData.BatchSize, n.trainData.Shape())
+	n.rng = nnet.SetSeed(conf.RandSeed)
+	n.testRng = nnet.SetSeed(conf.RandSeed)
+	n.trainData = nnet.NewDataset(n.queue.Dev(), n.Data["train"], conf.TrainBatch, conf.MaxSamples, conf.FlattenInput, n.rng)
+	n.Network = nnet.New(n.queue, conf, n.trainData.BatchSize, n.trainData.Shape())
 	if n.DebugLevel >= 1 {
 		fmt.Println(n.Network)
 	}
-	n.Labels = n.initTester(n.queue, n.Data, n.Conf)
+	n.test.Init(n.queue, conf, n.Data, n.testRng).Predict()
+	n.Labels = make(map[string][]int32)
+	for key, dset := range n.test.Data {
+		n.Labels[key] = make([]int32, dset.Samples)
+		dset.Label(seq(dset.Samples), n.Labels[key])
+	}
 	dims := n.trainData.Shape()
 	if len(dims) >= 2 {
 		n.trans = img.NewTransformer(dims[1], dims[0], img.ConvAccel, n.testRng)
 	}
-	n.view = newViewData(n.queue, n.Data, n.Conf)
+	n.view = newViewData(n.queue, n.Data, conf)
 	return nil
 }
 
 // Initialise for new training run
-func (n *Network) Start() error {
-	if err := n.Init(); err != nil {
+func (n *Network) Start(conf nnet.Config) error {
+	if err := n.Init(conf); err != nil {
 		return err
 	}
-	n.Tester.base.Reset()
+	n.test.Reset()
 	log.Println("init weights")
 	n.InitWeights(n.rng)
 	n.Network.CopyTo(n.view.Network, true)
@@ -124,10 +151,15 @@ func (n *Network) Start() error {
 
 // Perform training run
 func (n *Network) Train(restart bool) error {
-	log.Printf("train: start %s - restart=%v\n", n.Model, restart)
+	log.Printf("train %s: restart=%v\n", n.Model, restart)
+	runs := []nnet.Config{n.Conf}
+	if n.tuneMode {
+		runs = getRunConfig(n.Conf, n.Tuners)
+	}
 	if restart {
-		if n.Epoch != 0 || n.updated {
-			if err := n.Start(); err != nil {
+		if n.Epoch != 0 || n.run != 0 || n.updated {
+			n.run = 0
+			if err := n.Start(runs[0]); err != nil {
 				return err
 			}
 		}
@@ -143,22 +175,36 @@ func (n *Network) Train(restart bool) error {
 	go func() {
 		n.queue.Profiling(n.Profile)
 		acc := n.queue.NewArray(num.Float32)
-		done := false
-		epoch := n.Epoch
-		start := time.Now()
-		for !done {
-			if n.Tester.base.Epilogue() {
-				n.trainData.Rewind()
+		quit := false
+		for n.run < len(runs) && !quit {
+			if n.run > 0 {
+				if err := n.Start(runs[n.run]); err != nil {
+					log.Println(err)
+					return
+				}
+				n.Epoch = 1
 			}
-			loss := nnet.TrainEpoch(n.Network, n.trainData, acc)
-			done = n.Tester.Test(n.Network, epoch, loss, start)
-			epoch = n.nextEpoch(epoch)
+			log.Printf("train run %d / %d epoch=%d\n", n.run+1, len(runs), n.Epoch)
+			epoch := n.Epoch
+			done := false
+			for !done && !quit {
+				if n.test.Epilogue() {
+					n.trainData.Rewind()
+				}
+				start := time.Now()
+				loss := nnet.TrainEpoch(n.Network, n.trainData, acc)
+				done = n.test.Test(n.Network, epoch, loss, start)
+				epoch, quit = n.nextEpoch(epoch, done)
+			}
+			if !quit {
+				n.run++
+			}
 		}
 		n.Lock()
 		n.running = false
 		n.stop = false
 		n.Unlock()
-		log.Println("train: end")
+		log.Println("train: end - quit =", quit)
 		if n.Profile {
 			fmt.Printf("== Profile ==\n%s\n", n.queue.Profile())
 		}
@@ -166,11 +212,32 @@ func (n *Network) Train(restart bool) error {
 	return nil
 }
 
-func (n *Network) nextEpoch(epoch int) int {
+func (n *Network) nextEpoch(epoch int, done bool) (int, bool) {
+	quit := false
 	n.Lock()
 	n.Epoch = epoch
-	n.predict(n.Pred)
+	// check for interrupt
+	if n.stop {
+		n.stop = false
+		n.running = false
+		quit = true
+	}
+	// update predictions for each image
+	for key, pred := range n.test.Pred {
+		if arr, ok := n.Pred[key]; !ok || len(arr) != len(pred) {
+			n.Pred[key] = make([]int32, len(pred))
+		}
+		copy(n.Pred[key], pred)
+	}
+	// update visualisation
 	n.Network.CopyTo(n.view.Network, true)
+	// update history
+	if done && !quit && len(n.test.Stats) > 0 {
+		n.History = append(n.History, HistoryData{
+			Stats: n.test.Stats[len(n.test.Stats)-1].Copy(),
+			Conf:  n.Config.Copy(),
+		})
+	}
 	n.Unlock()
 	// notify via websocket
 	if n.conn != nil {
@@ -185,12 +252,12 @@ func (n *Network) nextEpoch(epoch int) int {
 	// save state to disk
 	n.Lock()
 	n.Export()
-	err := SaveNetwork(n.NetworkData)
+	err := SaveNetwork(n.NetworkData, false)
 	n.Unlock()
 	if err != nil {
 		log.Println("nextEpoch: error saving network:", err)
 	}
-	return epoch + 1
+	return epoch + 1, quit
 }
 
 func (n *Network) heading() template.HTML {
@@ -200,12 +267,12 @@ func (n *Network) heading() template.HTML {
 
 // Export current state prior to saving to file
 func (n *Network) Export() {
-	n.Stats = n.base.Stats
+	n.Stats = n.test.Stats
 	n.Params = []LayerData{}
-	if n.base.Net == nil || n.base.Net.Layers == nil {
+	if n.test.Net == nil || n.test.Net.Layers == nil {
 		return
 	}
-	for i, layer := range n.base.Net.Layers {
+	for i, layer := range n.test.Net.Layers {
 		if l, ok := layer.(nnet.ParamLayer); ok {
 			W, B := l.Params()
 			d := LayerData{
@@ -227,7 +294,7 @@ func (n *Network) Export() {
 
 // Import current state after loading from file
 func (n *Network) Import() error {
-	n.base.Stats = n.Stats
+	n.test.Stats = n.Stats
 	if n.Epoch == 0 {
 		log.Println("init weights")
 		n.InitWeights(n.rng)
@@ -258,84 +325,33 @@ func (n *Network) Import() error {
 	return nil
 }
 
-// Network tester which evaluates the error and stores the stats
-type Tester struct {
-	base    *nnet.TestBase
-	testRng *rand.Rand
-	running bool
-	stop    bool
-	sync.Mutex
-}
-
-// Create new tester instance and get initial prediction
-func NewTester() *Tester {
-	return &Tester{base: nnet.NewTestBase()}
-}
-
-// Initialise tester at start of run
-func (t *Tester) initTester(queue num.Queue, data map[string]nnet.Data, conf nnet.Config) map[string][]int32 {
-	t.testRng = nnet.SetSeed(conf.RandSeed)
-	t.base.Init(queue, conf, data, t.testRng).Predict()
-	labels := make(map[string][]int32)
-	for key, dset := range t.base.Data {
-		labels[key] = make([]int32, dset.Samples)
-		dset.Label(seq(dset.Samples), labels[key])
-	}
-	return labels
-}
-
-// Update network stats and trigger websocket message to refresh the page
-func (t *Tester) Test(net *nnet.Network, epoch int, loss float64, start time.Time) bool {
-	done := t.base.Test(net, epoch, loss, start)
-	t.Lock()
-	if t.stop {
-		t.stop = false
-		t.running = false
-		done = true
-	}
-	t.Unlock()
-	return done
-}
-
-// Stop training run if in progress
-func (t *Tester) Stop() {
-	if t.running {
-		t.stop = true
-		for t.running {
-			time.Sleep(50 * time.Millisecond)
-		}
-	}
-}
-
-// Export predicted values
-func (t *Tester) predict(out map[string][]int32) {
-	for key, pred := range t.base.Pred {
-		if arr, ok := out[key]; !ok || len(arr) != len(pred) {
-			out[key] = make([]int32, len(pred))
-		}
-		copy(out[key], pred)
-	}
-}
-
 // Encode data in gob format and save to file under nnet.DataDir
-func SaveNetwork(data *NetworkData) error {
-	name := data.Model + ".net"
-	filePath := path.Join(nnet.DataDir, name)
-	f, err := os.Create(filePath)
-	if err != nil {
-		return err
+func SaveNetwork(data *NetworkData, reset bool) error {
+	model := data.Model
+	filePath := path.Join(nnet.DataDir, model+".net")
+	if reset {
+		if err := data.Conf.Save(model + ".conf"); err != nil {
+			return err
+		}
+		os.Remove(filePath)
+		return nil
 	}
-	defer f.Close()
-	return gob.NewEncoder(f).Encode(*data)
+	if f, err := os.Create(filePath); err != nil {
+		return err
+	} else {
+		defer f.Close()
+		return gob.NewEncoder(f).Encode(*data)
+	}
 }
 
 // Read back gob encoded data file, if not found or reset is set then load default config.
 func LoadNetwork(model string, reset bool) (data *NetworkData, err error) {
 	data = &NetworkData{
-		Model:  model,
-		Stats:  []nnet.Stats{},
-		Pred:   map[string][]int32{},
-		Params: []LayerData{},
+		Model:   model,
+		Stats:   []nnet.Stats{},
+		Pred:    map[string][]int32{},
+		Params:  []LayerData{},
+		History: []HistoryData{},
 	}
 	if !reset {
 		if err = loadGob(model+".net", data); err != nil {
@@ -345,7 +361,21 @@ func LoadNetwork(model string, reset bool) (data *NetworkData, err error) {
 	if reset {
 		data.Conf, err = nnet.LoadConfig(model + ".conf")
 	}
+	if data.Tuners == nil {
+		for _, opt := range tuneOpts {
+			data.Tuners = append(data.Tuners, TuneParams{
+				Name:   opt,
+				Values: []string{fmt.Sprint(data.Conf.Get(opt))},
+			})
+		}
+	}
+
 	return data, err
+}
+
+// Clear history stats
+func (n *NetworkData) ClearHistory() {
+	n.History = []HistoryData{}
 }
 
 func loadGob(name string, data *NetworkData) error {
@@ -357,6 +387,53 @@ func loadGob(name string, data *NetworkData) error {
 	defer f.Close()
 	log.Println("loading network config from", name)
 	return gob.NewDecoder(f).Decode(data)
+}
+
+// For hyperparameter tuning, get config per run
+func getRunConfig(conf nnet.Config, params []TuneParams) []nnet.Config {
+	for _, p := range params {
+		conf = setConfig(conf, p.Name, p.Values[0])
+	}
+	logConfig(conf)
+	list := permute(conf, params, len(params)-1, []nnet.Config{conf})
+	log.Printf("getRunConfig: runs=%d cases=%d\n", conf.TrainRuns, len(list))
+	res := []nnet.Config{}
+	for run := 0; run < conf.TrainRuns; run++ {
+		res = append(res, list...)
+	}
+	return res
+}
+
+func permute(conf nnet.Config, params []TuneParams, n int, list []nnet.Config) []nnet.Config {
+	if n < 0 {
+		return list
+	}
+	for i, val := range params[n].Values {
+		if i > 0 {
+			conf = setConfig(conf, params[n].Name, val)
+			logConfig(conf)
+			list = append(list, conf)
+		}
+		list = permute(conf, params, n-1, list)
+	}
+	return list
+}
+
+func setConfig(c nnet.Config, name string, val string) nnet.Config {
+	var err error
+	c, err = c.SetString(name, val)
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
+func logConfig(c nnet.Config) {
+	var s string
+	for _, name := range tuneOpts {
+		s += fmt.Sprintf("%s=%v ", name, c.Get(name))
+	}
+	log.Println("getRunConfig:", s)
 }
 
 // Data used for network visualtion of weights and outputs

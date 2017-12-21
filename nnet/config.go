@@ -19,6 +19,7 @@ type Config struct {
 	NormalWeights bool
 	FlattenInput  bool
 	Shuffle       bool
+	TrainRuns     int
 	TrainBatch    int
 	TestBatch     int
 	MaxEpoch      int
@@ -46,6 +47,12 @@ func LoadConfig(name string) (c Config, err error) {
 	dec := json.NewDecoder(f)
 	err = dec.Decode(&c)
 	return
+}
+
+func (c Config) Copy() Config {
+	conf := c
+	conf.Layers = append([]LayerConfig{}, c.Layers...)
+	return conf
 }
 
 // Append layers to the config struct

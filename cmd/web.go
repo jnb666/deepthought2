@@ -71,6 +71,7 @@ func main() {
 	r.HandleFunc("/config/load", configPage.Load())
 	r.HandleFunc("/config/save", configPage.Save()).Methods("POST")
 	r.HandleFunc("/config/reset", configPage.Reset())
+	r.HandleFunc("/config/tune", configPage.Tune()).Methods("POST")
 
 	r.Handle("/favicon.ico", http.NotFoundHandler())
 	r.NotFoundHandler = t.ErrorHandler(http.StatusNotFound, web.ErrNotFound)

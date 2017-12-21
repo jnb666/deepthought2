@@ -12,6 +12,7 @@ func main() {
 		Lambda:        3.0,
 		NormalWeights: true,
 		FlattenInput:  true,
+		TrainRuns:     1,
 		MaxEpoch:      20,
 		TrainBatch:    10,
 		TestBatch:     100,

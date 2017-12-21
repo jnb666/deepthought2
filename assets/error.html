@@ -3,8 +3,14 @@
 <html lang="en">
 {{ template "header" . -}}
 <body>
+{{ if .Toplevel -}}
 {{ template "menu" . -}}
-<div class="l-box error-text">Error: {{ .Error -}}</div>
+{{ end -}}
+  <div class="pure-g body-container">
+    <div class="pure-u-1">
+		<div class="l-box error-text">Error: {{ .Error -}}</div>
+	</div>
+  </div>
 </div>
 </div>
 </body>

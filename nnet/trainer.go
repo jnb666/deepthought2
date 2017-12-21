@@ -3,6 +3,7 @@ package nnet
 import (
 	"fmt"
 	"github.com/jnb666/deepthought2/num"
+	"math"
 	"math/rand"
 	"time"
 )
@@ -35,12 +36,25 @@ func StatsHeaders(d map[string]Data) []string {
 	return h
 }
 
+func (s Stats) Copy() Stats {
+	stats := s
+	stats.Values = append([]float64{}, s.Values...)
+	return stats
+}
+
 func (s Stats) Format() []string {
-	str := []string{fmt.Sprintf("%7.4f", s.Values[0])}
-	for _, v := range s.Values[1:] {
-		str = append(str, fmt.Sprintf("%6.2f%%", v*100))
+	str := make([]string, len(s.Values))
+	for i := range str {
+		str[i] = s.FormatItem(i)
 	}
 	return str
+}
+
+func (s Stats) FormatItem(i int) string {
+	if i == 0 {
+		return fmt.Sprintf("%7.4f", s.Values[0])
+	}
+	return fmt.Sprintf("%6.2f%%", s.Values[i]*100)
 }
 
 // Calc exponentional moving average
@@ -51,6 +65,35 @@ func (e EMA) Add(val float64) float64 {
 		return val
 	}
 	return val*emaK + float64(e)*(1-emaK)
+}
+
+// Running mean and stddev as per http://www.johndcook.com/blog/standard_deviation/
+type Average struct {
+	Count, Mean float64
+	Var, StdDev float64
+	oldM, oldV  float64
+}
+
+func (s *Average) Add(x float64) {
+	s.Count++
+	if s.Count == 1 {
+		s.oldM, s.Mean = x, x
+		s.oldV = 0
+	} else {
+		s.Mean = s.oldM + (x-s.oldM)/s.Count
+		s.Var = s.oldV + (x-s.oldM)*(x-s.Mean)
+		s.oldM, s.oldV = s.Mean, s.Var
+		if s.Count > 1 {
+			s.StdDev = math.Sqrt(s.Var / (s.Count - 1))
+		}
+	}
+}
+
+func (s *Average) String() string {
+	if s.StdDev < 0.01 {
+		return fmt.Sprintf("%.2f", s.Mean)
+	}
+	return fmt.Sprintf("%.2f+-%.2f", s.Mean, s.StdDev)
 }
 
 // Tester interface to evaluate the performance after each epoch, Test method returns true if training should stop.
@@ -148,6 +191,9 @@ func (t *TestBase) Test(net *Network, epoch int, loss float64, start time.Time) 
 		}
 	}
 	s.Elapsed = time.Since(start)
+	if len(t.Stats) > 0 {
+		s.Elapsed += t.Stats[len(t.Stats)-1].Elapsed
+	}
 	t.Stats = append(t.Stats, s)
 	done := false
 	if epoch >= net.MaxEpoch || loss <= net.MinLoss {
@@ -200,11 +246,11 @@ func (t testLogger) Test(net *Network, epoch int, loss float64, start time.Time)
 func Train(net *Network, dset *Dataset, test Tester) {
 	acc := net.queue.NewArray(num.Float32)
 	done := false
-	start := time.Now()
 	for epoch := 1; epoch <= net.MaxEpoch && !done; epoch++ {
 		if test.Epilogue() {
 			dset.Rewind()
 		}
+		start := time.Now()
 		loss := TrainEpoch(net, dset, acc)
 		done = test.Test(net, epoch, loss, start)
 	}
