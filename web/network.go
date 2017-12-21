@@ -17,6 +17,7 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -376,11 +377,6 @@ func LoadNetwork(model string, reset bool) (data *NetworkData, err error) {
 	return data, err
 }
 
-// Clear history stats
-func (n *NetworkData) ClearHistory() {
-	n.History = []HistoryData{}
-}
-
 func loadGob(name string, data *NetworkData) error {
 	filePath := path.Join(nnet.DataDir, name)
 	f, err := os.Open(filePath)
@@ -437,6 +433,14 @@ func logConfig(c nnet.Config) {
 		s += fmt.Sprintf("%s=%v ", name, c.Get(name))
 	}
 	log.Println("getRunConfig:", s)
+}
+
+func tuneParams(h HistoryData) string {
+	plist := make([]string, len(tuneOpts))
+	for i, p := range tuneOpts {
+		plist[i] = fmt.Sprintf("%s=%v", tuneOptHtml[i], h.Conf.Get(p))
+	}
+	return strings.Join(plist, " ")
 }
 
 // Data used for network visualtion of weights and outputs

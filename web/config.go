@@ -126,7 +126,7 @@ func (p *ConfigPage) Save() func(w http.ResponseWriter, r *http.Request) {
 			newModel := model != p.net.Model
 			if newModel {
 				p.net.Model = model
-				p.net.ClearHistory()
+				p.net.History = p.net.History[:0]
 			}
 			p.net.Conf = conf
 			p.net.Export()

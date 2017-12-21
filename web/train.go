@@ -48,7 +48,7 @@ func init() {
 // Base data for handler functions to perform network training and display the stats
 func NewTrainPage(t *Templates, net *Network) *TrainPage {
 	p := &TrainPage{net: net, Templates: t, disabled: map[string]bool{}}
-	for _, opt := range []string{"loss", "errors", "history", "clear", "tune"} {
+	for _, opt := range []string{"loss", "errors", "history", "clear", "purge", "tune"} {
 		p.AddOption(Link{Name: opt, Url: "/train/set/" + opt, Selected: opt == "errors"})
 	}
 	return p
@@ -75,7 +75,15 @@ func (p *TrainPage) Setopt() func(w http.ResponseWriter, r *http.Request) {
 		default:
 			p.ToggleOption(opt)
 		case "clear":
-			p.net.ClearHistory()
+			p.net.History = p.net.History[:0]
+		case "purge":
+			hNew := []HistoryData{}
+			for _, h := range p.net.History {
+				if !p.disabled[tuneParams(h)] {
+					hNew = append(hNew, h)
+				}
+			}
+			p.net.History = hNew
 		case "tune":
 			p.net.tuneMode = p.ToggleOption(opt)
 		}
@@ -185,11 +193,7 @@ func (p *TrainPage) getHistory() {
 	p.keys = []string{}
 	p.groups = make(map[string][]int)
 	for i, h := range p.net.History {
-		plist := make([]string, len(tuneOpts))
-		for i, p := range tuneOpts {
-			plist[i] = fmt.Sprintf("%s=%v", tuneOptHtml[i], h.Conf.Get(p))
-		}
-		params := strings.Join(plist, " ")
+		params := tuneParams(h)
 		if val, ok := p.groups[params]; ok {
 			p.groups[params] = append(val, i)
 		} else {
