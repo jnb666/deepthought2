@@ -82,6 +82,7 @@ func (b Buffer) Clear() Buffer {
 func (b Buffer) Free() {
 	if b.Size > 0 {
 		C.cudaFree(b.Ptr)
+		b.Size = 0
 	}
 }
 

@@ -48,7 +48,7 @@ func init() {
 // Base data for handler functions to perform network training and display the stats
 func NewTrainPage(t *Templates, net *Network) *TrainPage {
 	p := &TrainPage{net: net, Templates: t, disabled: map[string]bool{}}
-	for _, opt := range []string{"loss", "errors", "history", "clear", "purge", "tune"} {
+	for _, opt := range []string{"loss", "errors", "history", "tune", "purge", "clear"} {
 		p.AddOption(Link{Name: opt, Url: "/train/set/" + opt, Selected: opt == "errors"})
 	}
 	return p
@@ -74,18 +74,25 @@ func (p *TrainPage) Setopt() func(w http.ResponseWriter, r *http.Request) {
 		switch opt {
 		default:
 			p.ToggleOption(opt)
-		case "clear":
-			p.net.History = p.net.History[:0]
-		case "purge":
-			hNew := []HistoryData{}
-			for _, h := range p.net.History {
-				if !p.disabled[tuneParams(h)] {
-					hNew = append(hNew, h)
-				}
-			}
-			p.net.History = hNew
 		case "tune":
 			p.net.tuneMode = p.ToggleOption(opt)
+		case "clear", "purge":
+			if opt == "clear" {
+				p.net.History = p.net.History[:0]
+			} else {
+				hNew := []HistoryData{}
+				for _, h := range p.net.History {
+					if !p.disabled[tuneParams(h)] {
+						hNew = append(hNew, h)
+					}
+				}
+				p.net.History = hNew
+			}
+			p.net.Export()
+			if err := SaveNetwork(p.net.NetworkData, false); err != nil {
+				p.logError(w, http.StatusBadRequest, err)
+				return
+			}
 		}
 		http.Redirect(w, r, "/train", http.StatusFound)
 	}

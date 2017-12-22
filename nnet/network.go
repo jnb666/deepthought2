@@ -51,6 +51,25 @@ func New(queue num.Queue, conf Config, batchSize int, inShape []int) *Network {
 	return n
 }
 
+// release allocated buffers
+func (n *Network) Release() {
+	n.queue.Finish()
+	for _, layer := range n.Layers {
+		layer.Release()
+	}
+	n.classes.Release()
+	n.diffs.Release()
+	n.batchLoss.Release()
+	n.batchErr.Release()
+	n.total.Release()
+	if n.WorkSpace != nil {
+		n.WorkSpace.Release()
+	}
+	if n.inputGrad != nil {
+		n.inputGrad.Release()
+	}
+}
+
 // Initialise network weights using a linear or normal distribution.
 // Weights for each layer are scaled by 1/sqrt(nin)
 func (n *Network) InitWeights(rng *rand.Rand) {

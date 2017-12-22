@@ -59,6 +59,7 @@ type ConvLayer struct {
 	Filter *FilterLayout
 	Algo   [3]int
 	desc   C.cudnnConvolutionDescriptor_t
+	freed  bool
 }
 
 // Create new convolution layer
@@ -109,14 +110,18 @@ func (l *ConvLayer) Ptr() unsafe.Pointer {
 }
 
 func (l *ConvLayer) Release() {
-	C.cudnnDestroyConvolutionDescriptor(l.desc)
+	if !l.freed {
+		C.cudnnDestroyConvolutionDescriptor(l.desc)
+		l.freed = true
+	}
 }
 
 // Max pool layer description
 type PoolLayer struct {
-	Src  *Layout
-	Dst  *Layout
-	desc C.cudnnPoolingDescriptor_t
+	Src   *Layout
+	Dst   *Layout
+	desc  C.cudnnPoolingDescriptor_t
+	freed bool
 }
 
 // Setup new max pooling layer
@@ -144,14 +149,18 @@ func (l *PoolLayer) Ptr() unsafe.Pointer {
 }
 
 func (l *PoolLayer) Release() {
-	C.cudnnDestroyPoolingDescriptor(l.desc)
+	if !l.freed {
+		C.cudnnDestroyPoolingDescriptor(l.desc)
+		l.freed = true
+	}
 }
 
 // Activation layer descriptor
 type ActivLayer struct {
-	dims []int
-	Src  *Layout
-	desc C.cudnnActivationDescriptor_t
+	dims  []int
+	Src   *Layout
+	desc  C.cudnnActivationDescriptor_t
+	freed bool
 }
 
 // Create new activation layer
@@ -183,13 +192,17 @@ func (l *ActivLayer) Ptr() unsafe.Pointer {
 }
 
 func (l *ActivLayer) Release() {
-	C.cudnnDestroyActivationDescriptor(l.desc)
+	if !l.freed {
+		C.cudnnDestroyActivationDescriptor(l.desc)
+		l.freed = true
+	}
 }
 
 // Layout type represents a cuDNN tensor descriptor
 type Layout struct {
-	Dims []int
-	desc C.cudnnTensorDescriptor_t
+	Dims  []int
+	desc  C.cudnnTensorDescriptor_t
+	freed bool
 }
 
 func NewLayout(n, c, h, w int) *Layout {
@@ -205,13 +218,17 @@ func (l *Layout) Ptr() unsafe.Pointer {
 }
 
 func (l *Layout) Release() {
-	C.cudnnDestroyTensorDescriptor(l.desc)
+	if !l.freed {
+		C.cudnnDestroyTensorDescriptor(l.desc)
+		l.freed = true
+	}
 }
 
 // Filter layout type
 type FilterLayout struct {
-	Dims []int
-	desc C.cudnnFilterDescriptor_t
+	Dims  []int
+	desc  C.cudnnFilterDescriptor_t
+	freed bool
 }
 
 func NewFilterLayout(nout, nin, h, w int) *FilterLayout {
@@ -227,7 +244,10 @@ func (l *FilterLayout) Ptr() unsafe.Pointer {
 }
 
 func (l *FilterLayout) Release() {
-	C.cudnnDestroyFilterDescriptor(l.desc)
+	if !l.freed {
+		C.cudnnDestroyFilterDescriptor(l.desc)
+		l.freed = true
+	}
 }
 
 func outSize(x, size, stride, pad int) int {

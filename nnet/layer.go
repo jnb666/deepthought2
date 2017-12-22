@@ -18,6 +18,7 @@ type Layer interface {
 	Type() string
 	ToString() string
 	Output() num.Array
+	Release()
 }
 
 // ParamLayer is a layer with weight and bias parameters
@@ -220,6 +221,21 @@ func (l *linear) Init(q num.Queue, inShape []int, ix int) int {
 	return 0
 }
 
+func (l *linear) Release() {
+	l.paramBase.release()
+	l.dst.Release()
+	l.temp1.Release()
+	if l.dsrc != nil {
+		l.dsrc.Release()
+	}
+	if l.temp2 != nil {
+		l.temp2.Release()
+	}
+	if l.ones != nil {
+		l.ones.Release()
+	}
+}
+
 func (l *linear) Output() num.Array { return l.dst }
 
 func (l *linear) Fprop(q num.Queue, in, work num.Array) num.Array {
@@ -265,6 +281,11 @@ func (l *convDNN) Init(q num.Queue, inShape []int, ix int) int {
 	return workSize
 }
 
+func (l *convDNN) Release() {
+	l.paramBase.release()
+	l.Layer.Release()
+}
+
 // pool layer implentation
 type poolDNN struct {
 	MaxPool
@@ -287,6 +308,11 @@ func (l *activation) Init(q num.Queue, inShape []int, ix int) int {
 	l.Layer = num.ActivationLayer(q, l.Atype, inShape)
 	l.loss = q.NewArray(num.Float32, inShape...)
 	return 0
+}
+
+func (l *activation) Release() {
+	l.Layer.Release()
+	l.loss.Release()
 }
 
 func (l *activation) Loss(q num.Queue, yOneHot, yPred num.Array) num.Array {
@@ -312,6 +338,12 @@ func (l *logRegression) Init(q num.Queue, inShape []int, ix int) int {
 	l.dsrc = q.NewArray(num.Float32, inShape...)
 	l.loss = q.NewArray(num.Float32, inShape...)
 	return 0
+}
+
+func (l *logRegression) Release() {
+	l.dst.Release()
+	l.dsrc.Release()
+	l.loss.Release()
 }
 
 func (l *logRegression) InShape() []int { return l.dst.Dims() }
@@ -357,6 +389,8 @@ func (l *flatten) Init(q num.Queue, inShape []int, ix int) int {
 	return 0
 }
 
+func (l *flatten) Release() {}
+
 func (l *flatten) Output() num.Array { return l.dst }
 
 func (l *flatten) Fprop(q num.Queue, in, work num.Array) num.Array {
@@ -384,6 +418,13 @@ func newParams(q num.Queue, filterShape []int, nBatch int) paramBase {
 		db:     q.NewArray(num.Float32, nout),
 		nBatch: float32(nBatch),
 	}
+}
+
+func (p paramBase) release() {
+	p.w.Release()
+	p.b.Release()
+	p.dw.Release()
+	p.db.Release()
 }
 
 func (p paramBase) IsActiv() bool { return false }

@@ -127,7 +127,17 @@ type TestBase struct {
 
 // Create a new base class which implements the Tester interface.
 func NewTestBase() *TestBase {
-	return &TestBase{Stats: []Stats{}}
+	return &TestBase{Stats: []Stats{}, Data: map[string]*Dataset{}}
+}
+
+// Release allocated buffers
+func (t *TestBase) Release() {
+	if t.Net != nil {
+		t.Net.Release()
+	}
+	for _, dset := range t.Data {
+		dset.Release()
+	}
 }
 
 // Initialise the test dataset, network and other configuration.

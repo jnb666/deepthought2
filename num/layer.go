@@ -19,6 +19,7 @@ type Layer interface {
 	Fprop(q Queue, in, work Array) Array
 	Bprop(q Queue, grad, work Array) Array
 	Output() Array
+	Release()
 }
 
 // Param layer also has weights and biases
@@ -59,6 +60,14 @@ type convCuda struct {
 	dw, db   unsafe.Pointer
 	src, dst Array
 	diffSrc  Array
+}
+
+func (l *convCuda) Release() {
+	l.dst.Release()
+	if l.diffSrc != nil {
+		l.diffSrc.Release()
+	}
+	l.ConvLayer.Release()
 }
 
 func (l *convCuda) SetParamData(W, B, dW, dB Array) {
@@ -127,6 +136,12 @@ type poolCuda struct {
 	diffSrc  Array
 }
 
+func (l *poolCuda) Release() {
+	l.dst.Release()
+	l.diffSrc.Release()
+	l.PoolLayer.Release()
+}
+
 func (l *poolCuda) Output() Array { return l.dst }
 
 func (l *poolCuda) Fprop(q Queue, in, work Array) Array {
@@ -182,6 +197,12 @@ type activationCuda struct {
 	diffSrc  Array
 }
 
+func (l *activationCuda) Release() {
+	l.dst.Release()
+	l.diffSrc.Release()
+	l.ActivLayer.Release()
+}
+
 func (l *activationCuda) Output() Array { return l.dst }
 
 func (l *activationCuda) Fprop(q Queue, in, work Array) Array {
@@ -212,6 +233,12 @@ func newActivation(dev cpuDevice, fwd, bwd int, shape []int) *activation {
 		dst:  dev.NewArray(Float32, shape...),
 		dsrc: dev.NewArray(Float32, shape...),
 	}
+}
+
+func (l *activation) Release() {
+	l.dst.Release()
+	l.dsrc.Release()
+
 }
 
 func (a *activation) InShape() []int { return a.dst.Dims() }
@@ -247,6 +274,8 @@ func newLayerMKL(layer *mkl.Layer, bpropData bool) layerMKL {
 	}
 	return l
 }
+
+func (l layerMKL) Release() {}
 
 func (l layerMKL) SetParamData(W, B, dW, dB Array) {
 	l.Layer.SetParams(W.Data(), B.Data(), dW.Data(), dB.Data())

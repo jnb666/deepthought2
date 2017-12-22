@@ -87,6 +87,16 @@ func NewDataset(dev num.Device, data Data, batchSize, maxSamples int, flattenInp
 	return d
 }
 
+// release allocated buffers
+func (d *Dataset) Release() {
+	d.Wait()
+	for i := range d.x {
+		d.x[i].Release()
+		d.y[i].Release()
+		d.y1H[i].Release()
+	}
+}
+
 // kick of load of next batch of data in background
 func (d *Dataset) loadBatch() {
 	d.Add(1)

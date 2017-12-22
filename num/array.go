@@ -29,6 +29,8 @@ type Array interface {
 	Data() unsafe.Pointer
 	// Formatted output
 	String(q Queue) string
+	// Release any allocated memory
+	Release()
 }
 
 // array resident in main memory
@@ -50,6 +52,8 @@ func newArrayCPU(dtype DataType, dims []int, data unsafe.Pointer) *arrayCPU {
 }
 
 func (a *arrayCPU) Data() unsafe.Pointer { return a.data }
+
+func (a *arrayCPU) Release() {}
 
 func (a *arrayCPU) Reshape(dims ...int) Array {
 	return &arrayCPU{arrayBase: a.reshape(dims), data: a.data}
@@ -78,6 +82,8 @@ func newArrayGPU(dtype DataType, dims []int, data cuda.Buffer) *arrayGPU {
 }
 
 func (a *arrayGPU) Data() unsafe.Pointer { return a.data.Ptr }
+
+func (a *arrayGPU) Release() { a.data.Free() }
 
 func (a *arrayGPU) Reshape(dims ...int) Array {
 	return &arrayGPU{arrayBase: a.reshape(dims), data: a.data}

@@ -110,6 +110,19 @@ func NewNetwork(model string) (*Network, error) {
 // Initialise the network
 func (n *Network) Init(conf nnet.Config) error {
 	log.Printf("init network: dataSet=%s useGPU=%v\n", conf.DataSet, conf.UseGPU)
+	if n.Network != nil {
+		n.Network.Release()
+	}
+	if n.test != nil {
+		n.test.Release()
+	}
+	if n.trainData != nil {
+		n.trainData.Release()
+	}
+	if n.view != nil {
+		n.view.Release()
+		n.view.input.Release()
+	}
 	var err error
 	if n.Data, err = nnet.LoadData(conf.DataSet); err != nil {
 		return err
