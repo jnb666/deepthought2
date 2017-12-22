@@ -167,6 +167,9 @@ func (l *poolCuda) Bprop(q Queue, grad, work Array) Array {
 
 // Create new activation layer, typ may be sigmoid, tanh or relu
 func ActivationLayer(q Queue, typ string, shape []int) Layer {
+	if typ == "softmax" {
+		return newActivation(q.Dev(), C.SOFTMAX, -1, shape)
+	}
 	switch d := q.Dev().(type) {
 	case cpuDevice:
 		switch typ {
@@ -223,22 +226,27 @@ func (l *activationCuda) Bprop(q Queue, grad, work Array) Array {
 type activation struct {
 	fwd, bwd       Function
 	src, dst, dsrc Array
+	softmax        bool
 }
 
-func newActivation(dev cpuDevice, fwd, bwd int, shape []int) *activation {
+func newActivation(dev Device, fwd, bwd int, shape []int) *activation {
 	size := Prod(shape)
-	return &activation{
-		fwd:  args(fwd, size),
-		bwd:  args(bwd, size),
+	a := &activation{
 		dst:  dev.NewArray(Float32, shape...),
 		dsrc: dev.NewArray(Float32, shape...),
 	}
+	if fwd == C.SOFTMAX {
+		a.softmax = true
+	} else {
+		a.fwd = args(fwd, size)
+		a.bwd = args(bwd, size)
+	}
+	return a
 }
 
 func (l *activation) Release() {
 	l.dst.Release()
 	l.dsrc.Release()
-
 }
 
 func (a *activation) InShape() []int { return a.dst.Dims() }
@@ -249,12 +257,20 @@ func (a *activation) Output() Array { return a.dst }
 
 func (a *activation) Fprop(q Queue, in, work Array) Array {
 	a.src = in
-	q.Call(a.fwd.setData(a.src, a.dst))
+	if a.softmax {
+		q.Call(Softmax(a.src, a.dst))
+	} else {
+		q.Call(a.fwd.setData(a.src, a.dst))
+	}
 	return a.dst
 }
 
 func (a *activation) Bprop(q Queue, grad, work Array) Array {
-	q.Call(a.bwd.setData(a.src, grad, a.dsrc))
+	if a.softmax {
+		q.Call(Copy(grad, a.dsrc))
+	} else {
+		q.Call(a.bwd.setData(a.src, grad, a.dsrc))
+	}
 	return a.dsrc
 }
 

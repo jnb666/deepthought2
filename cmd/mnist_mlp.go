@@ -22,7 +22,7 @@ func main() {
 		nnet.Linear{Nout: 100},
 		nnet.Activation{Atype: "relu"},
 		nnet.Linear{Nout: 10},
-		nnet.LogRegression{},
+		nnet.Activation{Atype: "softmax"},
 	)
 	fmt.Println(conf)
 	err := conf.Save("mnist_mlp.conf")

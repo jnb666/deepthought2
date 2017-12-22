@@ -163,6 +163,7 @@ body, html {
 .read-only input[readonly] {
   color: black;
   background-color: white;
+  font-size: 0.8em;
 }
 
 img.pixels {

@@ -16,7 +16,7 @@
           {{ if .Boolean -}}
           <input id="{{.Name}}" name="{{.Name}}" type="checkbox" value="true" {{if .On}}checked{{end}}>
           {{ else -}}
-          <input id="{{.Name}}" name="{{.Name}}" type="text" value="{{.Value}}">
+          <input id="{{.Name}}" name="{{.Name}}" type="text" size="20" value="{{.Value}}">
           {{ end -}}
           <span class="error-text">{{.Error}}</span>
         </div>
@@ -33,7 +33,7 @@
         {{ range .TuneFields -}}
         <div class="pure-control-group">
           <label for="{{.Name}}">{{.Name}}</label>
-          <input id="{{.Name}}" type="text" name="{{.Name}}" type="text" value="{{.Value}}" onchange="this.form.submit()">
+          <input id="{{.Name}}" type="text" name="{{.Name}}" type="text" size="20" value="{{.Value}}" onchange="this.form.submit()">
           <span class="error-text">{{.Error}}</span>
         </div>
         {{ end -}}
@@ -47,7 +47,8 @@
         {{ range .Layers -}}
         <div class="pure-control-group read-only">
           <label for="layer-{{.Index}}">layer {{.Index}}</label>
-          <input id="layer-{{.Index}}" type="text" value="{{.Desc}}" readonly>
+          <input id="layer-{{.Index}}" type="text" size="32" value="{{.Desc}}" readonly>
+          <span class="pure-form-message-inline">{{.Shape}}</span>
         </div>
         {{ end -}}
         </fieldset>

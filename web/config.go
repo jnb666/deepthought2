@@ -33,6 +33,7 @@ type Field struct {
 type Layer struct {
 	Index int
 	Desc  string
+	Shape string
 }
 
 // Base data for handler functions to view and update the network config
@@ -54,8 +55,8 @@ func (p *ConfigPage) init(data *NetworkData) error {
 			return err
 		}
 	}
-	p.Fields = getFields(&p.net.Conf, p.net.Model)
-	p.Layers = getLayers(&p.net.Conf)
+	p.Fields = getFields(p.net)
+	p.Layers = getLayers(p.net)
 	p.TuneFields = getTuneFields(p.net.Tuners)
 	return nil
 }
@@ -233,8 +234,9 @@ func (p *ConfigPage) getHeading() template.HTML {
 	return template.HTML(html)
 }
 
-func getFields(conf *nnet.Config, model string) []Field {
-	flds := []Field{{Name: "Model", Value: model}}
+func getFields(net *Network) []Field {
+	conf := net.Conf
+	flds := []Field{{Name: "Model", Value: net.Model}}
 	keys := conf.Fields()
 	for _, key := range keys {
 		f := Field{Name: key, Value: fmt.Sprint(conf.Get(key))}
@@ -244,11 +246,13 @@ func getFields(conf *nnet.Config, model string) []Field {
 	return flds
 }
 
-func getLayers(conf *nnet.Config) []Layer {
+func getLayers(net *Network) []Layer {
+	conf := net.Conf
 	layers := make([]Layer, len(conf.Layers))
 	for i, l := range conf.Layers {
 		layers[i].Index = i
 		layers[i].Desc = l.Unmarshal().ToString()
+		layers[i].Shape = fmt.Sprint(net.Layers[i].OutShape())
 	}
 	return layers
 }

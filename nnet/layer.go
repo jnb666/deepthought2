@@ -62,8 +62,6 @@ func (l LayerConfig) Unmarshal() Layer {
 	case "activation":
 		cfg := new(Activation)
 		return cfg.unmarshal(l.Data)
-	case "logRegression":
-		return &logRegression{}
 	case "flatten":
 		return &flatten{}
 	default:
@@ -175,13 +173,6 @@ func (c Activation) IsActiv() bool {
 func (c *Activation) unmarshal(data json.RawMessage) Layer {
 	unmarshal(data, c)
 	return &activation{Activation: *c}
-}
-
-// LogRegression output layer with soft max activation.
-type LogRegression struct{}
-
-func (c LogRegression) Marshal() LayerConfig {
-	return LayerConfig{Type: "logRegression"}
 }
 
 // Flatten layer reshapes from 4 to 2 dimensions.
@@ -316,54 +307,12 @@ func (l *activation) Release() {
 }
 
 func (l *activation) Loss(q num.Queue, yOneHot, yPred num.Array) num.Array {
-	q.Call(num.QuadraticLoss(yOneHot, yPred, l.loss))
-	return l.loss
-}
+	if l.Atype == "softmax" {
+		q.Call(num.SoftmaxLoss(yOneHot, yPred, l.loss))
+	} else {
 
-// log regression output layer
-type logRegression struct {
-	dst  num.Array
-	dsrc num.Array
-	loss num.Array
-}
-
-func (l *logRegression) IsActiv() bool { return true }
-
-func (l *logRegression) Type() string { return "logr" }
-
-func (l *logRegression) ToString() string { return "logRegression" }
-
-func (l *logRegression) Init(q num.Queue, inShape []int, ix int) int {
-	l.dst = q.NewArray(num.Float32, inShape...)
-	l.dsrc = q.NewArray(num.Float32, inShape...)
-	l.loss = q.NewArray(num.Float32, inShape...)
-	return 0
-}
-
-func (l *logRegression) Release() {
-	l.dst.Release()
-	l.dsrc.Release()
-	l.loss.Release()
-}
-
-func (l *logRegression) InShape() []int { return l.dst.Dims() }
-
-func (l *logRegression) OutShape() []int { return l.dst.Dims() }
-
-func (l *logRegression) Output() num.Array { return l.dst }
-
-func (l *logRegression) Fprop(q num.Queue, in, work num.Array) num.Array {
-	q.Call(num.Softmax(in, l.dst))
-	return l.dst
-}
-
-func (l *logRegression) Bprop(q num.Queue, grad, work num.Array) num.Array {
-	q.Call(num.Copy(grad, l.dsrc))
-	return l.dsrc
-}
-
-func (l *logRegression) Loss(q num.Queue, yOneHot, yPred num.Array) num.Array {
-	q.Call(num.SoftmaxLoss(yOneHot, yPred, l.loss))
+		q.Call(num.QuadraticLoss(yOneHot, yPred, l.loss))
+	}
 	return l.loss
 }
 
