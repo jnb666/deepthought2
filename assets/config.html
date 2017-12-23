@@ -46,9 +46,9 @@
         <legend>Layer details</legend>
         {{ range .Layers -}}
         <div class="pure-control-group read-only">
-          <label for="layer-{{.Index}}">layer {{.Index}}</label>
+          <label for="layer-{{.Index}}">{{.Shape}}</label>
           <input id="layer-{{.Index}}" type="text" size="32" value="{{.Desc}}" readonly>
-          <span class="pure-form-message-inline">{{.Shape}}</span>
+          <span class="error-text"></span>
         </div>
         {{ end -}}
         </fieldset>

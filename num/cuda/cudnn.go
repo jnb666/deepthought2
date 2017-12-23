@@ -14,6 +14,8 @@ import (
 const (
 	ActivFprop = iota
 	ActivBprop
+	DropoutFprop
+	DropoutBprop
 	ConvFprop
 	ConvFpropBias
 	ConvBpropData
@@ -32,6 +34,8 @@ const (
 var opName = map[int]string{
 	ActivFprop:      "activ_fprop",
 	ActivBprop:      "activ_bprop",
+	DropoutFprop:    "dropout_fprop",
+	DropoutBprop:    "dropout_bprop",
 	ConvFprop:       "conv_fprop",
 	ConvFpropBias:   "conv_fprop_bias",
 	ConvBpropData:   "conv_bprop_data",
@@ -63,7 +67,7 @@ type ConvLayer struct {
 }
 
 // Create new convolution layer
-func Convolution(n, c, h, w, nFeats, filtSize, stride, pad int) *ConvLayer {
+func Convolution(s *Stream, n, c, h, w, nFeats, filtSize, stride, pad int) (*ConvLayer, int) {
 	l := &ConvLayer{}
 	wOut := outSize(w, filtSize, stride, pad)
 	hOut := outSize(h, filtSize, stride, pad)
@@ -75,11 +79,12 @@ func Convolution(n, c, h, w, nFeats, filtSize, stride, pad int) *ConvLayer {
 	chkDnn(C.cudnnSetConvolution2dDescriptor(l.desc, C.int(pad), C.int(pad), C.int(stride), C.int(stride),
 		1, 1, C.CUDNN_CROSS_CORRELATION, C.CUDNN_DATA_FLOAT))
 	runtime.SetFinalizer(l, func(obj *ConvLayer) { obj.Release() })
-	return l
+	workSize := l.init(s)
+	return l, workSize
 }
 
 // Initialise the layer, returns work space size needed
-func (l *ConvLayer) Init(s *Stream) int {
+func (l *ConvLayer) init(s *Stream) int {
 	var size [3]C.size_t
 	var fwdAlgo C.cudnnConvolutionFwdAlgo_t
 	chkDnn(C.cudnnGetConvolutionForwardAlgorithm(s.cudnn, l.Src.desc, l.Filter.desc, l.desc, l.Dst.desc,
@@ -157,8 +162,8 @@ func (l *PoolLayer) Release() {
 
 // Activation layer descriptor
 type ActivLayer struct {
-	dims  []int
 	Src   *Layout
+	dims  []int
 	desc  C.cudnnActivationDescriptor_t
 	freed bool
 }
@@ -194,6 +199,57 @@ func (l *ActivLayer) Ptr() unsafe.Pointer {
 func (l *ActivLayer) Release() {
 	if !l.freed {
 		C.cudnnDestroyActivationDescriptor(l.desc)
+		l.freed = true
+	}
+}
+
+// Dropout layer descriptor
+type DropoutLayer struct {
+	Src     *Layout
+	Reserve Buffer
+	states  Buffer
+	dims    []int
+	desc    C.cudnnDropoutDescriptor_t
+	freed   bool
+}
+
+// Create new dropout layer
+func Dropout(s *Stream, ratio float64, shape []int, seed int64) *DropoutLayer {
+	l := &DropoutLayer{dims: shape}
+	if len(shape) == 4 {
+		l.Src = NewLayout(shape[3], shape[2], shape[1], shape[0])
+	} else if len(shape) == 2 {
+		l.Src = NewLayout(shape[1], shape[0], 1, 1)
+	} else {
+		panic("cuDNN: dropout layer must have 2 or 4 dimensions")
+	}
+	var size C.size_t
+	chkDnn(C.cudnnDropoutGetStatesSize(s.cudnn, &size))
+	l.states = NewBuffer(int(size))
+	chkDnn(C.cudnnDropoutGetReserveSpaceSize(l.Src.desc, &size))
+	l.Reserve = NewBuffer(int(size))
+
+	chkDnn(C.cudnnCreateDropoutDescriptor(&l.desc))
+	chkDnn(C.cudnnSetDropoutDescriptor(l.desc, s.cudnn, C.float(ratio),
+		l.states.Ptr, C.size_t(l.states.Size), C.ulonglong(seed)))
+
+	runtime.SetFinalizer(l, func(obj *DropoutLayer) { obj.Release() })
+	return l
+}
+
+func (l *DropoutLayer) InShape() []int { return l.dims }
+
+func (l *DropoutLayer) OutShape() []int { return l.dims }
+
+func (l *DropoutLayer) Ptr() unsafe.Pointer {
+	return unsafe.Pointer(l.desc)
+}
+
+func (l *DropoutLayer) Release() {
+	if !l.freed {
+		l.states.Free()
+		l.Reserve.Free()
+		C.cudnnDestroyDropoutDescriptor(l.desc)
 		l.freed = true
 	}
 }

@@ -65,17 +65,17 @@ type Buffer struct {
 	Size int
 }
 
-// Allocate a buffer on the GPU with given number of 32 bit words
+// Allocate a buffer on the GPU with given number of bytes
 func NewBuffer(size int) Buffer {
 	buf := Buffer{Size: size}
 	if size > 0 {
-		chk(C.cudaMalloc(&buf.Ptr, C.size_t(size*4)))
+		chk(C.cudaMalloc(&buf.Ptr, C.size_t(size)))
 	}
 	return buf
 }
 
 func (b Buffer) Clear() Buffer {
-	chk(C.cudaMemset(b.Ptr, 0, C.size_t(b.Size*4)))
+	chk(C.cudaMemset(b.Ptr, 0, C.size_t(b.Size)))
 	return b
 }
 

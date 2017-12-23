@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"os"
 	"path"
+	"strconv"
 	"sync"
 )
 
@@ -25,7 +26,7 @@ func init() {
 // Data interface type represents the raw data for a training or test set
 type Data interface {
 	Len() int
-	Classes() int
+	Classes() []string
 	Shape() []int
 	Label(index []int, label []int32)
 	Input(index []int, buf []float32)
@@ -77,7 +78,7 @@ func NewDataset(dev num.Device, data Data, batchSize, maxSamples int, flattenInp
 			d.x[i] = dev.NewArray(num.Float32, append(data.Shape(), d.BatchSize)...)
 		}
 		d.y[i] = dev.NewArray(num.Int32, d.BatchSize)
-		d.y1H[i] = dev.NewArray(num.Float32, d.Classes(), d.BatchSize)
+		d.y1H[i] = dev.NewArray(num.Float32, len(d.Classes()), d.BatchSize)
 	}
 	d.indexes = make([]int, d.Samples)
 	for i := range d.indexes {
@@ -111,7 +112,7 @@ func (d *Dataset) loadBatch() {
 		d.queue.Call(
 			num.Write(d.x[d.buf], d.xBuffer),
 			num.Write(d.y[d.buf], d.yBuffer),
-			num.Onehot(d.y[d.buf], d.y1H[d.buf], d.Classes()),
+			num.Onehot(d.y[d.buf], d.y1H[d.buf], len(d.Classes())),
 		)
 		d.queue.Finish()
 		d.Done()
@@ -222,20 +223,24 @@ func FileExists(name string) bool {
 }
 
 type data struct {
-	NClass int
+	Class  []string
 	Dims   []int
 	Labels []int32
 	Inputs []float32
 }
 
 // NewData function creates a new data set which implements the Data interface
-func NewData(classes int, shape []int, labels []int32, inputs []float32) data {
-	return data{NClass: classes, Dims: shape, Labels: labels, Inputs: inputs}
+func NewData(nclasses int, shape []int, labels []int32, inputs []float32) data {
+	classes := make([]string, nclasses)
+	for i := range classes {
+		classes[i] = strconv.Itoa(i)
+	}
+	return data{Class: classes, Dims: shape, Labels: labels, Inputs: inputs}
 }
 
 func (d data) Len() int { return len(d.Labels) }
 
-func (d data) Classes() int { return d.NClass }
+func (d data) Classes() []string { return d.Class }
 
 func (d data) Shape() []int { return d.Dims }
 

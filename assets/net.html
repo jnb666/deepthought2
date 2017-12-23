@@ -15,7 +15,7 @@
             <tr>
               <td width="{{.Width}}%">
                 {{ if .Image -}}
-                <img class="pixels" src="{{.Image}}">
+                <img class="{{.Class}}" src="{{.Image}}">
                 {{ end -}}
                 {{ if .Values -}}
                   <table class="image-table3">

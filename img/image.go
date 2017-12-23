@@ -34,7 +34,7 @@ var gaussian1, gaussian2 []float32
 // Image data set which implements the nnet.Data interface
 type Data struct {
 	Epochs int
-	NClass int
+	Class  []string
 	Dims   []int
 	Labels []int32
 	Images []image.Image
@@ -44,22 +44,32 @@ type Data struct {
 func init() {
 	gob.Register(&Data{})
 	gob.Register(&image.Gray{})
+	gob.Register(&image.NRGBA{})
 	gaussian1 = gaussian1d(KernelSigma, KernelSize)
 	gaussian2 = gaussian2d(KernelSigma, KernelSize)
 }
 
 // Create a new image set
-func NewData(classes int, labels []int32, images []image.Image) *Data {
-	b := images[0].Bounds()
-	dims := []int{b.Dy(), b.Dx(), 1}
-	return &Data{Epochs: 1, NClass: classes, Dims: dims, Labels: labels, Images: images}
+func NewData(classes []string, labels []int32, images []image.Image) *Data {
+	src := images[0]
+	b := src.Bounds()
+	dims := []int{b.Dy(), b.Dx(), 0}
+	switch src.(type) {
+	case *image.Gray:
+		dims[2] = 1
+	case *image.NRGBA:
+		dims[2] = 3
+	default:
+		panic(fmt.Sprintf("NewData: image type %T not supported", src))
+	}
+	return &Data{Epochs: 1, Class: classes, Dims: dims, Labels: labels, Images: images}
 }
 
 // Len function returns number of images
 func (d *Data) Len() int { return len(d.Labels) }
 
 // Classes functions number of differerent label values
-func (d *Data) Classes() int { return d.NClass }
+func (d *Data) Classes() []string { return d.Class }
 
 // Shape returns height, width
 func (d *Data) Shape() []int { return d.Dims }
@@ -76,7 +86,10 @@ func (d *Data) Label(index []int, label []int32) {
 
 // Input returns scaled input data in buf array
 func (d *Data) Input(index []int, buf []float32) {
-	nfeat := d.Dims[0] * d.Dims[1]
+	nfeat := 1
+	for _, d := range d.Dims {
+		nfeat *= d
+	}
 	for i, ix := range index {
 		Unpack(d.Images[ix], buf[i*nfeat:(i+1)*nfeat])
 	}
@@ -86,7 +99,7 @@ func (d *Data) Input(index []int, buf []float32) {
 func (d *Data) Slice(start, end int) *Data {
 	return &Data{
 		Epochs: d.Epochs,
-		NClass: d.NClass,
+		Class:  d.Class,
 		Dims:   d.Dims,
 		Labels: d.Labels[start:end],
 		Images: d.Images[start:end],
@@ -118,8 +131,15 @@ func Unpack(in image.Image, data []float32) {
 		for j, pix := range src.Pix {
 			data[j] = float32(pix) / 255
 		}
+	case *image.NRGBA:
+		npix := len(src.Pix) / 4
+		for j := 0; j < npix; j++ {
+			data[j] = float32(src.Pix[j*4]) / 255
+			data[j+npix] = float32(src.Pix[j*4+1]) / 255
+			data[j+2*npix] = float32(src.Pix[j*4+2]) / 255
+		}
 	default:
-		panic(fmt.Sprintf("image type %T not supported", src))
+		panic(fmt.Sprintf("Unpack: image type %T not supported", src))
 	}
 }
 

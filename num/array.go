@@ -68,11 +68,11 @@ type arrayGPU struct {
 }
 
 func (d gpuDevice) NewArray(dtype DataType, dims ...int) Array {
-	return newArrayGPU(dtype, dims, cuda.NewBuffer(Prod(dims)).Clear())
+	return newArrayGPU(dtype, dims, cuda.NewBuffer(Prod(dims)*4).Clear())
 }
 
 func (d gpuDevice) NewArrayLike(a Array) Array {
-	return newArrayGPU(a.Dtype(), a.Dims(), cuda.NewBuffer(Prod(a.Dims())).Clear())
+	return newArrayGPU(a.Dtype(), a.Dims(), cuda.NewBuffer(Prod(a.Dims())*4).Clear())
 }
 
 func newArrayGPU(dtype DataType, dims []int, data cuda.Buffer) *arrayGPU {

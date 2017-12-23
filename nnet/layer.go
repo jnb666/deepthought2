@@ -9,7 +9,7 @@ import (
 
 // Layer interface type represents one layer of the neural net.
 type Layer interface {
-	Init(q num.Queue, inShape []int, index int) int
+	Init(q num.Queue, inShape []int, index int, rng *rand.Rand) int
 	InShape() []int
 	OutShape() []int
 	Fprop(q num.Queue, in, work num.Array) num.Array
@@ -61,6 +61,9 @@ func (l LayerConfig) Unmarshal() Layer {
 		return cfg.unmarshal(l.Data)
 	case "activation":
 		cfg := new(Activation)
+		return cfg.unmarshal(l.Data)
+	case "dropout":
+		cfg := new(Dropout)
 		return cfg.unmarshal(l.Data)
 	case "flatten":
 		return &flatten{}
@@ -175,6 +178,32 @@ func (c *Activation) unmarshal(data json.RawMessage) Layer {
 	return &activation{Activation: *c}
 }
 
+// Dropout layer, randomly drops given ratio of nodes.
+type Dropout struct {
+	Ratio float64
+}
+
+func (c Dropout) Marshal() LayerConfig {
+	return LayerConfig{Type: "dropout", Data: marshal(c)}
+}
+
+func (c Dropout) ToString() string {
+	return fmt.Sprintf("dropout %+v", c)
+}
+
+func (c Dropout) Type() string {
+	return "dropout"
+}
+
+func (c Dropout) IsActiv() bool {
+	return false
+}
+
+func (c *Dropout) unmarshal(data json.RawMessage) Layer {
+	unmarshal(data, c)
+	return &dropout{Dropout: *c}
+}
+
 // Flatten layer reshapes from 4 to 2 dimensions.
 type Flatten struct{}
 
@@ -196,7 +225,7 @@ func (l *linear) InShape() []int { return l.inShape }
 
 func (l *linear) OutShape() []int { return []int{l.Nout, l.inShape[1]} }
 
-func (l *linear) Init(q num.Queue, inShape []int, ix int) int {
+func (l *linear) Init(q num.Queue, inShape []int, ix int, rng *rand.Rand) int {
 	if len(inShape) != 2 {
 		panic("Linear: expect 2 dimensional input")
 	}
@@ -264,8 +293,8 @@ type convDNN struct {
 	num.Layer
 }
 
-func (l *convDNN) Init(q num.Queue, inShape []int, ix int) int {
-	layer, workSize := num.ConvLayer(q, ix, inShape, l.Nfeats, l.Size, l.Stride, l.Pad)
+func (l *convDNN) Init(q num.Queue, inShape []int, ix int, rng *rand.Rand) int {
+	layer, workSize := num.NewConvLayer(q, ix, inShape, l.Nfeats, l.Size, l.Stride, l.Pad)
 	l.paramBase = newParams(q, layer.FilterShape(), inShape[3])
 	layer.SetParamData(l.w, l.b, l.dw, l.db)
 	l.Layer = layer
@@ -283,8 +312,8 @@ type poolDNN struct {
 	num.Layer
 }
 
-func (l *poolDNN) Init(q num.Queue, inShape []int, ix int) int {
-	l.Layer = num.MaxPoolLayer(q, inShape, l.Size, l.Stride)
+func (l *poolDNN) Init(q num.Queue, inShape []int, ix int, rng *rand.Rand) int {
+	l.Layer = num.NewMaxPoolLayer(q, inShape, l.Size, l.Stride)
 	return 0
 }
 
@@ -295,8 +324,8 @@ type activation struct {
 	loss num.Array
 }
 
-func (l *activation) Init(q num.Queue, inShape []int, ix int) int {
-	l.Layer = num.ActivationLayer(q, l.Atype, inShape)
+func (l *activation) Init(q num.Queue, inShape []int, ix int, rng *rand.Rand) int {
+	l.Layer = num.NewActivationLayer(q, l.Atype, inShape)
 	l.loss = q.NewArray(num.Float32, inShape...)
 	return 0
 }
@@ -310,12 +339,25 @@ func (l *activation) Loss(q num.Queue, yOneHot, yPred num.Array) num.Array {
 	if l.Atype == "softmax" {
 		q.Call(num.SoftmaxLoss(yOneHot, yPred, l.loss))
 	} else {
-
 		q.Call(num.QuadraticLoss(yOneHot, yPred, l.loss))
 	}
 	return l.loss
 }
 
+// dropout layer implementation
+type dropout struct {
+	Dropout
+	num.Layer
+}
+
+func (l *dropout) IsActiv() bool { return false }
+
+func (l *dropout) Init(q num.Queue, inShape []int, ix int, rng *rand.Rand) int {
+	l.Layer = num.NewDropoutLayer(q, l.Ratio, inShape, rng.Int63())
+	return 0
+}
+
+// flatten layer implementation
 type flatten struct {
 	inShape  []int
 	outShape []int
@@ -332,7 +374,7 @@ func (l *flatten) InShape() []int { return l.inShape }
 
 func (l *flatten) OutShape() []int { return l.outShape }
 
-func (l *flatten) Init(q num.Queue, inShape []int, ix int) int {
+func (l *flatten) Init(q num.Queue, inShape []int, ix int, rng *rand.Rand) int {
 	l.inShape = inShape
 	l.outShape = []int{num.Prod(l.inShape[:3]), l.inShape[3]}
 	return 0

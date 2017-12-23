@@ -17,10 +17,11 @@ const scaleWidth = 20
 
 type ViewPage struct {
 	*Templates
-	Page  string
-	Index int
-	net   *Network
-	info  []LayerInfo
+	Page   string
+	Layers []LayerInfo
+	net    *Network
+	index  int
+	errors bool
 }
 
 type LayerInfo struct {
@@ -29,13 +30,16 @@ type LayerInfo struct {
 	Values   []template.HTML
 	Width    int
 	PadWidth int
+	Class    string
 }
 
 // Base data for handler functions to view network activations and weights
 func NewViewPage(t *Templates, net *Network) *ViewPage {
-	p := &ViewPage{net: net, Templates: t, Index: 1}
-	p.AddOption(Link{Name: "prev", Url: "./prev"})
-	p.AddOption(Link{Name: "next", Url: "./next"})
+	p := &ViewPage{net: net, Templates: t, index: 1}
+	for _, name := range []string{"all", "errors", "prev", "next"} {
+		p.AddOption(Link{Name: name, Url: "./" + name})
+	}
+	p.SelectOptions([]string{"all"})
 	return p
 }
 
@@ -47,6 +51,11 @@ func (p *ViewPage) Base() func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		p.Page = vars["page"]
 		p.Select("/view/" + p.Page + "/")
+		if p.errors {
+			p.SelectOptions([]string{"errors"})
+		} else {
+			p.SelectOptions([]string{"all"})
+		}
 		p.Heading = p.net.heading()
 		p.Exec(w, "view", p, true)
 	}
@@ -57,12 +66,25 @@ func (p *ViewPage) Setopt() func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p.net.Lock()
 		defer p.net.Unlock()
+		nimg := p.net.view.data.Len()
+		if p.errors {
+			pred := p.net.Pred[p.net.view.dset]
+			for i, label := range p.net.Labels[p.net.view.dset] {
+				if i < len(pred) && pred[i] != label {
+					nimg++
+				}
+			}
+		}
 		vars := mux.Vars(r)
 		switch vars["opt"] {
+		case "all":
+			p.errors = false
+		case "errors":
+			p.errors = true
 		case "prev":
-			p.Index = mod(p.Index-1, 1, p.net.view.data.Len())
+			p.index = mod(p.index-1, 1, nimg)
 		case "next":
-			p.Index = mod(p.Index+1, 1, p.net.view.data.Len())
+			p.index = mod(p.index+1, 1, nimg)
 		}
 		http.Redirect(w, r, "/view/"+vars["page"]+"/", http.StatusFound)
 	}
@@ -75,45 +97,73 @@ func (p *ViewPage) Network() func(w http.ResponseWriter, r *http.Request) {
 		defer p.net.Unlock()
 		vars := mux.Vars(r)
 		p.Page = vars["page"]
-		p.net.view.update(p.Index - 1)
+		index := p.index - 1
+		if p.errors {
+			pred := p.net.Pred[p.net.view.dset]
+			nimg := 0
+			index = 0
+			for i, label := range p.net.Labels[p.net.view.dset] {
+				if i < len(pred) && pred[i] != label {
+					nimg++
+				}
+				if nimg == p.index {
+					index = i
+					break
+				}
+			}
+		}
+		p.net.view.update(index)
+		p.getLayers(index)
 		p.Exec(w, "net", p, false)
 	}
 }
 
 // Used in template the display the layer data
-func (p *ViewPage) Layers() []LayerInfo {
-	p.info = []LayerInfo{}
+func (p *ViewPage) getLayers(index int) {
+	p.Layers = []LayerInfo{}
 	ts := time.Now().Unix()
 	switch p.Page {
 	case "outputs":
-		// display input and outputs at each layer
-		label := p.net.Labels[p.net.view.dset][p.Index-1]
+		// input image
+		classes := p.net.view.data.Classes()
+		label := p.net.Labels[p.net.view.dset][index]
 		p.addImage(
-			fmt.Sprintf("input %d %v => %d", p.Index, p.net.view.inShape, label),
-			fmt.Sprintf("/img/%s/%d", p.net.view.dset, p.Index),
+			fmt.Sprintf("input %d %v => %s", index+1, p.net.view.inShape, classes[label]),
+			fmt.Sprintf("/img/%s/%d", p.net.view.dset, index+1),
 			p.net.view.inImage,
-			5,
 			0,
+			"input",
 		)
+		// outputs at each layer
 		for i, l := range p.net.view.layers {
 			if l.outShape != nil {
 				p.addImage(
 					fmt.Sprintf("%d: %s %v", i, l.ltype, l.outShape),
 					fmt.Sprintf("/net/outputs/%d?ts=%d", i, ts),
 					l.outImage,
-					100,
 					factorMinOutput,
+					"weights",
 				)
 			}
 		}
-		out := len(p.info) - 1
+		out := len(p.Layers) - 1
 		if l := p.net.view.lastLayer(); l != nil && out >= 0 {
-			for i, val := range l.outData {
-				col := color.Gray{Y: uint8(255 * (1 - val))}
-				tag := fmt.Sprintf(`<span style="color:%s;">%d</span>`, htmlColor(col), i)
-				p.info[out].Values = append(p.info[out].Values, template.HTML(tag))
+			max := l.outData[0]
+			imax := 0
+			for i, val := range l.outData[1:] {
+				if val > max {
+					max = val
+					imax = i + 1
+				}
 			}
-
+			for i, val := range l.outData {
+				col := color.Gray{Y: uint8(128 * (1 - val))}
+				tag := fmt.Sprintf(`<span style="color:%s;">%s</span>`, htmlColor(col), classes[i])
+				if i == imax {
+					tag = "<u>" + tag + "</u>"
+				}
+				p.Layers[out].Values = append(p.Layers[out].Values, template.HTML(tag))
+			}
 		}
 	case "weights":
 		// display weights and biases
@@ -123,25 +173,27 @@ func (p *ViewPage) Layers() []LayerInfo {
 					fmt.Sprintf("%d: %s %v %v", i, l.ltype, l.wShape, l.bShape),
 					fmt.Sprintf("/net/weights/%d?ts=%d", i, ts),
 					l.wImage,
-					100,
 					factorMinWeights,
+					"weights",
 				)
 			}
 		}
 	}
-	return p.info
 }
 
-func (p *ViewPage) addImage(desc, url string, img *image.NRGBA, width, factorMin int) {
-	info := LayerInfo{Desc: desc, Width: width}
+func (p *ViewPage) addImage(desc, url string, img *image.NRGBA, factorMin int, class string) {
+	info := LayerInfo{Desc: desc, Width: 100, Class: class}
 	if img != nil {
 		info.Image = url
+		if class == "input" {
+			info.Width = 7
+		}
 		if img.Bounds().Dx() <= scaleWidth {
 			info.Width /= 2
 		}
 	}
 	info.PadWidth = 100 - info.Width
-	p.info = append(p.info, info)
+	p.Layers = append(p.Layers, info)
 }
 
 // Handler function to generate the image for the output and weight data visualisation

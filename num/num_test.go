@@ -221,6 +221,27 @@ func TestGemm(t *testing.T) {
 	}
 }
 
+func TestMul(t *testing.T) {
+	for _, dev := range devices {
+		q := dev.NewQueue()
+		x := dev.NewArray(Float32, 2, 3)
+		y := dev.NewArrayLike(x)
+		z := dev.NewArrayLike(x)
+		res := make([]float32, 6)
+		q.Call(
+			Write(x, []float32{1, 2, 3, 4, 5, 6}),
+			Write(y, []float32{0.5, 0.1, 0.1, 0.1, 0.1, 0.5}),
+			Mul(x, y, z),
+			Read(z, res),
+		).Finish()
+		t.Logf("mul z=\n%s", z.String(q))
+		expect := []float32{0.5, 0.2, 0.3, 0.4, 0.5, 3}
+		if !reflect.DeepEqual(res, expect) {
+			t.Error("got", res, "expect", expect)
+		}
+	}
+}
+
 func randSlice(n int) []float32 {
 	res := make([]float32, n)
 	for i := range res {

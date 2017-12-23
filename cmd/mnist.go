@@ -11,10 +11,11 @@ import (
 )
 
 const (
-	classes = 10
-	epochs  = 40
-	split   = 50000
+	epochs = 40
+	split  = 50000
 )
+
+var classes = []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
 
 type labelHeader struct{ Magic, Num uint32 }
 
@@ -48,7 +49,7 @@ func distort(d *img.Data, name string, nimg, epochs int) {
 	rng := nnet.SetSeed(0)
 	res := &img.Data{
 		Epochs: epochs,
-		NClass: classes,
+		Class:  classes,
 		Dims:   d.Dims,
 		Labels: make([]int32, nimg),
 		Images: make([]image.Image, nimg),

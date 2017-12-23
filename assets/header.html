@@ -29,6 +29,13 @@ window.onload = function () {
         };
     }
 };
+
+function gotoSelected(id) {
+    var sel = document.getElementById(id);
+    var opt = sel.options[sel.selectedIndex];
+    location.href = opt.value;
+}
+
 </script>
 {{ end -}}
 </head>

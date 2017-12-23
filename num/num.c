@@ -38,6 +38,10 @@ void array_sum_i(int* a, int n, float* res) {
 	*res = (float)sum;
 }
 
+void array_mul(float* a, float* b, float *res, int n) {
+	for (int i = 0; i < n; ++i) res[i] = a[i]*b[i];	
+}
+
 void onehot(int* y, float* y_one_hot, int n, int classes) {
 	if (classes == 1) {
 		for (int i = 0; i < n; ++i) {
@@ -199,6 +203,9 @@ void callCPU(Args* a, dnnError_t* error) {
 	case GEMM:
 		cblas_sgemm(CblasColMajor, a->i[0], a->i[1], a->i[2], a->i[3], a->i[4], 1.0f, 
 			FP(a->p[0]), a->i[5], FP(a->p[1]), a->i[6], a->f[0], FP(a->p[2]), a->i[7]);
+		break;
+	case MUL_ELEM:
+		array_mul(FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0]);
 		break;
 	case SIGMOID:
 		sigmoid_a(FP(a->p[0]), FP(a->p[1]), a->i[0]);

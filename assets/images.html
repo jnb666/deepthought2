@@ -3,6 +3,7 @@
 <html lang="en">
 {{ template "header" . -}}
 <body>
+<form name="loadPage" id="loadPage"></form>
 {{ template "menu" . -}}
   <div class="body-container">
     <iframe id="contentFrame" src="/grid/{{.Dset}}"></iframe>

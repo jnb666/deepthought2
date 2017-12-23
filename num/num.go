@@ -32,6 +32,7 @@ var opName = map[C.int]string{
 	C.SUM:             "sum",
 	C.GEMV:            "gemv",
 	C.GEMM:            "gemm",
+	C.MUL_ELEM:        "mul_elem",
 	C.SIGMOID:         "sigmoid",
 	C.SIGMOID_D:       "sigmoid_d",
 	C.TANH:            "tanh",
@@ -184,6 +185,15 @@ func Sum(a, total Array) Function {
 		panic("Sum: result type should be float32 scalar")
 	}
 	return args(C.SUM, int(a.Dtype()), Prod(a.Dims()), a.Data(), total.Data())
+}
+
+// Element wise array multiplication: c = a*b
+func Mul(a, b, c Array) Function {
+	asize, bsize, csize := Prod(a.Dims()), Prod(b.Dims()), Prod(c.Dims())
+	if asize != csize || bsize != csize {
+		panic("Mul: arrays must be same size")
+	}
+	return args(C.MUL_ELEM, asize, a.Data(), b.Data(), c.Data())
 }
 
 // Matrix vector multiplication: y <- dot(mA,x)

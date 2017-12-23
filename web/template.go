@@ -19,6 +19,7 @@ type Templates struct {
 	*template.Template
 	Menu     []Link
 	Options  []Link
+	Dropdown []Link
 	Toplevel bool
 	Heading  template.HTML
 	Error    string

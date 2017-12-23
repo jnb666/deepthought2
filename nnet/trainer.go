@@ -58,6 +58,17 @@ func (s Stats) FormatItem(i int) string {
 	return fmt.Sprintf("%6.2f%%", s.Values[i]*100)
 }
 
+func (s Stats) String(headers []string, done bool) string {
+	msg := fmt.Sprintf("epoch %3d:", s.Epoch)
+	for i, val := range s.Format() {
+		msg += fmt.Sprintf("  %s =%s", headers[i], val)
+	}
+	if done {
+		msg += fmt.Sprintf("\nrun time: %s", s.Elapsed.Round(10*time.Millisecond))
+	}
+	return msg
+}
+
 // Calc exponentional moving average
 type EMA float64
 
@@ -156,7 +167,7 @@ func (t *TestBase) Init(queue num.Queue, conf Config, data map[string]Data, rng 
 		}
 		t.Data[key] = NewDataset(queue.Dev(), d, conf.TestBatch, t.Samples, conf.FlattenInput, rng)
 	}
-	t.Net = New(queue, conf, t.Data["train"].BatchSize, t.Data["train"].Shape())
+	t.Net = New(queue, conf, t.Data["train"].BatchSize, t.Data["train"].Shape(), rng)
 	return t
 }
 
@@ -252,14 +263,7 @@ func (t testLogger) Test(net *Network, epoch int, loss float64, start time.Time)
 	done := t.TestBase.Test(net, epoch, loss, start)
 	s := t.Stats[len(t.Stats)-1]
 	if done || net.LogEvery == 0 || epoch%net.LogEvery == 0 {
-		msg := fmt.Sprintf("epoch %3d:", epoch)
-		for i, val := range s.Format() {
-			msg += fmt.Sprintf("  %s =%s", t.Headers[i], val)
-		}
-		fmt.Println(msg)
-	}
-	if done {
-		fmt.Printf("run time: %s\n", s.Elapsed.Round(10*time.Millisecond))
+		fmt.Println(s.String(t.Headers, done))
 	}
 	return done
 }
@@ -282,7 +286,7 @@ func Train(net *Network, dset *Dataset, test Tester) {
 func TrainEpoch(net *Network, dset *Dataset, acc num.Array) float64 {
 	q := net.queue
 	if net.inputGrad == nil {
-		net.inputGrad = q.NewArray(num.Float32, dset.Classes(), dset.BatchSize)
+		net.inputGrad = q.NewArray(num.Float32, len(dset.Classes()), dset.BatchSize)
 	}
 	if net.Shuffle {
 		dset.Shuffle()

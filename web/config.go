@@ -250,9 +250,10 @@ func getLayers(net *Network) []Layer {
 	conf := net.Conf
 	layers := make([]Layer, len(conf.Layers))
 	for i, l := range conf.Layers {
+		dims := net.Layers[i].OutShape()
 		layers[i].Index = i
 		layers[i].Desc = l.Unmarshal().ToString()
-		layers[i].Shape = fmt.Sprint(net.Layers[i].OutShape())
+		layers[i].Shape = fmt.Sprint(dims[:len(dims)-1])
 	}
 	return layers
 }

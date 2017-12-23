@@ -62,6 +62,11 @@ __global__ void neq(int* a, int* b, int* res, int n) {
 	if (i < n) res[i] = (a[i] != b[i]);
 }
 
+__global__ void mul_elem(float* a, float* b, float* res, int n) {
+	int i = blockIdx.x*blockDim.x + threadIdx.x;
+	if (i < n) res[i] = a[i]*b[i];	
+}
+
 __global__ void onehot_1(int* y, float* y_one_hot, int n) {
 	int i = blockIdx.x*blockDim.x + threadIdx.x;
 	if (i < n) y_one_hot[i] = (float)(y[i]);
@@ -173,6 +178,10 @@ void cuda_sum_i(cudaStream_t stream, int* in, float* total, int n) {
 
 void cuda_neq(cudaStream_t stream, int* a, int* b, int* res, int n) {
 	neq<<<(n+BLOCK-1)/BLOCK, BLOCK>>>(a, b, res, n);
+}
+
+void cuda_mul_elem(cudaStream_t stream, float* a, float* b, float* res, int n) {
+	mul_elem<<<(n+BLOCK-1)/BLOCK, BLOCK>>>(a, b, res, n);
 }
 
 void cuda_onehot(cudaStream_t stream, int* y, float* y_one_hot, int n, int classes) {

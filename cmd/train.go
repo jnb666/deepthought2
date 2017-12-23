@@ -53,7 +53,7 @@ func main() {
 	trainData := nnet.NewDataset(dev, data["train"], conf.TrainBatch, conf.MaxSamples, conf.FlattenInput, rng)
 
 	// create network and initialise weights
-	trainNet := nnet.New(q, conf, trainData.BatchSize, trainData.Shape())
+	trainNet := nnet.New(q, conf, trainData.BatchSize, trainData.Shape(), rng)
 	fmt.Println(trainNet)
 	trainNet.InitWeights(rng)
 	if conf.DebugLevel >= 1 {

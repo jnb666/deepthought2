@@ -58,6 +58,9 @@ void callGPU(Args* a, Stream* s, cublasStatus_t* blasStatus, cudnnStatus_t* dnnS
 		*blasStatus = cublasSgemm(s->blas, CU_TRANS(a->i[0]), CU_TRANS(a->i[1]), a->i[2], a->i[3], a->i[4], &one, 
 			FP(a->p[0]), a->i[5], FP(a->p[1]), a->i[6], &(a->f[0]), FP(a->p[2]), a->i[7]);
 		break;
+	case MUL_ELEM:
+		cuda_mul_elem(s->stream, FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0]);
+		break;
 	case ONEHOT:
 		cuda_onehot(s->stream, IP(a->p[0]), FP(a->p[1]), a->i[0], a->i[1]);
 		break;
@@ -84,6 +87,18 @@ void callGPU(Args* a, Stream* s, cublasStatus_t* blasStatus, cudnnStatus_t* dnnS
 			 (cudnnTensorDescriptor_t)(a->p[1]), a->p[3],				// diffDst
 			 (cudnnTensorDescriptor_t)(a->p[1]), a->p[4],				// prev src
 			&zero, (cudnnTensorDescriptor_t)(a->p[1]), a->p[5]);		// diffSrc
+		break;
+	case CUDNN_DROPOUT_FPROP:
+		*dnnStatus = cudnnDropoutForward(s->cudnn, (cudnnDropoutDescriptor_t)(a->p[0]), 
+			(cudnnTensorDescriptor_t)(a->p[1]), a->p[2], 				// src
+			(cudnnTensorDescriptor_t)(a->p[1]), a->p[3],				// dst
+			a->p[4], a->i[0]);											// reserve
+		break;
+	case CUDNN_DROPOUT_BPROP:
+		*dnnStatus = cudnnDropoutBackward(s->cudnn, (cudnnDropoutDescriptor_t)(a->p[0]), 
+			(cudnnTensorDescriptor_t)(a->p[1]), a->p[2],				// diffDst
+			(cudnnTensorDescriptor_t)(a->p[1]), a->p[3],				// diffSrc
+			a->p[4], a->i[0]);											// reserve
 		break;
 	case CUDNN_CONV_FPROP:
 		*dnnStatus = cudnnConvolutionForward(s->cudnn,

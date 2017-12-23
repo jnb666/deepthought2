@@ -121,7 +121,7 @@ func (p *TrainPage) Command() func(w http.ResponseWriter, r *http.Request) {
 			if p.net.running {
 				log.Println("skip reset - trainer is running")
 			} else {
-				if err := p.net.Start(p.net.Conf); err != nil {
+				if err := p.net.Start(p.net.Conf, false); err != nil {
 					p.logError(w, http.StatusInternalServerError, err)
 					return
 				}
@@ -177,10 +177,14 @@ func (p *TrainPage) StatsHeaders() []string {
 }
 
 func (p *TrainPage) LatestStats(n int) []nnet.Stats {
-	last := len(p.net.test.Stats) - 1
 	res := []nnet.Stats{}
+	last := len(p.net.test.Stats) - 1
 	for i := last; i >= 0 && i > last-n; i-- {
 		res = append(res, p.net.test.Stats[i])
+	}
+	if len(p.net.test.Stats) < n && p.OptionSelected("history") && len(p.net.History) > 0 {
+		last = len(p.net.History) - 1
+		res = append(res, p.net.History[last].Stats)
 	}
 	return res
 }

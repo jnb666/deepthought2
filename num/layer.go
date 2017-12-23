@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/jnb666/deepthought2/num/cuda"
 	"github.com/jnb666/deepthought2/num/mkl"
+	"math/rand"
 	"unsafe"
 )
 
@@ -30,7 +31,7 @@ type ParamLayer interface {
 }
 
 // Create new convolution layer, input shape is nBatch x depth x h x w
-func ConvLayer(q Queue, ix int, inShape []int, nFeats, size, stride, pad int) (ParamLayer, int) {
+func NewConvLayer(q Queue, ix int, inShape []int, nFeats, size, stride, pad int) (ParamLayer, int) {
 	if len(inShape) != 4 {
 		panic("ConvLayer: expect 4 dimensional input")
 	}
@@ -39,8 +40,7 @@ func ConvLayer(q Queue, ix int, inShape []int, nFeats, size, stride, pad int) (P
 	case cpuDevice:
 		return newLayerMKL(mkl.Convolution(d.attr, n, c, h, w, nFeats, size, stride, pad), ix != 0), 0
 	case gpuDevice:
-		layer := cuda.Convolution(n, c, h, w, nFeats, size, stride, pad)
-		workSize := layer.Init(q.(*gpuQueue).stream)
+		layer, workSize := cuda.Convolution(q.(*gpuQueue).stream, n, c, h, w, nFeats, size, stride, pad)
 		l := &convCuda{
 			ConvLayer: layer,
 			dst:       d.NewArray(Float32, layer.OutShape()...),
@@ -110,7 +110,7 @@ func (l *convCuda) Bprop(que Queue, grad, work Array) Array {
 }
 
 // Create new max pooling layer, prev layer should be a ConvLayer
-func MaxPoolLayer(q Queue, inShape []int, size, stride int) Layer {
+func NewMaxPoolLayer(q Queue, inShape []int, size, stride int) Layer {
 	if len(inShape) != 4 {
 		panic("PoolLayer: expect 4 dimensional input")
 	}
@@ -166,7 +166,7 @@ func (l *poolCuda) Bprop(q Queue, grad, work Array) Array {
 }
 
 // Create new activation layer, typ may be sigmoid, tanh or relu
-func ActivationLayer(q Queue, typ string, shape []int) Layer {
+func NewActivationLayer(q Queue, typ string, shape []int) Layer {
 	if typ == "softmax" {
 		return newActivation(q.Dev(), C.SOFTMAX, -1, shape)
 	}
@@ -186,8 +186,8 @@ func ActivationLayer(q Queue, typ string, shape []int) Layer {
 		layer := cuda.Activation(typ, shape)
 		return &activationCuda{
 			ActivLayer: layer,
-			dst:        d.NewArray(Float32, layer.OutShape()...),
-			diffSrc:    d.NewArray(Float32, layer.InShape()...),
+			dst:        d.NewArray(Float32, shape...),
+			diffSrc:    d.NewArray(Float32, shape...),
 		}
 	default:
 		panic("device type not supported")
@@ -272,6 +272,101 @@ func (a *activation) Bprop(q Queue, grad, work Array) Array {
 		q.Call(a.bwd.setData(a.src, grad, a.dsrc))
 	}
 	return a.dsrc
+}
+
+// Create new dropout layer.
+func NewDropoutLayer(q Queue, ratio float64, shape []int, seed int64) Layer {
+	switch d := q.Dev().(type) {
+	case cpuDevice:
+		return &dropout{
+			ratio:  ratio,
+			dst:    d.NewArray(Float32, shape...),
+			dsrc:   d.NewArray(Float32, shape...),
+			filter: d.NewArray(Float32, shape...),
+			mask:   make([]float32, Prod(shape)),
+			rng:    rand.New(rand.NewSource(seed)),
+		}
+	case gpuDevice:
+		layer := cuda.Dropout(q.(*gpuQueue).stream, ratio, shape, seed)
+		return &dropoutCuda{
+			DropoutLayer: layer,
+			dst:          d.NewArray(Float32, shape...),
+			diffSrc:      d.NewArray(Float32, shape...),
+		}
+	default:
+		panic("device type not supported")
+	}
+}
+
+type dropoutCuda struct {
+	*cuda.DropoutLayer
+	src, dst Array
+	diffSrc  Array
+}
+
+func (l *dropoutCuda) Release() {
+	l.dst.Release()
+	l.diffSrc.Release()
+	l.DropoutLayer.Release()
+}
+
+func (l *dropoutCuda) Output() Array { return l.dst }
+
+func (l *dropoutCuda) Fprop(q Queue, in, work Array) Array {
+	l.src = in
+	q.Call(
+		args(C.CUDNN_EXECUTE+cuda.DropoutFprop, l.Ptr(), l.Src.Ptr(), in.Data(), l.dst.Data(), l.Reserve.Ptr, l.Reserve.Size),
+	)
+	return l.dst
+}
+
+func (l *dropoutCuda) Bprop(q Queue, grad, work Array) Array {
+	q.Call(
+		args(C.CUDNN_EXECUTE+cuda.DropoutBprop, l.Ptr(), l.Src.Ptr(), grad.Data(), l.diffSrc.Data(), l.Reserve.Ptr, l.Reserve.Size),
+	)
+	return l.diffSrc
+}
+
+type dropout struct {
+	ratio     float64
+	dst, dsrc Array
+	filter    Array
+	mask      []float32
+	rng       *rand.Rand
+}
+
+func (l *dropout) InShape() []int { return l.dst.Dims() }
+
+func (l *dropout) OutShape() []int { return l.dst.Dims() }
+
+func (l *dropout) Output() Array { return l.dst }
+
+func (l *dropout) Release() {
+	l.dst.Release()
+	l.dsrc.Release()
+	l.filter.Release()
+}
+
+func (l *dropout) Fprop(q Queue, in, work Array) Array {
+	for i := range l.mask {
+		if l.rng.Float64() < l.ratio {
+			l.mask[i] = 0
+		} else {
+			l.mask[i] = 1
+		}
+	}
+	q.Call(
+		Write(l.filter, l.mask),
+		Mul(l.filter, in, l.dst),
+	)
+	return l.dst
+}
+
+func (l *dropout) Bprop(q Queue, grad, work Array) Array {
+	q.Call(
+		Mul(l.filter, grad, l.dsrc),
+	)
+	return l.dsrc
 }
 
 // layer which wraps Intel MKL DNN layer

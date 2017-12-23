@@ -27,7 +27,7 @@ type Network struct {
 }
 
 // New function creates a new network with the given layers.
-func New(queue num.Queue, conf Config, batchSize int, inShape []int) *Network {
+func New(queue num.Queue, conf Config, batchSize int, inShape []int, rng *rand.Rand) *Network {
 	n := &Network{Config: conf, queue: queue}
 	n.allocArrays(batchSize)
 	if conf.FlattenInput {
@@ -39,7 +39,7 @@ func New(queue num.Queue, conf Config, batchSize int, inShape []int) *Network {
 	wsize := 0
 	for ix, l := range conf.Layers {
 		layer := l.Unmarshal()
-		if size := layer.Init(queue, shape, ix); size > wsize {
+		if size := layer.Init(queue, shape, ix, rng); size > wsize {
 			wsize = size
 		}
 		n.Layers = append(n.Layers, layer)
@@ -172,7 +172,8 @@ func (n *Network) String() string {
 	if n.Layers != nil {
 		str := []string{"\n== Network =="}
 		for i, layer := range n.Layers {
-			str = append(str, fmt.Sprintf("%2d: %-16s %s", i, fmt.Sprint(layer.OutShape()), layer.ToString()))
+			dims := layer.OutShape()
+			str = append(str, fmt.Sprintf("%2d: %-12s %s", i, fmt.Sprint(dims[:len(dims)-1]), layer.ToString()))
 		}
 		s += strings.Join(str, "\n")
 	}

@@ -11,9 +11,9 @@ import (
 )
 
 const (
-	scale = 3
-	rows  = 8
-	cols  = 10
+	scale = 2
+	rows  = 10
+	cols  = 15
 )
 
 func main() {
@@ -56,7 +56,7 @@ func main() {
 	r.HandleFunc("/ws", trainPage.Websocket())
 
 	imagePage := web.NewImagePage(t.Clone(), net, scale, rows, cols)
-	r.HandleFunc("/images/{dset}/", imagePage.Base())
+	r.HandleFunc("/images/{dset}/{class:[0-9]*}", imagePage.Base())
 	r.HandleFunc("/images/{dset}/{opt:[a-z]+}", imagePage.Setopt())
 	r.HandleFunc("/grid/{dset}", imagePage.Grid())
 	r.HandleFunc("/img/{dset}/{id:[0-9]+}", imagePage.Image())

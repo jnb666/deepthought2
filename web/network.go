@@ -33,9 +33,6 @@ var tuneOpts = []string{"Eta", "Lambda", "TrainBatch"}
 var tuneOptHtml = []string{"&eta;", "&lambda;", "batch"}
 
 // color map definition
-const cmin = -1
-const cmax = 1
-
 var cmap = [][3]float32{{0, 0, .5}, {0, 0, 1}, {0, .5, 1}, {0, 1, 1}, {.5, 1, .5}, {1, 1, 0}, {1, .5, 0}, {1, 0, 0}, {.5, 0, 0}}
 
 // Network and associated training / test data and configuration
@@ -110,19 +107,7 @@ func NewNetwork(model string) (*Network, error) {
 // Initialise the network
 func (n *Network) Init(conf nnet.Config) error {
 	log.Printf("init network: dataSet=%s useGPU=%v\n", conf.DataSet, conf.UseGPU)
-	if n.Network != nil {
-		n.Network.Release()
-	}
-	if n.test != nil {
-		n.test.Release()
-	}
-	if n.trainData != nil {
-		n.trainData.Release()
-	}
-	if n.view != nil {
-		n.view.Release()
-		n.view.input.Release()
-	}
+	n.release()
 	var err error
 	if n.Data, err = nnet.LoadData(conf.DataSet); err != nil {
 		return err
@@ -132,7 +117,7 @@ func (n *Network) Init(conf nnet.Config) error {
 	n.rng = nnet.SetSeed(conf.RandSeed)
 	n.testRng = nnet.SetSeed(conf.RandSeed)
 	n.trainData = nnet.NewDataset(n.queue.Dev(), n.Data["train"], conf.TrainBatch, conf.MaxSamples, conf.FlattenInput, n.rng)
-	n.Network = nnet.New(n.queue, conf, n.trainData.BatchSize, n.trainData.Shape())
+	n.Network = nnet.New(n.queue, conf, n.trainData.BatchSize, n.trainData.Shape(), n.rng)
 	if n.DebugLevel >= 1 {
 		fmt.Println(n.Network)
 	}
@@ -146,19 +131,44 @@ func (n *Network) Init(conf nnet.Config) error {
 	if len(dims) >= 2 {
 		n.trans = img.NewTransformer(dims[1], dims[0], img.ConvAccel, n.testRng)
 	}
-	n.view = newViewData(n.queue, n.Data, conf)
+	n.view = newViewData(n.queue, n.Data, conf, n.testRng)
 	return nil
 }
 
+// release allocated buffers
+func (n *Network) release() {
+	if n.view != nil {
+		n.view.queue.Finish()
+		n.queue.Finish()
+	}
+	if n.Network != nil {
+		n.Network.Release()
+	}
+	if n.test != nil {
+		n.test.Release()
+	}
+	if n.trainData != nil {
+		n.trainData.Release()
+	}
+	if n.view != nil {
+		n.view.Release()
+		n.view.input.Release()
+	}
+}
+
 // Initialise for new training run
-func (n *Network) Start(conf nnet.Config) error {
+func (n *Network) Start(conf nnet.Config, lock bool) error {
+	if lock {
+		n.Lock()
+		defer n.Unlock()
+	}
 	if err := n.Init(conf); err != nil {
 		return err
 	}
 	n.test.Reset()
 	log.Println("init weights")
 	n.InitWeights(n.rng)
-	n.Network.CopyTo(n.view.Network, true)
+	n.view.loadWeights(n.Network)
 	n.Epoch = 0
 	n.updated = false
 	return nil
@@ -175,7 +185,7 @@ func (n *Network) Train(restart bool) error {
 	if restart {
 		if n.Epoch != 0 || n.Run != 0 || n.updated {
 			n.Run = 0
-			if err := n.Start(runs[0]); err != nil {
+			if err := n.Start(runs[0], false); err != nil {
 				return err
 			}
 		}
@@ -194,7 +204,7 @@ func (n *Network) Train(restart bool) error {
 		quit := false
 		for n.Run < n.MaxRun && !quit {
 			if n.Run > 0 {
-				if err := n.Start(runs[n.Run]); err != nil {
+				if err := n.Start(runs[n.Run], true); err != nil {
 					log.Println(err)
 					return
 				}
@@ -211,6 +221,9 @@ func (n *Network) Train(restart bool) error {
 				loss := nnet.TrainEpoch(n.Network, n.trainData, acc)
 				done = n.test.Test(n.Network, epoch, loss, start)
 				epoch, quit = n.nextEpoch(epoch, done)
+			}
+			if last := len(n.test.Stats) - 1; last > 0 {
+				log.Println(n.test.Stats[last].String(n.test.Headers, true))
 			}
 			if !quit {
 				n.Run++
@@ -246,7 +259,7 @@ func (n *Network) nextEpoch(epoch int, done bool) (int, bool) {
 		copy(n.Pred[key], pred)
 	}
 	// update visualisation
-	n.Network.CopyTo(n.view.Network, true)
+	n.view.loadWeights(n.Network)
 	// update history
 	if done && !quit && len(n.test.Stats) > 0 {
 		n.History = append(n.History, HistoryData{
@@ -299,12 +312,9 @@ func (n *Network) Export() {
 			n.queue.Call(
 				num.Read(W, d.Weights),
 				num.Read(B, d.Biases),
-			)
+			).Finish()
 			n.Params = append(n.Params, d)
 		}
-	}
-	if len(n.Params) > 0 {
-		n.queue.Finish()
 	}
 }
 
@@ -336,7 +346,7 @@ func (n *Network) Import() error {
 				num.Write(B, p.Biases),
 			)
 		}
-		n.Network.CopyTo(n.view.Network, true)
+		n.view.loadWeights(n.Network)
 	}
 	return nil
 }
@@ -485,14 +495,14 @@ type viewLayer struct {
 	wborder  int
 }
 
-func newViewData(dev num.Device, data map[string]nnet.Data, conf nnet.Config) *viewData {
+func newViewData(dev num.Device, data map[string]nnet.Data, conf nnet.Config, rng *rand.Rand) *viewData {
 	v := &viewData{queue: dev.NewQueue()}
 	if _, ok := data["test"]; ok {
 		v.dset, v.data = "test", data["test"]
 	} else {
 		v.dset, v.data = "train", data["train"]
 	}
-	v.Network = nnet.New(v.queue, conf, 1, v.data.Shape())
+	v.Network = nnet.New(v.queue, conf, 1, v.data.Shape(), rng)
 
 	v.inShape = v.data.Shape()
 	v.inData = make([]float32, num.Prod(v.inShape))
@@ -501,15 +511,14 @@ func newViewData(dev num.Device, data map[string]nnet.Data, conf nnet.Config) *v
 	} else {
 		v.input = dev.NewArray(num.Float32, append(v.inShape, 1)...)
 	}
-	v.inShape = v.inShape[:len(v.inShape)-1]
-	if len(v.inShape) == 2 {
+	if len(v.inShape) >= 2 {
 		v.inImage = image.NewNRGBA(image.Rect(0, 0, v.inShape[1], v.inShape[0]))
 	}
 
 	for i, layer := range v.Layers {
 		l := viewLayer{ltype: layer.Type()}
 		// filter output layers
-		if l.ltype != "maxPool" {
+		if l.ltype != "maxPool" && l.ltype != "dropout" && l.ltype != "flatten" {
 			l.outShape = layer.OutShape()
 			l.outShape = l.outShape[:len(l.outShape)-1]
 		}
@@ -534,6 +543,10 @@ func newViewData(dev num.Device, data map[string]nnet.Data, conf nnet.Config) *v
 	return v
 }
 
+func (v *viewData) loadWeights(net *nnet.Network) {
+	net.CopyTo(v.Network, true)
+}
+
 // update outputs with given index from test set and update the images
 func (v *viewData) update(index int) {
 	v.data.Input([]int{index}, v.inData)
@@ -552,7 +565,7 @@ func (v *viewData) update(index int) {
 			case 1:
 				height := l.outImage.Bounds().Dy()
 				for i, val := range l.outData {
-					l.outImage.Set(i/height, i%height, mapColor(val))
+					l.outImage.Set(i/height, i%height, mapColor(val, -1, 1))
 				}
 			case 3:
 				bw, bh := l.outShape[0], l.outShape[1]
@@ -560,7 +573,7 @@ func (v *viewData) update(index int) {
 					xb := (bw + 1) * (i % l.ox)
 					yb := (bh + 1) * (i / l.ox)
 					for j := 0; j < bw*bh; j++ {
-						col := mapColor(l.outData[i*bw*bh+j])
+						col := mapColor(l.outData[i*bw*bh+j], -1, 1)
 						l.outImage.Set(xb+j%bw+1, yb+j/bw+1, col)
 					}
 				}
@@ -572,10 +585,11 @@ func (v *viewData) update(index int) {
 				num.Read(W, l.wData),
 				num.Read(B, l.bData),
 			).Finish()
+			scale := 5 * float32(1/math.Sqrt(float64(num.Prod(v.Layers[i].InShape()))))
 			// draw bias
 			for i := 0; i < l.wox*l.woy; i++ {
 				xb, yb := l.block(i)
-				biasCol := mapColor(l.bData[i])
+				biasCol := mapColor(l.bData[i], -scale, scale)
 				for j := 0; j < l.wix; j++ {
 					l.wImage.Set(xb+j, yb, biasCol)
 				}
@@ -588,7 +602,7 @@ func (v *viewData) update(index int) {
 			for i := 0; i < l.wox*l.woy; i++ {
 				xb, yb := l.block(i)
 				for j := 0; j < bsize; j++ {
-					l.wImage.Set(xb+j%l.wix+1, yb+j/l.wix+1, mapColor(l.wData[i*bsize+j]))
+					l.wImage.Set(xb+j%l.wix+1, yb+j/l.wix+1, mapColor(l.wData[i*bsize+j], -scale, scale))
 				}
 			}
 		}
@@ -674,7 +688,7 @@ func factorise(n, nmin int, aspect float64) (f1, f2 int) {
 }
 
 // convert value in range cmin:cmax to interpolated color from cmap
-func mapColor(val float32) color.NRGBA {
+func mapColor(val float32, cmin, cmax float32) color.NRGBA {
 	var col [3]float32
 	ncol := len(cmap)
 	switch {

@@ -134,25 +134,23 @@ body, html {
 
 .h-center {
   margin: 0 auto;
+  border: 0;
 }
 
 .digit-image {
   position: relative;
   width: 100%;
+  padding-top: 1em;
+  padding-left: 2px;
+  background-color: #404040;
 }
 
-.digit-label-left {
+.digit-label {
   position: absolute;
   top: 0;
-  left: 2px;
+  left: 4px;
   font-size: 0.875em;
-}
-
-.digit-label-right {
-  position: absolute;
-  top: 0;
-  right: 2px;
-  font-size: 0.875em;
+  color: white;
 }
 
 .error-text {
@@ -166,7 +164,12 @@ body, html {
   font-size: 0.8em;
 }
 
-img.pixels {
+img.input {
+  width: 100%;
+  height: auto;
+}
+
+img.weights {
   width: 100%;
   height: auto;
   image-rendering: pixelated;

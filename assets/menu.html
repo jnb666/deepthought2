@@ -27,6 +27,14 @@
               <li class="pure-menu-item"><a class="pure-menu-link{{if .Selected}} menu-selected{{end}}" href="{{.Url}}">{{.Name}}</a></li>
               {{ end -}}
             {{ end -}}
+            {{ if .Dropdown -}}
+            <li class="pure-menu-separator"></li>
+            <select class="model-select" id="dropdown" form="loadPage" onchange="gotoSelected('dropdown')">
+              {{ range .Dropdown -}}
+              <option value="{{.Url}}" {{if .Selected}}selected{{end}}>{{.Name}}</option>
+              {{ end -}}
+            </select>
+            {{ end -}}
           </ul>
         </div>
       </div>
