@@ -170,7 +170,7 @@ func (n *Network) Error(dset *Dataset, pred []int32) float64 {
 func (n *Network) String() string {
 	s := n.configString()
 	if n.Layers != nil {
-		str := []string{"\n== Network =="}
+		str := []string{"\n== Network ==    input " + fmt.Sprint(n.inShape[:len(n.inShape)-1])}
 		for i, layer := range n.Layers {
 			dims := layer.OutShape()
 			str = append(str, fmt.Sprintf("%2d: %-12s %s", i, fmt.Sprint(dims[:len(dims)-1]), layer.ToString()))

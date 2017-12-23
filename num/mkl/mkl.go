@@ -124,8 +124,14 @@ func (l *Layer) HasParams() bool { return l.BFilter != nil }
 
 // Setup new convolution layer
 func Convolution(attr *Attr, n, c, h, w, nFeats, filtSize, stride, pad int) *Layer {
-	wOut := outSize(w, filtSize, stride, pad)
-	hOut := outSize(h, filtSize, stride, pad)
+	wOut, wPad := getOutSize(w, filtSize, stride, pad)
+	if wPad != 0 {
+		panic("Convolution: output size invalid, must be even no. of strides")
+	}
+	hOut, hPad := getOutSize(h, filtSize, stride, pad)
+	if hPad != 0 {
+		panic("Convolution: output size invalid, must be even no. of strides")
+	}
 	l := NewLayer("conv", []int{w, h, c, n}, []int{wOut, hOut, nFeats, n})
 	l.filtShape = []int{filtSize, filtSize, c, nFeats}
 	l.BFilter = NewPrimitive()
@@ -150,17 +156,23 @@ func Convolution(attr *Attr, n, c, h, w, nFeats, filtSize, stride, pad int) *Lay
 
 // Setup new max pooling layer
 func MaxPooling(attr *Attr, n, c, h, w, size, stride int) *Layer {
-	wOut := outSize(w, size, stride, 0)
-	hOut := outSize(h, size, stride, 0)
+	wOut, wPad := getOutSize(w, size, stride, 0)
+	hOut, hPad := getOutSize(h, size, stride, 0)
 	l := NewLayer("pool", []int{w, h, c, n}, []int{wOut, hOut, c, n})
 	csize := sizeDims2(size)
 	cstride := sizeDims2(stride)
-	offset := [2]C.int{}
+	offset := [4]C.int{}
+	var btype C.dnnBorder_t = C.dnnBorderZeros
+	if wPad != 0 || hPad != 0 {
+		offset[2] = C.int(wPad)
+		offset[3] = C.int(hPad)
+		btype = C.dnnBorderZerosAsymm
+	}
 	in := NewLayout(l.inShape)
 	chk(C.dnnPoolingCreateForward_F32(&l.Fwd.h, attr.h, C.dnnAlgorithmPoolingMax,
-		in.h, &csize[0], &cstride[0], &offset[0], C.dnnBorderZeros))
+		in.h, &csize[0], &cstride[0], &offset[0], btype))
 	chk(C.dnnPoolingCreateBackward_F32(&l.BData.h, attr.h, C.dnnAlgorithmPoolingMax,
-		in.h, &csize[0], &cstride[0], &offset[0], C.dnnBorderZeros))
+		in.h, &csize[0], &cstride[0], &offset[0], btype))
 	l.init()
 	l.layoutFromPrimitive(l.Fwd, C.dnnResourceWorkspace)
 	l.Alloc(C.dnnResourceWorkspace)
@@ -244,12 +256,9 @@ func (l *Layout) Size() int {
 }
 
 // utilities
-func outSize(x, size, stride, pad int) int {
+func getOutSize(x, size, stride, pad int) (s, extra int) {
 	ns := x - size + 2*pad
-	if ns%stride != 0 {
-		panic("output size invalid, must be even no. of strides")
-	}
-	return ns/stride + 1
+	return ns/stride + 1, ns % stride
 }
 
 func sizeDims2(a int) [2]C.size_t {

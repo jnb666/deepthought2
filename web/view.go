@@ -13,8 +13,6 @@ import (
 	"time"
 )
 
-const scaleWidth = 20
-
 type ViewPage struct {
 	*Templates
 	Page   string
@@ -25,12 +23,14 @@ type ViewPage struct {
 }
 
 type LayerInfo struct {
-	Desc     string
-	Image    string
-	Values   []template.HTML
-	Width    int
-	PadWidth int
-	Class    string
+	Desc      string
+	Image     []string
+	Values    []template.HTML
+	Cols      int
+	Width     int
+	CellWidth int
+	PadWidth  int
+	Class     string
 }
 
 // Base data for handler functions to view network activations and weights
@@ -131,8 +131,8 @@ func (p *ViewPage) getLayers(index int) {
 			fmt.Sprintf("input %d %v => %s", index+1, p.net.view.inShape, classes[label]),
 			fmt.Sprintf("/img/%s/%d", p.net.view.dset, index+1),
 			p.net.view.inImage,
-			0,
-			"input",
+			len(p.net.view.inShape) == 3 && p.net.view.inShape[2] == 3,
+			0, 0, "input",
 		)
 		// outputs at each layer
 		for i, l := range p.net.view.layers {
@@ -140,9 +140,7 @@ func (p *ViewPage) getLayers(index int) {
 				p.addImage(
 					fmt.Sprintf("%d: %s %v", i, l.ltype, l.outShape),
 					fmt.Sprintf("/net/outputs/%d?ts=%d", i, ts),
-					l.outImage,
-					factorMinOutput,
-					"weights",
+					l.outImage, false, factorMinOutput, 0, "weights",
 				)
 			}
 		}
@@ -162,7 +160,9 @@ func (p *ViewPage) getLayers(index int) {
 				if i == imax {
 					tag = "<u>" + tag + "</u>"
 				}
+				p.Layers[out].Class = "outputs"
 				p.Layers[out].Values = append(p.Layers[out].Values, template.HTML(tag))
+				p.Layers[out].CellWidth = int(100 / float64(len(l.outData)))
 			}
 		}
 	case "weights":
@@ -172,19 +172,22 @@ func (p *ViewPage) getLayers(index int) {
 				p.addImage(
 					fmt.Sprintf("%d: %s %v %v", i, l.ltype, l.wShape, l.bShape),
 					fmt.Sprintf("/net/weights/%d?ts=%d", i, ts),
-					l.wImage,
-					factorMinWeights,
-					"weights",
+					l.wImage, false, factorMinWeights, 200, "weights",
 				)
 			}
 		}
 	}
 }
 
-func (p *ViewPage) addImage(desc, url string, img *image.NRGBA, factorMin int, class string) {
-	info := LayerInfo{Desc: desc, Width: 100, Class: class}
+func (p *ViewPage) addImage(desc, url string, img *image.NRGBA, channels bool, factorMin, scaleWidth int, class string) {
+	info := LayerInfo{Desc: desc, Width: 100, Class: class, Image: []string{}}
 	if img != nil {
-		info.Image = url
+		info.Image = []string{url}
+		if channels {
+			for _, suffix := range []string{"/r", "/g", "/b"} {
+				info.Image = append(info.Image, url+suffix)
+			}
+		}
 		if class == "input" {
 			info.Width = 7
 		}
@@ -192,7 +195,8 @@ func (p *ViewPage) addImage(desc, url string, img *image.NRGBA, factorMin int, c
 			info.Width /= 2
 		}
 	}
-	info.PadWidth = 100 - info.Width
+	info.PadWidth = 100 - len(info.Image)*info.Width
+	info.Cols = len(info.Image) + 1
 	p.Layers = append(p.Layers, info)
 }
 

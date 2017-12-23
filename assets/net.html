@@ -11,18 +11,19 @@
       <tr>
         <td>
           <table class="image-table2">
-            <tr><td colspan="2">{{.Desc}}</td></tr>
+            <tr><td colspan="{{.Cols}}">{{.Desc}}</td></tr>
             <tr>
-              <td width="{{.Width}}%">
-                {{ if .Image -}}
-                <img class="{{.Class}}" src="{{.Image}}">
-                {{ end -}}
-                {{ if .Values -}}
+              {{ $l := . -}}
+              {{ range .Image -}}
+              <td width="{{$l.Width}}%">
+                <img class="{{$l.Class}}" src="{{.}}">
+                {{ if $l.Values -}}
                   <table class="image-table3">
-                    <tr>{{ range .Values -}}<td>{{.}}</td>{{ end -}}</tr>
+                    <tr>{{ range $l.Values -}}<td width="{{$l.CellWidth}}%">{{.}}</td>{{ end -}}</tr>
                   </table>
                 {{ end -}}
               </td>
+              {{ end -}}
               <td width="{{.PadWidth}}%"></td>
             </tr>
           </table>

@@ -115,7 +115,7 @@ body, html {
 
 .image-table2 td {
   font-size: 0.875em;
-  padding: 0;
+  padding: 2px;
   border: 0;
 }
 
@@ -172,5 +172,11 @@ img.input {
 img.weights {
   width: 100%;
   height: auto;
+  image-rendering: pixelated;
+}
+
+img.outputs {
+  width: 100%;
+  height: 30px;
   image-rendering: pixelated;
 }

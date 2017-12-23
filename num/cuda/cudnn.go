@@ -69,8 +69,14 @@ type ConvLayer struct {
 // Create new convolution layer
 func Convolution(s *Stream, n, c, h, w, nFeats, filtSize, stride, pad int) (*ConvLayer, int) {
 	l := &ConvLayer{}
-	wOut := outSize(w, filtSize, stride, pad)
-	hOut := outSize(h, filtSize, stride, pad)
+	wOut, wPad := getOutSize(w, filtSize, stride, pad)
+	if wPad != 0 {
+		panic("Convolution: output size invalid, must be even no. of strides")
+	}
+	hOut, hPad := getOutSize(h, filtSize, stride, pad)
+	if hPad != 0 {
+		panic("Convolution: output size invalid, must be even no. of strides")
+	}
 	l.Src = NewLayout(n, c, h, w)
 	l.Dst = NewLayout(n, nFeats, hOut, wOut)
 	l.Filter = NewFilterLayout(nFeats, c, filtSize, filtSize)
@@ -132,14 +138,14 @@ type PoolLayer struct {
 // Setup new max pooling layer
 func MaxPooling(n, c, h, w, size, stride int) *PoolLayer {
 	l := &PoolLayer{}
-	wOut := outSize(w, size, stride, 0)
-	hOut := outSize(h, size, stride, 0)
+	wOut, wPad := getOutSize(w, size, stride, 0)
+	hOut, hPad := getOutSize(h, size, stride, 0)
 	l.Src = NewLayout(n, c, h, w)
 	l.Dst = NewLayout(n, c, hOut, wOut)
 
 	chkDnn(C.cudnnCreatePoolingDescriptor(&l.desc))
 	chkDnn(C.cudnnSetPooling2dDescriptor(l.desc, C.CUDNN_POOLING_MAX, C.CUDNN_PROPAGATE_NAN,
-		C.int(size), C.int(size), 0, 0, C.int(stride), C.int(stride)))
+		C.int(size), C.int(size), C.int(hPad), C.int(wPad), C.int(stride), C.int(stride)))
 
 	runtime.SetFinalizer(l, func(obj *PoolLayer) { obj.Release() })
 	return l
@@ -306,12 +312,9 @@ func (l *FilterLayout) Release() {
 	}
 }
 
-func outSize(x, size, stride, pad int) int {
+func getOutSize(x, size, stride, pad int) (s, extra int) {
 	ns := x - size + 2*pad
-	if ns%stride != 0 {
-		panic("output size invalid, must be even no. of strides")
-	}
-	return ns/stride + 1
+	return ns/stride + 1, ns % stride
 }
 
 func maxSize(size []C.size_t) (max int) {

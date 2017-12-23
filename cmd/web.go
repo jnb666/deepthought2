@@ -60,6 +60,7 @@ func main() {
 	r.HandleFunc("/images/{dset}/{opt:[a-z]+}", imagePage.Setopt())
 	r.HandleFunc("/grid/{dset}", imagePage.Grid())
 	r.HandleFunc("/img/{dset}/{id:[0-9]+}", imagePage.Image())
+	r.HandleFunc("/img/{dset}/{id:[0-9]+}/{col:(?:r|g|b)}", imagePage.Image())
 
 	viewPage := web.NewViewPage(t.Clone(), net)
 	r.HandleFunc("/view/{page}/", viewPage.Base())

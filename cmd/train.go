@@ -9,7 +9,7 @@ import (
 )
 
 func predict(q num.Queue, net *nnet.Network, d nnet.Data) {
-	dset := nnet.NewDataset(q.Dev(), d, 10, 10, net.FlattenInput, nil)
+	dset := nnet.NewDataset(q.Dev(), d, net.TrainBatch, net.TrainBatch, net.FlattenInput, nil)
 	dset.Rewind()
 	x, y, _ := dset.NextBatch()
 	classes := q.NewArray(num.Int32, y.Dims()[0])

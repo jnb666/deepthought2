@@ -75,7 +75,22 @@ func (d *Data) Classes() []string { return d.Class }
 func (d *Data) Shape() []int { return d.Dims }
 
 // Image returns given image number
-func (d *Data) Image(ix int) image.Image { return d.Images[ix] }
+func (d *Data) Image(ix int, channel string) image.Image {
+	img, ok := d.Images[ix].(*image.NRGBA)
+	if channel == "" || !ok {
+		return d.Images[ix]
+	}
+	offset := map[string][3]int{"r": {0, 1, 2}, "g": {1, 0, 2}, "b": {2, 0, 1}}[channel]
+	res := image.NewNRGBA(img.Bounds())
+	for i := 0; i < len(img.Pix)/4; i++ {
+		val := img.Pix[4*i+offset[0]]
+		res.Pix[4*i+offset[0]] = val
+		//res.Pix[4*i+offset[1]] = 255 - val
+		//res.Pix[4*i+offset[2]] = 255 - val
+		res.Pix[4*i+3] = 255
+	}
+	return res
+}
 
 // Label returns classification for given images
 func (d *Data) Label(index []int, label []int32) {

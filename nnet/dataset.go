@@ -30,7 +30,7 @@ type Data interface {
 	Shape() []int
 	Label(index []int, label []int32)
 	Input(index []int, buf []float32)
-	Image(i int) image.Image
+	Image(i int, channel string) image.Image
 	SetFile(io.ReadSeeker)
 	File() io.ReadSeeker
 }
@@ -257,7 +257,7 @@ func (d data) Input(index []int, buf []float32) {
 	}
 }
 
-func (d data) Image(i int) image.Image { return nil }
+func (d data) Image(i int, channel string) image.Image { return nil }
 
 func (d data) SetFile(io.ReadSeeker) {}
 

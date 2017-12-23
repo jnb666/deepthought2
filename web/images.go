@@ -209,14 +209,16 @@ func (p *ImagePage) Image() func(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		image := data.Image(id - 1)
-		if r.FormValue("d") != "" {
-			image = p.net.trans.Transform(image, 0)
+		res := data.Image(id-1, vars["col"])
+		if vars["col"] == "" {
+			if r.FormValue("d") != "" {
+				res = p.net.trans.Transform(res, 0)
+			}
+			pred := p.predict(id)
+			res = img.Highlight(res, pred >= 0 && p.label(id) != pred)
 		}
-		pred := p.predict(id)
-		image = img.Highlight(image, pred >= 0 && p.label(id) != pred)
 		w.Header().Set("Content-type", "image/png")
-		png.Encode(w, image)
+		png.Encode(w, res)
 	}
 }
 
