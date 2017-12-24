@@ -17,7 +17,7 @@ import (
 type Layer interface {
 	InShape() []int
 	OutShape() []int
-	Fprop(q Queue, in, work Array) Array
+	Fprop(q Queue, in, work Array, enableDropout bool) Array
 	Bprop(q Queue, grad, work Array) Array
 	Output() Array
 	Release()
@@ -76,7 +76,7 @@ func (l *convCuda) SetParamData(W, B, dW, dB Array) {
 
 func (l *convCuda) Output() Array { return l.dst }
 
-func (l *convCuda) Fprop(que Queue, in, work Array) Array {
+func (l *convCuda) Fprop(que Queue, in, work Array, enableDropout bool) Array {
 	if !SameShape(in.Dims(), l.InShape()) {
 		panic(fmt.Errorf("fprop conv: invalid input shape: have %v, expect %v", in.Dims(), l.InShape()))
 	}
@@ -144,7 +144,7 @@ func (l *poolCuda) Release() {
 
 func (l *poolCuda) Output() Array { return l.dst }
 
-func (l *poolCuda) Fprop(q Queue, in, work Array) Array {
+func (l *poolCuda) Fprop(q Queue, in, work Array, enableDropout bool) Array {
 	if !SameShape(in.Dims(), l.InShape()) {
 		panic(fmt.Errorf("fprop pool: invalid input shape: have %v, expect %v", in.Dims(), l.InShape()))
 	}
@@ -208,7 +208,7 @@ func (l *activationCuda) Release() {
 
 func (l *activationCuda) Output() Array { return l.dst }
 
-func (l *activationCuda) Fprop(q Queue, in, work Array) Array {
+func (l *activationCuda) Fprop(q Queue, in, work Array, enableDropout bool) Array {
 	l.src = in
 	q.Call(
 		args(C.CUDNN_EXECUTE+cuda.ActivFprop, l.Ptr(), l.Src.Ptr(), in.Data(), l.dst.Data()),
@@ -255,7 +255,7 @@ func (a *activation) OutShape() []int { return a.dst.Dims() }
 
 func (a *activation) Output() Array { return a.dst }
 
-func (a *activation) Fprop(q Queue, in, work Array) Array {
+func (a *activation) Fprop(q Queue, in, work Array, enableDropout bool) Array {
 	a.src = in
 	if a.softmax {
 		q.Call(Softmax(a.src, a.dst))
@@ -302,6 +302,7 @@ type dropoutCuda struct {
 	*cuda.DropoutLayer
 	src, dst Array
 	diffSrc  Array
+	enabled  bool
 }
 
 func (l *dropoutCuda) Release() {
@@ -312,7 +313,11 @@ func (l *dropoutCuda) Release() {
 
 func (l *dropoutCuda) Output() Array { return l.dst }
 
-func (l *dropoutCuda) Fprop(q Queue, in, work Array) Array {
+func (l *dropoutCuda) Fprop(q Queue, in, work Array, enableDropout bool) Array {
+	l.enabled = enableDropout
+	if !l.enabled {
+		return in
+	}
 	l.src = in
 	q.Call(
 		args(C.CUDNN_EXECUTE+cuda.DropoutFprop, l.Ptr(), l.Src.Ptr(), in.Data(), l.dst.Data(), l.Reserve.Ptr, l.Reserve.Size),
@@ -321,6 +326,9 @@ func (l *dropoutCuda) Fprop(q Queue, in, work Array) Array {
 }
 
 func (l *dropoutCuda) Bprop(q Queue, grad, work Array) Array {
+	if !l.enabled {
+		return grad
+	}
 	q.Call(
 		args(C.CUDNN_EXECUTE+cuda.DropoutBprop, l.Ptr(), l.Src.Ptr(), grad.Data(), l.diffSrc.Data(), l.Reserve.Ptr, l.Reserve.Size),
 	)
@@ -347,9 +355,9 @@ func (l *dropout) Release() {
 	l.filter.Release()
 }
 
-func (l *dropout) Fprop(q Queue, in, work Array) Array {
+func (l *dropout) Fprop(q Queue, in, work Array, enableDropout bool) Array {
 	for i := range l.mask {
-		if l.rng.Float64() < l.ratio {
+		if enableDropout && l.rng.Float64() < l.ratio {
 			l.mask[i] = 0
 		} else {
 			l.mask[i] = 1
@@ -394,7 +402,7 @@ func (l layerMKL) SetParamData(W, B, dW, dB Array) {
 
 func (l layerMKL) Output() Array { return l.dst }
 
-func (l layerMKL) Fprop(q Queue, in, work Array) Array {
+func (l layerMKL) Fprop(q Queue, in, work Array, enableDropout bool) Array {
 	if !SameShape(in.Dims(), l.InShape()) {
 		panic(fmt.Errorf("fprop: invalid input shape: have %v, expect %v", in.Dims(), l.InShape()))
 	}

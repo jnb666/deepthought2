@@ -57,10 +57,10 @@ func getInputs(t *testing.T, q num.Queue) (input, W, B num.Array) {
 
 func setupNetwork(q num.Queue, W, B num.Array) (l1, l2 Layer, dW, dB num.Array) {
 	lin := &linear{Linear: Linear{Nout: nOut}}
-	lin.Init(q, []int{nIn, batch}, 0)
+	lin.Init(q, []int{nIn, batch}, 0, nil)
 	lin.SetParams(q, W, B)
 	relu := &activation{Activation: Activation{Atype: "relu"}}
-	relu.Init(q, []int{nOut, batch}, 1)
+	relu.Init(q, []int{nOut, batch}, 1, nil)
 	return lin, relu, lin.dw, lin.db
 }
 
@@ -85,8 +85,8 @@ func TestFprop(t *testing.T) {
 		input, W, B := getInputs(t, q)
 		lin, relu, _, _ := setupNetwork(q, W, B)
 
-		temp := lin.Fprop(q, input, nil)
-		output := relu.Fprop(q, temp, nil)
+		temp := lin.Fprop(q, input, nil, true)
+		output := relu.Fprop(q, temp, nil, true)
 
 		expect := []float32{
 			0, 0.21253887, 0.49112207, 0,
@@ -127,8 +127,8 @@ func TestDNNBprop(t *testing.T) {
 		lin, relu, dW, dB := setupNetwork(q, W, B)
 		yOneHot := getOutput(q)
 
-		temp := lin.Fprop(q, input, nil)
-		output := relu.Fprop(q, temp, nil)
+		temp := lin.Fprop(q, input, nil, true)
+		output := relu.Fprop(q, temp, nil, true)
 
 		inGrad := inputGrad(t, q, output, yOneHot)
 		temp2 := relu.Bprop(q, inGrad, nil)

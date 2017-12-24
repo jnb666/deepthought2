@@ -155,7 +155,7 @@ func (p *ViewPage) getLayers(index int) {
 				}
 			}
 			for i, val := range l.outData {
-				col := color.Gray{Y: uint8(128 * (1 - val))}
+				col := color.Gray{Y: uint8(255 - 128*(1-val))}
 				tag := fmt.Sprintf(`<span style="color:%s;">%s</span>`, htmlColor(col), classes[i])
 				if i == imax {
 					tag = "<u>" + tag + "</u>"

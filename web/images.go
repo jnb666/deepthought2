@@ -92,7 +92,7 @@ func (p *ImagePage) Grid() func(w http.ResponseWriter, r *http.Request) {
 		p.Classes = ""
 		for i, class := range p.net.Data[p.Dset].Classes() {
 			if strconv.Itoa(i) != class {
-				p.Classes += fmt.Sprintf("%d:%s ", i+1, class)
+				p.Classes += fmt.Sprintf("%d:%s ", i, class)
 			}
 		}
 		p.Exec(w, "grid", p, false)

@@ -300,7 +300,7 @@ func TrainEpoch(net *Network, dset *Dataset, acc num.Array) float64 {
 		}
 		q.Finish()
 		x, _, yOneHot := dset.NextBatch()
-		yPred := net.Fprop(x)
+		yPred := net.Fprop(x, true)
 		if net.DebugLevel >= 2 {
 			fmt.Printf("yOneHot:\n%s", yOneHot.String(q))
 			fmt.Printf("yPred:\n%s", yPred.String(q))

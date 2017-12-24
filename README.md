@@ -9,7 +9,7 @@ Features:
 * Example data models including MNist digit recognition.
 
 To do:
-* Additional examples.
+* Add confusion plot
 
 Dependencies:
 * CPU Blas and DNN libraries <https://software.intel.com/en-us/mkl>

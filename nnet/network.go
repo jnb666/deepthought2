@@ -114,20 +114,20 @@ func (n *Network) OutLayer() OutputLayer {
 }
 
 // Feed forward the input to get the predicted output
-func (n *Network) Fprop(input num.Array) num.Array {
+func (n *Network) Fprop(input num.Array, enableDropout bool) num.Array {
 	pred := input
 	for i, layer := range n.Layers {
 		if n.DebugLevel >= 2 && pred != nil {
 			fmt.Printf("layer %d input\n%s", i, pred.String(n.queue))
 		}
-		pred = layer.Fprop(n.queue, pred, n.WorkSpace)
+		pred = layer.Fprop(n.queue, pred, n.WorkSpace, enableDropout)
 	}
 	return pred
 }
 
 // Predict output given input data
 func (n *Network) Predict(input, classes num.Array) num.Array {
-	yPred := n.Fprop(input)
+	yPred := n.Fprop(input, false)
 	if n.DebugLevel >= 2 {
 		fmt.Printf("yPred\n%s", yPred.String(n.queue))
 	}

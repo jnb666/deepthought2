@@ -12,7 +12,7 @@ type Layer interface {
 	Init(q num.Queue, inShape []int, index int, rng *rand.Rand) int
 	InShape() []int
 	OutShape() []int
-	Fprop(q num.Queue, in, work num.Array) num.Array
+	Fprop(q num.Queue, in, work num.Array, enableDropout bool) num.Array
 	Bprop(q num.Queue, grad, work num.Array) num.Array
 	IsActiv() bool
 	Type() string
@@ -258,7 +258,7 @@ func (l *linear) Release() {
 
 func (l *linear) Output() num.Array { return l.dst }
 
-func (l *linear) Fprop(q num.Queue, in, work num.Array) num.Array {
+func (l *linear) Fprop(q num.Queue, in, work num.Array, enableDropout bool) num.Array {
 	l.src = in
 	q.Call(
 		num.Copy(l.b, l.temp1),
@@ -384,7 +384,7 @@ func (l *flatten) Release() {}
 
 func (l *flatten) Output() num.Array { return l.dst }
 
-func (l *flatten) Fprop(q num.Queue, in, work num.Array) num.Array {
+func (l *flatten) Fprop(q num.Queue, in, work num.Array, enableDropout bool) num.Array {
 	l.dst = in.Reshape(l.outShape...)
 	return l.dst
 }

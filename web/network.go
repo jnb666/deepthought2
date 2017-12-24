@@ -8,6 +8,8 @@ import (
 	"github.com/jnb666/deepthought2/img"
 	"github.com/jnb666/deepthought2/nnet"
 	"github.com/jnb666/deepthought2/num"
+	"gonum.org/v1/plot/palette"
+	"gonum.org/v1/plot/palette/moreland"
 	"html/template"
 	"image"
 	"image/color"
@@ -31,9 +33,6 @@ const (
 
 var tuneOpts = []string{"Eta", "Lambda", "TrainBatch"}
 var tuneOptHtml = []string{"&eta;", "&lambda;", "batch"}
-
-// color map definition
-var cmap = [][3]float32{{0, 0, .5}, {0, 0, 1}, {0, .5, 1}, {0, 1, 1}, {.5, 1, .5}, {1, 1, 0}, {1, .5, 0}, {1, 0, 0}, {.5, 0, 0}}
 
 // Network and associated training / test data and configuration
 type Network struct {
@@ -477,6 +476,7 @@ type viewData struct {
 	inShape []int
 	inData  []float32
 	inImage *image.NRGBA
+	cmapOut palette.ColorMap
 }
 
 type viewLayer struct {
@@ -493,6 +493,8 @@ type viewLayer struct {
 	wix, wiy int
 	wox, woy int
 	wborder  int
+	cmapW    palette.ColorMap
+	cmapB    palette.ColorMap
 }
 
 func newViewData(dev num.Device, data map[string]nnet.Data, conf nnet.Config, rng *rand.Rand) *viewData {
@@ -531,7 +533,15 @@ func newViewData(dev num.Device, data map[string]nnet.Data, conf nnet.Config, rn
 		if pLayer, ok := layer.(nnet.ParamLayer); ok {
 			W, B := pLayer.Params()
 			l.addWeightImage(i, W.Dims(), B.Dims())
+			scale := 2 / math.Sqrt(float64(num.Prod(layer.InShape())))
+			l.cmapW = moreland.SmoothGreenRed()
+			l.cmapW.SetMin(-scale)
+			l.cmapW.SetMax(scale)
+			l.cmapB = moreland.SmoothGreenRed()
+			l.cmapB.SetMin(-1)
+			l.cmapB.SetMax(1)
 		}
+
 		v.layers = append(v.layers, l)
 	}
 	// allocate buffers and output images
@@ -540,6 +550,9 @@ func newViewData(dev num.Device, data map[string]nnet.Data, conf nnet.Config, rn
 			v.layers[i].addOutputImage(i, l.outShape)
 		}
 	}
+	v.cmapOut = moreland.BlackBody()
+	v.cmapOut.SetMin(0)
+	v.cmapOut.SetMax(1)
 	return v
 }
 
@@ -553,7 +566,7 @@ func (v *viewData) update(index int) {
 	v.queue.Call(
 		num.Write(v.input, v.inData),
 	)
-	v.Fprop(v.input)
+	v.Fprop(v.input, false)
 
 	for i, l := range v.layers {
 		if l.outImage != nil {
@@ -565,7 +578,7 @@ func (v *viewData) update(index int) {
 			case 1:
 				height := l.outImage.Bounds().Dy()
 				for i, val := range l.outData {
-					l.outImage.Set(i/height, i%height, mapColor(val, -1, 1))
+					l.outImage.Set(i/height, i%height, mapColor(val, v.cmapOut))
 				}
 			case 3:
 				bw, bh := l.outShape[0], l.outShape[1]
@@ -573,7 +586,7 @@ func (v *viewData) update(index int) {
 					xb := (bw + 1) * (i % l.ox)
 					yb := (bh + 1) * (i / l.ox)
 					for j := 0; j < bw*bh; j++ {
-						col := mapColor(l.outData[i*bw*bh+j], -1, 1)
+						col := mapColor(l.outData[i*bw*bh+j], v.cmapOut)
 						l.outImage.Set(xb+j%bw+1, yb+j/bw+1, col)
 					}
 				}
@@ -585,11 +598,10 @@ func (v *viewData) update(index int) {
 				num.Read(W, l.wData),
 				num.Read(B, l.bData),
 			).Finish()
-			scale := 5 * float32(1/math.Sqrt(float64(num.Prod(v.Layers[i].InShape()))))
 			// draw bias
 			for i := 0; i < l.wox*l.woy; i++ {
 				xb, yb := l.block(i)
-				biasCol := mapColor(l.bData[i], -scale, scale)
+				biasCol := mapColor(l.bData[i], l.cmapB)
 				for j := 0; j < l.wix; j++ {
 					l.wImage.Set(xb+j, yb, biasCol)
 				}
@@ -602,7 +614,7 @@ func (v *viewData) update(index int) {
 			for i := 0; i < l.wox*l.woy; i++ {
 				xb, yb := l.block(i)
 				for j := 0; j < bsize; j++ {
-					l.wImage.Set(xb+j%l.wix+1, yb+j/l.wix+1, mapColor(l.wData[i*bsize+j], -scale, scale))
+					l.wImage.Set(xb+j%l.wix+1, yb+j/l.wix+1, mapColor(l.wData[i*bsize+j], l.cmapW))
 				}
 			}
 		}
@@ -688,21 +700,17 @@ func factorise(n, nmin int, aspect float64) (f1, f2 int) {
 }
 
 // convert value in range cmin:cmax to interpolated color from cmap
-func mapColor(val float32, cmin, cmax float32) color.NRGBA {
-	var col [3]float32
-	ncol := len(cmap)
-	switch {
-	case val <= cmin:
-		col = cmap[0]
-	case val >= cmax:
-		col = cmap[ncol-1]
-	default:
-		vsc := float32(ncol-1) * (val - cmin) / (cmax - cmin)
-		ix := int(vsc)
-		fx := vsc - float32(ix)
-		for i := range col {
-			col[i] = cmap[ix][i]*(1-fx) + cmap[ix+1][i]*fx
-		}
+func mapColor(val float32, cmap palette.ColorMap) color.Color {
+	v := float64(val)
+	if v < cmap.Min() {
+		v = cmap.Min()
 	}
-	return color.NRGBA{uint8(col[0] * 255), uint8(col[1] * 255), uint8(col[2] * 255), 255}
+	if v > cmap.Max() {
+		v = cmap.Max()
+	}
+	col, err := cmap.At(v)
+	if err != nil {
+		log.Fatalf("error in colormap lookup: %s\n", err)
+	}
+	return col
 }
