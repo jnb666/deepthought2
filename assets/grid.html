@@ -14,21 +14,22 @@
           {{ $i := $p.Index $row $col -}}
           <td>
             {{ if $i -}}
-            <div class="digit-image">
-              {{ if $p.Distort -}}
-              <img src="/img/{{$p.Dset}}/{{$i}}?d={{$p.Distort}}" width="{{$p.Width}}" height="{{$p.Height}}" alt="{{$i}}" title="{{$i}}">
-              {{ else -}}
-              <img src="/img/{{$p.Dset}}/{{$i}}" width="{{$p.Width}}" height="{{$p.Height}}" alt="{{$i}}" title="{{$i}}">
-              {{ end -}}
-              <span class="digit-label">{{$p.Label $i}}</span>
-            </div>
+              {{ $l := $p.Label $i -}}
+              <div class="{{$l.Class}}">
+                {{ if $p.Distort -}}
+                  <img src="/img/{{$p.Dset}}/{{$i}}?d={{$p.Distort}}" width="{{$p.Width}}" height="{{$p.Height}}" alt="{{$l.Desc}}" title="{{$l.Desc}}">
+                {{ else -}}
+                  <img src="/img/{{$p.Dset}}/{{$i}}" width="{{$p.Width}}" height="{{$p.Height}}" alt="{{$l.Desc}}" title="{{$l.Desc}}">
+                {{ end -}}
+                <span class="image-label">{{$l.Pred}}</span>
+              </div>
             {{ end -}}
           </td>
         {{ end -}}
         </tr>
       {{ end -}}
       </table>
-      <center><h4>{{.Total}} images &nbsp; [page {{.Page}} of {{.Pages}}] &nbsp; {{.Classes}}</h4></center>
+      <center><h4>{{.Total}} images &nbsp; [page {{.Page}} of {{.Pages}}]</h4></center>
     </div>
   </div>
 </div>

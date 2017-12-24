@@ -55,6 +55,9 @@ func (s Stats) FormatItem(i int) string {
 	if i == 0 {
 		return fmt.Sprintf("%7.4f", s.Values[0])
 	}
+	if s.Values[i] >= 0.1 {
+		return fmt.Sprintf("%6.1f%%", s.Values[i]*100)
+	}
 	return fmt.Sprintf("%6.2f%%", s.Values[i]*100)
 }
 

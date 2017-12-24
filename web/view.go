@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/gorilla/mux"
 	"html/template"
@@ -31,6 +32,7 @@ type LayerInfo struct {
 	CellWidth int
 	PadWidth  int
 	Class     string
+	ImageData bytes.Buffer
 }
 
 // Base data for handler functions to view network activations and weights
@@ -112,7 +114,6 @@ func (p *ViewPage) Network() func(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		p.net.view.update(index)
 		p.getLayers(index)
 		p.Exec(w, "net", p, false)
 	}
@@ -124,6 +125,7 @@ func (p *ViewPage) getLayers(index int) {
 	ts := time.Now().Unix()
 	switch p.Page {
 	case "outputs":
+		p.net.view.updateOutputs(index)
 		// input image
 		classes := p.net.view.data.Classes()
 		label := p.net.Labels[p.net.view.dset][index]
@@ -139,8 +141,8 @@ func (p *ViewPage) getLayers(index int) {
 			if l.outShape != nil {
 				p.addImage(
 					fmt.Sprintf("%d: %s %v", i, l.ltype, l.outShape),
-					fmt.Sprintf("/net/outputs/%d?ts=%d", i, ts),
-					l.outImage, false, factorMinOutput, 0, "weights",
+					fmt.Sprintf("/net/outputs/%d?ts=%d", len(p.Layers), ts),
+					l.outImage, false, factorMinOutput, 100, "weights",
 				)
 			}
 		}
@@ -166,12 +168,13 @@ func (p *ViewPage) getLayers(index int) {
 			}
 		}
 	case "weights":
+		p.net.view.updateWeights()
 		// display weights and biases
 		for i, l := range p.net.view.layers {
 			if l.wShape != nil {
 				p.addImage(
 					fmt.Sprintf("%d: %s %v %v", i, l.ltype, l.wShape, l.bShape),
-					fmt.Sprintf("/net/weights/%d?ts=%d", i, ts),
+					fmt.Sprintf("/net/weights/%d?ts=%d", len(p.Layers), ts),
 					l.wImage, false, factorMinWeights, 200, "weights",
 				)
 			}
@@ -194,6 +197,9 @@ func (p *ViewPage) addImage(desc, url string, img *image.NRGBA, channels bool, f
 		if img.Bounds().Dx() <= scaleWidth {
 			info.Width /= 2
 		}
+		if err := png.Encode(&info.ImageData, img); err != nil {
+			log.Println(err)
+		}
 	}
 	info.PadWidth = 100 - len(info.Image)*info.Width
 	info.Cols = len(info.Image) + 1
@@ -208,18 +214,12 @@ func (p *ViewPage) Image() func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		page := vars["page"]
 		layer, _ := strconv.Atoi(vars["layer"])
-		w.Header().Set("Content-type", "image/png")
-		if layer < len(p.net.view.layers) {
-			l := p.net.view.layers[layer]
-			if page == "outputs" && l.outImage != nil {
-				png.Encode(w, l.outImage)
-				return
-			} else if page == "weights" && l.wImage != nil {
-				png.Encode(w, l.wImage)
-				return
-			}
+		if layer >= len(p.Layers) || p.Layers[layer].ImageData.Len() == 0 {
+			log.Printf("viewImage: not found page=%s layer=%d\n", page, layer)
+			http.NotFound(w, r)
+			return
 		}
-		log.Printf("viewImage: not found page=%s layer=%d\n", page, layer)
-		http.NotFound(w, r)
+		w.Header().Set("Content-type", "image/png")
+		w.Write(p.Layers[layer].ImageData.Bytes())
 	}
 }

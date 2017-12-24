@@ -29,7 +29,7 @@
       <div class="l-box">
         <form class="pure-form pure-form-aligned" action="/config/tune" method="post">
         <fieldset>
-        <legend>Tune parameters</legend>
+        <legend class="white-text">Tune parameters</legend>
         {{ range .TuneFields -}}
         <div class="pure-control-group">
           <label for="{{.Name}}">{{.Name}}</label>
@@ -43,7 +43,7 @@
       <div class="l-box">
         <form class="pure-form pure-form-aligned">
         <fieldset>
-        <legend>Layer details</legend>
+        <legend class="white-text">Layer details</legend>
         {{ range .Layers -}}
         <div class="pure-control-group read-only">
           <label for="layer-{{.Index}}">{{.Shape}}</label>

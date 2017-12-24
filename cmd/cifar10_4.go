@@ -8,14 +8,12 @@ import (
 func main() {
 	conf := nnet.Config{
 		DataSet:       "cifar10",
-		Eta:           0.1,
+		Eta:           0.05,
 		Lambda:        0.5,
 		Bias:          0.01,
 		NormalWeights: true,
-		TrainRuns:     10,
+		TrainRuns:     5,
 		MaxEpoch:      50,
-		StopAfter:     2,
-		ExtraEpochs:   3,
 		TrainBatch:    32,
 		TestBatch:     100,
 		Shuffle:       true,

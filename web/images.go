@@ -3,8 +3,8 @@ package web
 import (
 	"fmt"
 	"github.com/gorilla/mux"
-	"github.com/jnb666/deepthought2/img"
 	"image/png"
+	"log"
 	"math/rand"
 	"net/http"
 	"strconv"
@@ -23,8 +23,13 @@ type ImagePage struct {
 	Height  int
 	Pages   int
 	Total   int
-	Classes string
 	net     *Network
+}
+
+type LabelInfo struct {
+	Desc  string
+	Pred  string
+	Class string
 }
 
 // Base data for handler functions to view input image dataset
@@ -85,15 +90,13 @@ func (p *ImagePage) Grid() func(w http.ResponseWriter, r *http.Request) {
 		defer p.net.Unlock()
 		vars := mux.Vars(r)
 		p.Dset = vars["dset"]
+		if _, ok := p.net.Data[p.Dset]; !ok {
+			p.logError(w, http.StatusNotFound, ErrNotFound)
+			return
+		}
 		p.Total, p.Pages = p.pageCount()
 		if p.Page > p.Pages || p.Page < 1 {
 			p.Page = 1
-		}
-		p.Classes = ""
-		for i, class := range p.net.Data[p.Dset].Classes() {
-			if strconv.Itoa(i) != class {
-				p.Classes += fmt.Sprintf("%d:%s ", i, class)
-			}
 		}
 		p.Exec(w, "grid", p, false)
 	}
@@ -171,29 +174,34 @@ func (p *ImagePage) Index(row, col int) int {
 	return 0
 }
 
-func (p *ImagePage) label(i int) int {
-	lab := p.net.Labels[p.Dset]
-	if i < 1 || i > len(lab) {
-		return -1
+func (p *ImagePage) Label(i int) (l LabelInfo) {
+	i--
+	l.Class = "image-ok"
+	data := p.net.Data[p.Dset]
+	labels := p.net.Labels[p.Dset]
+	predict := p.net.Pred[p.Dset]
+	if data == nil || labels == nil || i < 0 || i >= len(labels) {
+		return
 	}
-	return int(lab[i-1])
+	l.Desc = fmt.Sprintf("%d: %s", i, data.Classes()[labels[i]])
+	if predict == nil || i >= len(predict) {
+		return
+	}
+	l.Pred = fmt.Sprint(data.Classes()[predict[i]])
+	if predict[i] != labels[i] {
+		l.Class = "image-error"
+	}
+	return
 }
 
-func (p *ImagePage) predict(i int) int {
-	pred, ok := p.net.Pred[p.Dset]
-	if !ok || i < 1 || i > len(pred) {
-		return -1
+func (p *ImagePage) Desc(i int) string {
+	i--
+	data := p.net.Data[p.Dset]
+	labels := p.net.Labels[p.Dset]
+	if data == nil || labels == nil || i < 0 || i >= len(labels) {
+		return ""
 	}
-	return int(pred[i-1])
-}
-
-func (p *ImagePage) Label(i int) string {
-	lab := p.label(i)
-	text := strconv.Itoa(lab)
-	if pred := p.predict(i); pred >= 0 && pred != lab {
-		text += fmt.Sprintf(" => %d", pred)
-	}
-	return text
+	return fmt.Sprintf("%d: %s", i, data.Classes()[labels[i]])
 }
 
 // Handler function for the image data
@@ -204,18 +212,20 @@ func (p *ImagePage) Image() func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		dset := vars["dset"]
 		id, _ := strconv.Atoi(vars["id"])
+		id--
 		data, ok := p.net.Data[dset]
-		if !ok || id < 1 || id > data.Len() {
+		if !ok || id < 0 || id >= data.Len() {
 			http.NotFound(w, r)
 			return
 		}
-		res := data.Image(id-1, vars["col"])
+		res := data.Image(id, vars["col"])
 		if vars["col"] == "" {
 			if r.FormValue("d") != "" {
-				res = p.net.trans.Transform(res, 0)
+				var err error
+				if res, err = p.net.trans.Transform(res, 0); err != nil {
+					log.Println(err)
+				}
 			}
-			pred := p.predict(id)
-			res = img.Highlight(res, pred >= 0 && p.label(id) != pred)
 		}
 		w.Header().Set("Content-type", "image/png")
 		png.Encode(w, res)

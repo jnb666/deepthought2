@@ -51,15 +51,9 @@
     {{ end -}}
   </div>
   <div class="pure-u-1-2">
-    {{ if .OptionSelected "loss" -}}
-      <div class="img-box">{{ .LossPlot 450 300 }}</div>
+    {{ range .Plots -}}
+      <div class="img-box">{{.}}</div>
     {{ end -}} 
-    {{ if .OptionSelected "errors" -}}
-      <div class="img-box">{{ .ErrorPlot 450 300 }}</div>
-    {{ end -}}
-    {{ if .OptionSelected "history" -}}
-      <div class="img-box">{{ .HistoryPlot 450 400 }}</div>
-    {{ end -}}
   </div>
 </div>
 </body>

@@ -3,6 +3,8 @@ body, html {
   height: 100%;
   margin: 0; 
   padding: 0;
+  background-color: #444;
+  color: white; 
 }
 
 .root-container {
@@ -21,10 +23,6 @@ body, html {
   display: table-row;
   height: 100%; 
   overflow: hidden 
-}
-
-.grey-background {
-  background-color: #404040;
 }
 
 .body-container iframe {
@@ -46,7 +44,7 @@ body, html {
 }
 
 .menu-selected {
-  background: #0000D0;
+  background: #00d;
 }
 
 .menu-item {
@@ -60,7 +58,7 @@ body, html {
 }
 
 .nav-menu {
-  background: #000070;
+  background: #007;
   color: white;
 }
 
@@ -80,24 +78,33 @@ body, html {
 
 .img-box {
   float: right;
-  padding-top: 0.5em;
-  padding-right: 1em;
+  padding-top: 8px;
+  padding-right: 16px;
+  width: 466px;
+  height: 358px;
 }
 
 .model-select {
-  background: #0000C0;
+  background: #00c;
+}
+
+.stats-table {
+  border: 0;
 }
 
 .stats-table th {
   padding: 0.5em;
   font-size: 0.8em;
+  background-color: #aaa;
+  border: 1px solid #444;  
 }
 
 .stats-table td {
-  padding-top: 0.25em;  
-  padding-left: 0.5em;
+  padding: 0.5em;
   font-size: 0.825em;
   vertical-align: top;
+  background-color: #222;
+  border: 1px solid #444;  
 }
 
 .image-table {
@@ -109,7 +116,7 @@ body, html {
 .image-table td {
   padding: 5px;
   border: 1px solid #cbcbcb;
-  background-color: #404040;
+  background-color: #444;
 }
 
 .image-table2 {
@@ -143,15 +150,29 @@ body, html {
   border: 0;
 }
 
-.digit-image {
+.image-ok {
   position: relative;
   width: 100%;
   padding-top: 1em;
   padding-left: 2px;
-  background-color: #404040;
+  padding-right: 0;
+  padding-bottom: 0;
+  background-color: #222;
+  border: 1px solid #222;
 }
 
-.digit-label {
+.image-error {
+  position: relative;
+  width: 100%;
+  padding-top: 1em;
+  padding-left: 2px;
+  padding-right: 0;
+  padding-bottom: 0;
+  background-color: #a00;
+  border: 1px solid #a00;
+}
+
+.image-label {
   position: absolute;
   top: 0;
   left: 4px;
@@ -162,6 +183,20 @@ body, html {
 .error-text {
   color: red;
   font-weight: bold;
+}
+
+.pure-form legend {
+    display: block;
+    width: 100%;
+    padding: 0.3em 0;
+    margin-bottom: 0.3em;
+    color: #ccc;
+    border-bottom: 1px solid #e5e5e5;
+}
+
+input {
+  color: black;
+  font-size: 0.8em;
 }
 
 .read-only input[readonly] {

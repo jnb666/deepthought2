@@ -11,9 +11,9 @@ import (
 )
 
 const (
-	scale = 2
-	rows  = 10
-	cols  = 15
+	scale = 3
+	rows  = 6
+	cols  = 10
 )
 
 func main() {

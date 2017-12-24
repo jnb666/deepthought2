@@ -9,7 +9,9 @@ Features:
 * Example data models including MNist digit recognition.
 
 To do:
-* Add confusion plot
+* Image normalisation
+* Cifar-10 image distortion: flip and zoom
+* Edit layer setup from config screen
 
 Dependencies:
 * CPU Blas and DNN libraries <https://software.intel.com/en-us/mkl>

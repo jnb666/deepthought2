@@ -214,9 +214,13 @@ func (t *Transformer) TransformBatch(index []int, src, dst []image.Image) {
 	for thread := range t.rng {
 		wg.Add(1)
 		go func(thread int) {
+			var err error
 			for i := range queue {
 				ix := index[i]
-				dst[i] = t.Transform(src[ix], thread)
+				dst[i], err = t.Transform(src[ix], thread)
+				if err != nil {
+					panic(err)
+				}
 			}
 			wg.Done()
 		}(thread)
@@ -229,7 +233,7 @@ func (t *Transformer) TransformBatch(index []int, src, dst []image.Image) {
 }
 
 // Generate a scaling, rotation or elastic image transformation
-func (t *Transformer) Transform(src image.Image, thread int) image.Image {
+func (t *Transformer) Transform(src image.Image, thread int) (image.Image, error) {
 	rng := t.rng[thread]
 	dx := make([]float32, t.w*t.h)
 	dy := make([]float32, t.w*t.h)
@@ -269,7 +273,7 @@ func (t *Transformer) Transform(src image.Image, thread int) image.Image {
 }
 
 // Apply the transform to the image and interpolate the results
-func (t *Transformer) Sample(src image.Image, dx, dy []float32) image.Image {
+func (t *Transformer) Sample(src image.Image, dx, dy []float32) (image.Image, error) {
 	switch in := src.(type) {
 	case *image.Gray:
 		out := image.NewGray(src.Bounds())
@@ -291,9 +295,9 @@ func (t *Transformer) Sample(src image.Image, dx, dy []float32) image.Image {
 				out.Pix[y*t.w+x] = toInt8(avg0*(1-yf) + avg1*yf)
 			}
 		}
-		return out
+		return out, nil
 	default:
-		panic(fmt.Sprintf("image type %T not supported", src))
+		return src, fmt.Errorf("ImageTransformer: image type %T not supported", src)
 	}
 }
 

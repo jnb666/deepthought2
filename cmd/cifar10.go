@@ -26,18 +26,13 @@ func main() {
 
 	train, err := loadBatch("data_batch_1.bin", classes)
 	nnet.CheckErr(err)
-	for i := 2; i <= 4; i++ {
+	for i := 2; i <= 5; i++ {
 		d, err := loadBatch(fmt.Sprintf("data_batch_%d.bin", i), classes)
 		nnet.CheckErr(err)
 		train.Labels = append(train.Labels, d.Labels...)
 		train.Images = append(train.Images, d.Images...)
 	}
 	err = nnet.SaveDataFile(train, "cifar10_train", false)
-	nnet.CheckErr(err)
-
-	valid, err := loadBatch("data_batch_5.bin", classes)
-	nnet.CheckErr(err)
-	err = nnet.SaveDataFile(valid, "cifar10_valid", false)
 	nnet.CheckErr(err)
 
 	test, err := loadBatch("test_batch.bin", classes)

@@ -105,16 +105,25 @@ func NewNetwork(model string) (*Network, error) {
 
 // Initialise the network
 func (n *Network) Init(conf nnet.Config) error {
-	log.Printf("init network: dataSet=%s useGPU=%v\n", conf.DataSet, conf.UseGPU)
-	n.release()
 	var err error
-	if n.Data, err = nnet.LoadData(conf.DataSet); err != nil {
-		return err
+	log.Printf("init network: dataSet=%s useGPU=%v\n", conf.DataSet, conf.UseGPU)
+	if n.view != nil {
+		n.view.queue.Finish()
+		n.queue.Finish()
 	}
-	dev := num.NewDevice(conf.UseGPU)
-	n.queue = dev.NewQueue()
-	n.rng = nnet.SetSeed(conf.RandSeed)
-	n.testRng = nnet.SetSeed(conf.RandSeed)
+	if n.Network == nil || conf.DataSet != n.Network.DataSet {
+		if n.Data, err = nnet.LoadData(conf.DataSet); err != nil {
+			return err
+		}
+	}
+	if n.Network == nil || conf.UseGPU != n.Network.UseGPU {
+		n.queue = num.NewDevice(conf.UseGPU).NewQueue()
+	}
+	if n.Network == nil || conf.RandSeed != n.Network.RandSeed {
+		n.rng = nnet.SetSeed(conf.RandSeed)
+		n.testRng = nnet.SetSeed(conf.RandSeed)
+	}
+	n.release()
 	n.trainData = nnet.NewDataset(n.queue.Dev(), n.Data["train"], conf.TrainBatch, conf.MaxSamples, conf.FlattenInput, n.rng)
 	n.Network = nnet.New(n.queue, conf, n.trainData.BatchSize, n.trainData.Shape(), n.rng)
 	if n.DebugLevel >= 1 {
@@ -136,10 +145,6 @@ func (n *Network) Init(conf nnet.Config) error {
 
 // release allocated buffers
 func (n *Network) release() {
-	if n.view != nil {
-		n.view.queue.Finish()
-		n.queue.Finish()
-	}
 	if n.Network != nil {
 		n.Network.Release()
 	}
@@ -484,6 +489,7 @@ type viewLayer struct {
 	outShape []int
 	outData  []float32
 	outImage *image.NRGBA
+
 	ox, oy   int
 	wShape   []int
 	bShape   []int
@@ -560,62 +566,68 @@ func (v *viewData) loadWeights(net *nnet.Network) {
 	net.CopyTo(v.Network, true)
 }
 
-// update outputs with given index from test set and update the images
-func (v *viewData) update(index int) {
+// update output images with given index from test set
+func (v *viewData) updateOutputs(index int) {
 	v.data.Input([]int{index}, v.inData)
 	v.queue.Call(
 		num.Write(v.input, v.inData),
 	)
 	v.Fprop(v.input, false)
-
 	for i, l := range v.layers {
-		if l.outImage != nil {
-			v.queue.Call(
-				num.Read(v.Layers[i].Output(), l.outData),
-			).Finish()
-			// draw output
-			switch len(l.outShape) {
-			case 1:
-				height := l.outImage.Bounds().Dy()
-				for i, val := range l.outData {
-					l.outImage.Set(i/height, i%height, mapColor(val, v.cmapOut))
-				}
-			case 3:
-				bw, bh := l.outShape[0], l.outShape[1]
-				for i := 0; i < l.ox*l.oy; i++ {
-					xb := (bw + 1) * (i % l.ox)
-					yb := (bh + 1) * (i / l.ox)
-					for j := 0; j < bw*bh; j++ {
-						col := mapColor(l.outData[i*bw*bh+j], v.cmapOut)
-						l.outImage.Set(xb+j%bw+1, yb+j/bw+1, col)
-					}
+		if l.outImage == nil {
+			continue
+		}
+		v.queue.Call(
+			num.Read(v.Layers[i].Output(), l.outData),
+		).Finish()
+		switch len(l.outShape) {
+		case 1:
+			height := l.outImage.Bounds().Dy()
+			for i, val := range l.outData {
+				l.outImage.Set(i/height, i%height, mapColor(val, v.cmapOut))
+			}
+		case 3:
+			bw, bh := l.outShape[0], l.outShape[1]
+			for i := 0; i < l.ox*l.oy; i++ {
+				xb := (bw + 1) * (i % l.ox)
+				yb := (bh + 1) * (i / l.ox)
+				for j := 0; j < bw*bh; j++ {
+					col := mapColor(l.outData[i*bw*bh+j], v.cmapOut)
+					l.outImage.Set(xb+j%bw+1, yb+j/bw+1, col)
 				}
 			}
 		}
-		if l.wImage != nil {
-			W, B := v.Layers[i].(nnet.ParamLayer).Params()
-			v.queue.Call(
-				num.Read(W, l.wData),
-				num.Read(B, l.bData),
-			).Finish()
-			// draw bias
-			for i := 0; i < l.wox*l.woy; i++ {
-				xb, yb := l.block(i)
-				biasCol := mapColor(l.bData[i], l.cmapB)
-				for j := 0; j < l.wix; j++ {
-					l.wImage.Set(xb+j, yb, biasCol)
-				}
-				for j := 0; j < l.wiy; j++ {
-					l.wImage.Set(xb, yb+j, biasCol)
-				}
+	}
+}
+
+// update weight and bias images
+func (v *viewData) updateWeights() {
+	for i, l := range v.layers {
+		if l.wImage == nil {
+			continue
+		}
+		W, B := v.Layers[i].(nnet.ParamLayer).Params()
+		v.queue.Call(
+			num.Read(W, l.wData),
+			num.Read(B, l.bData),
+		).Finish()
+		// draw bias
+		for i := 0; i < l.wox*l.woy; i++ {
+			xb, yb := l.block(i)
+			biasCol := mapColor(l.bData[i], l.cmapB)
+			for j := 0; j < l.wix; j++ {
+				l.wImage.Set(xb+j, yb, biasCol)
 			}
-			// draw weights
-			bsize := l.wix * l.wiy
-			for i := 0; i < l.wox*l.woy; i++ {
-				xb, yb := l.block(i)
-				for j := 0; j < bsize; j++ {
-					l.wImage.Set(xb+j%l.wix+1, yb+j/l.wix+1, mapColor(l.wData[i*bsize+j], l.cmapW))
-				}
+			for j := 0; j < l.wiy; j++ {
+				l.wImage.Set(xb, yb+j, biasCol)
+			}
+		}
+		// draw weights
+		bsize := l.wix * l.wiy
+		for i := 0; i < l.wox*l.woy; i++ {
+			xb, yb := l.block(i)
+			for j := 0; j < bsize; j++ {
+				l.wImage.Set(xb+j%l.wix+1, yb+j/l.wix+1, mapColor(l.wData[i*bsize+j], l.cmapW))
 			}
 		}
 	}
