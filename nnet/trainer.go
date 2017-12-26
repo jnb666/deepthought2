@@ -3,18 +3,12 @@ package nnet
 import (
 	"fmt"
 	"github.com/jnb666/deepthought2/num"
-	"html/template"
-	"math"
+	"github.com/jnb666/deepthought2/stats"
 	"math/rand"
 	"time"
 )
 
 const statsBufferSize = 10
-
-const (
-	emaN = 10
-	emaK = 2.0 / (emaN + 1.0)
-)
 
 // Training statistics
 type Stats struct {
@@ -72,56 +66,6 @@ func (s Stats) String(headers []string, done bool) string {
 	return msg
 }
 
-// Calc exponentional moving average
-type EMA float64
-
-func (e EMA) Add(val float64) float64 {
-	if e == 0 {
-		return val
-	}
-	return val*emaK + float64(e)*(1-emaK)
-}
-
-// Running mean and stddev as per http://www.johndcook.com/blog/standard_deviation/
-type Average struct {
-	Count, Mean float64
-	Var, StdDev float64
-	oldM, oldV  float64
-}
-
-func (s *Average) Add(x float64) {
-	s.Count++
-	if s.Count == 1 {
-		s.oldM, s.Mean = x, x
-		s.oldV = 0
-	} else {
-		s.Mean = s.oldM + (x-s.oldM)/s.Count
-		s.Var = s.oldV + (x-s.oldM)*(x-s.Mean)
-		s.oldM, s.oldV = s.Mean, s.Var
-		if s.Count > 1 {
-			s.StdDev = math.Sqrt(s.Var / (s.Count - 1))
-		}
-	}
-}
-
-func (s *Average) HTML() template.HTML {
-	var text string
-	if s.Mean > 10 {
-		if s.StdDev < 0.1 {
-			text = fmt.Sprintf("%.1f", s.Mean)
-		} else {
-			text = fmt.Sprintf("%.1f&PlusMinus;%.1f", s.Mean, s.StdDev)
-		}
-	} else {
-		if s.StdDev < 0.01 {
-			text = fmt.Sprintf("%.2f", s.Mean)
-		} else {
-			text = fmt.Sprintf("%.2f&PlusMinus;%.2f", s.Mean, s.StdDev)
-		}
-	}
-	return template.HTML(text)
-}
-
 // Tester interface to evaluate the performance after each epoch, Test method returns true if training should stop.
 type Tester interface {
 	Test(net *Network, epoch int, loss float64, start time.Time) bool
@@ -168,7 +112,7 @@ func (t *TestBase) Init(queue num.Queue, conf Config, data map[string]Data, rng 
 		if conf.DebugLevel >= 1 {
 			fmt.Println("dataset =>", key)
 		}
-		t.Data[key] = NewDataset(queue.Dev(), d, conf.TestBatch, t.Samples, conf.FlattenInput, rng)
+		t.Data[key] = NewDataset(queue.Dev(), d, conf.DatasetConfig(true), rng)
 	}
 	t.Net = New(queue, conf, t.Data["train"].BatchSize, t.Data["train"].Shape(), rng)
 	return t
@@ -213,7 +157,7 @@ func (t *TestBase) Test(net *Network, epoch int, loss float64, start time.Time) 
 				if epoch > 1 {
 					avgVal = t.Stats[epoch-2].Values[ix+2]
 				}
-				avgVal = EMA(avgVal).Add(errVal)
+				avgVal = stats.EMA(avgVal).Add(errVal)
 				s.Values = append(s.Values, avgVal)
 				// get number of epochs where average validation error has increased
 				for ep := epoch - 1; ep >= 1; ep-- {
@@ -234,14 +178,13 @@ func (t *TestBase) Test(net *Network, epoch int, loss float64, start time.Time) 
 	done := false
 	if epoch >= net.MaxEpoch || loss <= net.MinLoss {
 		done = true
-	} else if net.StopAfter > 0 && s.BestSince >= net.StopAfter {
+	} else if net.StopAfter > 0 && s.BestSince >= net.StopAfter && epoch > 10 {
 		// auto stopping based on performance on validation set
 		if net.ExtraEpochs > 0 {
 			// rewind data and perform additional training on undistorted training samples
-			fmt.Printf("training for %d extra epochs\n", net.ExtraEpochs)
 			t.epilogue = true
 			net.StopAfter = 0
-			net.MaxEpoch = epoch + net.ExtraEpochs - 1
+			net.MaxEpoch = epoch + net.ExtraEpochs
 		} else {
 			done = true
 		}
@@ -277,6 +220,8 @@ func Train(net *Network, dset *Dataset, test Tester) {
 	done := false
 	for epoch := 1; epoch <= net.MaxEpoch && !done; epoch++ {
 		if test.Epilogue() {
+			extra := net.ExtraEpochs - net.MaxEpoch + epoch
+			fmt.Printf("training for %d/%d extra epochs\n", extra, net.ExtraEpochs)
 			dset.Rewind()
 		}
 		start := time.Now()
@@ -289,7 +234,7 @@ func Train(net *Network, dset *Dataset, test Tester) {
 func TrainEpoch(net *Network, dset *Dataset, acc num.Array) float64 {
 	q := net.queue
 	if net.inputGrad == nil {
-		net.inputGrad = q.NewArray(num.Float32, len(dset.Classes()), dset.BatchSize)
+		net.inputGrad = q.NewArray(num.Float32, dset.ClassSize(), dset.BatchSize)
 	}
 	if net.Shuffle {
 		dset.Shuffle()

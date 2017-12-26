@@ -31,8 +31,8 @@ const (
 	factorMinWeights = 20
 )
 
-var tuneOpts = []string{"Eta", "Lambda", "TrainBatch"}
-var tuneOptHtml = []string{"&eta;", "&lambda;", "batch"}
+var tuneOpts = []string{"Eta", "Lambda", "TrainBatch", "NormalInput"}
+var tuneOptHtml = []string{"&eta;", "&lambda;", "batch", "norm"}
 
 // Network and associated training / test data and configuration
 type Network struct {
@@ -81,8 +81,9 @@ type HistoryData struct {
 }
 
 type TuneParams struct {
-	Name   string
-	Values []string
+	Name    string
+	Values  []string
+	Boolean bool
 }
 
 // Create a new network and load config from data given model name
@@ -124,7 +125,7 @@ func (n *Network) Init(conf nnet.Config) error {
 		n.testRng = nnet.SetSeed(conf.RandSeed)
 	}
 	n.release()
-	n.trainData = nnet.NewDataset(n.queue.Dev(), n.Data["train"], conf.TrainBatch, conf.MaxSamples, conf.FlattenInput, n.rng)
+	n.trainData = nnet.NewDataset(n.queue.Dev(), n.Data["train"], conf.DatasetConfig(false), n.rng)
 	n.Network = nnet.New(n.queue, conf, n.trainData.BatchSize, n.trainData.Shape(), n.rng)
 	if n.DebugLevel >= 1 {
 		fmt.Println(n.Network)
@@ -214,20 +215,24 @@ func (n *Network) Train(restart bool) error {
 				}
 				n.Epoch = 1
 			}
+			n.trainData.Rewind()
 			log.Printf("train run %d / %d epoch=%d\n", n.Run+1, len(runs), n.Epoch)
 			epoch := n.Epoch
 			done := false
+			net := n.Network
 			for !done && !quit {
 				if n.test.Epilogue() {
+					extra := net.ExtraEpochs - net.MaxEpoch + epoch
+					log.Printf("training for %d/%d extra epochs\n", extra, net.ExtraEpochs)
 					n.trainData.Rewind()
 				}
 				start := time.Now()
-				loss := nnet.TrainEpoch(n.Network, n.trainData, acc)
-				done = n.test.Test(n.Network, epoch, loss, start)
-				epoch, quit = n.nextEpoch(epoch, done)
-			}
-			if last := len(n.test.Stats) - 1; last > 0 {
-				log.Println(n.test.Stats[last].String(n.test.Headers, true))
+				loss := nnet.TrainEpoch(net, n.trainData, acc)
+				done = n.test.Test(net, epoch, loss, start)
+				if net.LogEvery == 0 || epoch%net.LogEvery == 0 || done {
+					quit = n.nextEpoch(epoch, done)
+				}
+				epoch++
 			}
 			if !quit {
 				n.Run++
@@ -245,7 +250,7 @@ func (n *Network) Train(restart bool) error {
 	return nil
 }
 
-func (n *Network) nextEpoch(epoch int, done bool) (int, bool) {
+func (n *Network) nextEpoch(epoch int, done bool) bool {
 	quit := false
 	n.Lock()
 	n.Epoch = epoch
@@ -254,6 +259,9 @@ func (n *Network) nextEpoch(epoch int, done bool) (int, bool) {
 		n.stop = false
 		n.running = false
 		quit = true
+	}
+	if done || quit {
+		log.Println(n.test.Stats[epoch-1].String(n.test.Headers, true))
 	}
 	// update predictions for each image
 	for key, pred := range n.test.Pred {
@@ -290,7 +298,7 @@ func (n *Network) nextEpoch(epoch int, done bool) (int, bool) {
 	if err != nil {
 		log.Println("nextEpoch: error saving network:", err)
 	}
-	return epoch + 1, quit
+	return quit
 }
 
 func (n *Network) heading() template.HTML {
@@ -392,15 +400,17 @@ func LoadNetwork(model string, reset bool) (data *NetworkData, err error) {
 	if reset {
 		data.Conf, err = nnet.LoadConfig(model + ".conf")
 	}
-	if data.Tuners == nil {
-		for _, opt := range tuneOpts {
-			data.Tuners = append(data.Tuners, TuneParams{
-				Name:   opt,
-				Values: []string{fmt.Sprint(data.Conf.Get(opt))},
-			})
+	tuners := []TuneParams{}
+	for i, opt := range tuneOpts {
+		val := data.Conf.Get(opt)
+		_, isBool := val.(bool)
+		vals := []string{fmt.Sprint(val)}
+		if i < len(data.Tuners) {
+			vals = data.Tuners[i].Values
 		}
+		tuners = append(tuners, TuneParams{Name: opt, Values: vals, Boolean: isBool})
 	}
-
+	data.Tuners = tuners
 	return data, err
 }
 
@@ -480,7 +490,6 @@ type viewData struct {
 	input   num.Array
 	inShape []int
 	inData  []float32
-	inImage *image.NRGBA
 	cmapOut palette.ColorMap
 }
 
@@ -489,7 +498,6 @@ type viewLayer struct {
 	outShape []int
 	outData  []float32
 	outImage *image.NRGBA
-
 	ox, oy   int
 	wShape   []int
 	bShape   []int
@@ -518,9 +526,6 @@ func newViewData(dev num.Device, data map[string]nnet.Data, conf nnet.Config, rn
 		v.input = dev.NewArray(num.Float32, len(v.inData), 1)
 	} else {
 		v.input = dev.NewArray(num.Float32, append(v.inShape, 1)...)
-	}
-	if len(v.inShape) >= 2 {
-		v.inImage = image.NewNRGBA(image.Rect(0, 0, v.inShape[1], v.inShape[0]))
 	}
 
 	for i, layer := range v.Layers {

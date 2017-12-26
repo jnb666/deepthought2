@@ -6,6 +6,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"github.com/jnb666/deepthought2/nnet"
+	"github.com/jnb666/deepthought2/stats"
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/palette"
 	"gonum.org/v1/plot/palette/moreland"
@@ -24,7 +25,7 @@ import (
 
 const (
 	plotWidth  = 450
-	plotHeight = 350
+	plotHeight = 300
 )
 
 var upgrader = websocket.Upgrader{
@@ -34,11 +35,13 @@ var upgrader = websocket.Upgrader{
 
 type TrainPage struct {
 	*Templates
-	Plots    []template.HTML
-	net      *Network
-	groups   map[string][]int
-	keys     []string
-	disabled map[string]bool
+	Plots      []template.HTML
+	PlotWidth  int
+	PlotHeight int
+	net        *Network
+	groups     map[string][]int
+	keys       []string
+	disabled   map[string]bool
 }
 
 type HistoryRow struct {
@@ -52,7 +55,7 @@ type HistoryRow struct {
 
 // Base data for handler functions to perform network training and display the stats
 func NewTrainPage(t *Templates, net *Network) *TrainPage {
-	p := &TrainPage{net: net, Templates: t, disabled: map[string]bool{}}
+	p := &TrainPage{net: net, Templates: t, disabled: map[string]bool{}, PlotWidth: plotWidth + 32, PlotHeight: plotHeight}
 	for _, opt := range []string{"loss", "errors", "matrix", "history", "tune", "purge", "clear"} {
 		p.AddOption(Link{Name: opt, Url: "/train/set/" + opt, Selected: opt == "errors"})
 	}
@@ -194,14 +197,20 @@ func (p *TrainPage) StatsHeaders() []string {
 }
 
 func (p *TrainPage) LatestStats(n int) []nnet.Stats {
+	logEvery := p.net.LogEvery
+	if logEvery == 0 {
+		logEvery = 1
+	}
 	res := []nnet.Stats{}
 	last := len(p.net.test.Stats) - 1
-	for i := last; i >= 0 && i > last-n; i-- {
-		res = append(res, p.net.test.Stats[i])
+	if last >= 0 {
+		res = append(res, p.net.test.Stats[last])
+		for i := logEvery*(last/logEvery) - 1; i >= 0 && len(res) < n; i -= logEvery {
+			res = append(res, p.net.test.Stats[i])
+		}
 	}
-	if len(p.net.test.Stats) < n && p.OptionSelected("history") && len(p.net.History) > 0 {
-		last = len(p.net.History) - 1
-		res = append(res, p.net.History[last].Stats)
+	if len(res) < n && p.OptionSelected("history") && len(p.net.History) > 0 {
+		res = append(res, p.net.History[len(p.net.History)-1].Stats)
 	}
 	return res
 }
@@ -294,24 +303,24 @@ func (p *TrainPage) errorPlot() template.HTML {
 }
 
 func (p *TrainPage) matrixPlot() template.HTML {
-	data, ok := p.net.Data["test"]
+	dset := "test"
+	data, ok := p.net.Data[dset]
 	if !ok {
-		log.Println("matrixPlot: no test data!")
-		return ""
+		dset = "train"
+		data = p.net.Data[dset]
 	}
 	nclass := len(data.Classes())
-	cmap := moreland.BlackBody()
-	hmap := newHeatMap(nclass, p.net.Labels["test"], p.net.Pred["test"], cmap)
+	hmap := newHeatMap(nclass, p.net.Labels[dset], p.net.Pred[dset], moreland.BlackBody())
 	plt := newPlot()
 	plt.X.Tick.Length = 0
 	plt.Y.Tick.Length = 0
-	plt.X.Tick.Marker = gridTicks{classes: nclass}
-	plt.Y.Tick.Marker = gridTicks{classes: nclass, reverse: true}
+	plt.X.Tick.Marker = gridTicks{classes: data.Classes()}
+	plt.Y.Tick.Marker = gridTicks{classes: data.Classes(), reverse: true}
 	plt.X.Label.Text = "predicted"
 	plt.Y.Label.Text = "class"
 	plt.Add(hmap)
 	style := draw.TextStyle{Font: newFont(10), Color: color.Gray{0xc0}}
-	plt.Add(hmap.labels(style, 0.5*cmap.Max()))
+	plt.Add(hmap.labels(style, 0.5))
 	return writePlot(plt)
 }
 
@@ -358,14 +367,16 @@ func newPlot() *plot.Plot {
 	}
 	bgColor := color.Gray{Y: 0x20}
 	fontSmall := newFont(10)
+	for _, ax := range []*plot.Axis{&p.X, &p.Y} {
+		ax.Color = color.White
+		ax.Label.Color = color.White
+		ax.Tick.Color = color.White
+		ax.Tick.Label.Color = color.White
+		ax.Padding = 0
+		ax.Label.Font = fontSmall
+		ax.Tick.Label.Font = fontSmall
+	}
 	p.BackgroundColor = bgColor
-	p.X.Label.Color, p.Y.Label.Color = color.White, color.White
-	p.X.Tick.Label.Color, p.Y.Tick.Label.Color = color.White, color.White
-	p.X.Padding, p.Y.Padding = 0, 0
-	p.X.Label.Font = fontSmall
-	p.Y.Label.Font = fontSmall
-	p.X.Tick.Label.Font = fontSmall
-	p.Y.Tick.Label.Font = fontSmall
 	p.Legend.Top = true
 	p.Legend.Font = fontSmall
 	p.Legend.Color = color.White
@@ -421,14 +432,14 @@ func (l linePlot) DataRange() (xmin, xmax, ymin, ymax float64) {
 }
 
 type statsTable struct {
-	avg []*nnet.Average
+	avg []*stats.Average
 	col int
 	row int
 }
 
 func (s *statsTable) add(x float64) {
 	if s.row == 0 {
-		s.avg = append(s.avg, new(nnet.Average))
+		s.avg = append(s.avg, new(stats.Average))
 	}
 	s.avg[s.col].Add(x)
 	s.col++
@@ -447,14 +458,15 @@ type heatMap struct {
 func newHeatMap(nclass int, labels, predict []int32, cmap palette.ColorMap) heatMap {
 	g := grid{
 		rows: nclass, cols: nclass,
-		vals: make([]int, nclass*nclass),
+		vals:  make([]int, nclass*nclass),
+		total: make([]int, nclass),
 	}
 	for i, label := range labels {
 		g.vals[nclass*int(label)+int(predict[i])]++
-		g.total++
+		g.total[label]++
 	}
 	cmap.SetMin(0)
-	cmap.SetMax(float64(g.total) / float64(nclass))
+	cmap.SetMax(1)
 	p := cmap.Palette(256)
 	return heatMap{
 		HeatMap: &plotter.HeatMap{
@@ -462,8 +474,8 @@ func newHeatMap(nclass int, labels, predict []int32, cmap palette.ColorMap) heat
 			Palette:   p,
 			Underflow: p.Colors()[0],
 			Overflow:  p.Colors()[255],
-			Min:       cmap.Min(),
-			Max:       cmap.Max(),
+			Min:       0,
+			Max:       1,
 		},
 		xmin: g.X(0) - 0.5, xmax: g.X(g.cols-1) + 1.5,
 		ymin: g.Y(0) - 0.5, ymax: g.Y(g.rows-1) + 0.5,
@@ -478,24 +490,19 @@ func (h heatMap) labels(style draw.TextStyle, threshold float64) *plotter.Labels
 	lab := new(plotter.Labels)
 	g := h.GridXYZ.(grid)
 	for r := 0; r < g.rows; r++ {
-		totalRow := 0.0
-		errorRow := 0.0
 		for c := 0; c < g.cols; c++ {
-			val := g.Z(c, r)
+			val := g.vals[(g.rows-r-1)*g.cols+c]
 			lab.Labels = append(lab.Labels, fmt.Sprint(val))
-			lab.XYs = append(lab.XYs, xy{g.X(c) - 0.25, g.Y(r) - 0.15})
+			lab.XYs = append(lab.XYs, xy{g.X(c) - 0.35, g.Y(r) - 0.15})
 			s := style
-			if val > threshold {
+			if g.Z(c, r) > threshold {
 				s.Color = color.Black
 			}
 			lab.TextStyle = append(lab.TextStyle, s)
-			totalRow += val
-			if g.rows-r-1 != c {
-				errorRow += val
-			}
 		}
-		lab.XYs = append(lab.XYs, xy{g.X(g.cols) - 0.5, g.Y(r) - 0.15})
-		lab.Labels = append(lab.Labels, fmt.Sprintf("%.3g%%", 100*errorRow/totalRow))
+		errorRow := 1 - g.Z(g.rows-r-1, r)
+		lab.XYs = append(lab.XYs, xy{g.X(g.cols) - 0.4, g.Y(r) - 0.2})
+		lab.Labels = append(lab.Labels, fmt.Sprintf("%.2g%%", 100*errorRow))
 		lab.TextStyle = append(lab.TextStyle, style)
 	}
 	return lab
@@ -505,37 +512,32 @@ type grid struct {
 	cols  int
 	rows  int
 	vals  []int
-	total int
+	total []int
 }
 
-func (g grid) Dims() (c, r int) {
-	return g.cols, g.rows
-}
+func (g grid) Dims() (c, r int) { return g.cols, g.rows }
 
-func (g grid) X(c int) float64 {
-	return float64(c)
-}
+func (g grid) X(c int) float64 { return float64(c) }
 
-func (g grid) Y(r int) float64 {
-	return float64(r)
-}
+func (g grid) Y(r int) float64 { return float64(r) }
 
 func (g grid) Z(c, r int) float64 {
-	return float64(g.vals[(g.rows-r-1)*g.cols+c])
+	row := g.rows - r - 1
+	return float64(g.vals[row*g.cols+c]) / float64(g.total[row])
 }
 
 type gridTicks struct {
-	classes int
+	classes []string
 	reverse bool
 }
 
 func (t gridTicks) Ticks(min, max float64) []plot.Tick {
-	ticks := make([]plot.Tick, t.classes)
+	ticks := make([]plot.Tick, len(t.classes))
 	for i := range ticks {
 		if t.reverse {
-			ticks[i] = plot.Tick{Value: float64(i), Label: fmt.Sprint(t.classes - i - 1)}
+			ticks[i] = plot.Tick{Value: float64(i), Label: t.classes[len(t.classes)-i-1]}
 		} else {
-			ticks[i] = plot.Tick{Value: float64(i), Label: fmt.Sprint(i)}
+			ticks[i] = plot.Tick{Value: float64(i), Label: t.classes[i]}
 		}
 	}
 	return ticks

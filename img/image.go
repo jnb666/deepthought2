@@ -4,8 +4,8 @@ package img
 import (
 	"encoding/gob"
 	"fmt"
+	"github.com/jnb666/deepthought2/stats"
 	"image"
-	"io"
 	"math"
 	"math/rand"
 	"runtime"
@@ -33,12 +33,15 @@ var gaussian1, gaussian2 []float32
 
 // Image data set which implements the nnet.Data interface
 type Data struct {
-	Epochs int
-	Class  []string
-	Dims   []int
-	Labels []int32
-	Images []image.Image
-	file   io.ReadSeeker
+	Epoch     int
+	Class     []string
+	Dims      []int
+	Labels    []int32
+	Images    []image.Image
+	Path      string
+	Mean      []float64
+	StdDev    []float64
+	normalise bool
 }
 
 func init() {
@@ -62,8 +65,35 @@ func NewData(classes []string, labels []int32, images []image.Image) *Data {
 	default:
 		panic(fmt.Sprintf("NewData: image type %T not supported", src))
 	}
-	return &Data{Epochs: 1, Class: classes, Dims: dims, Labels: labels, Images: images}
+	return &Data{Epoch: 1, Class: classes, Dims: dims, Labels: labels, Images: images}
 }
+
+func NewDataLike(d *Data, epochs int) *Data {
+	return &Data{Epoch: epochs, Class: d.Class, Dims: d.Dims, Labels: d.Labels, Images: make([]image.Image, d.Len())}
+}
+
+// Initialise mean and std deviation
+func (d *Data) Init() *Data {
+	d.Mean = make([]float64, d.Len())
+	d.StdDev = make([]float64, d.Len())
+	buffer := make([]float32, d.nfeat())
+	for i, img := range d.Images {
+		Unpack(img, buffer)
+		s := new(stats.Average)
+		for _, val := range buffer {
+			s.Add(float64(val))
+		}
+		d.Mean[i] = s.Mean
+		d.StdDev[i] = s.StdDev
+	}
+	return d
+}
+
+// Set flag to normalise image data
+func (d *Data) Normalise(on bool) { d.normalise = on }
+
+// Number of epochs stored
+func (d *Data) Epochs() int { return d.Epoch }
 
 // Len function returns number of images
 func (d *Data) Len() int { return len(d.Labels) }
@@ -71,25 +101,52 @@ func (d *Data) Len() int { return len(d.Labels) }
 // Classes functions number of differerent label values
 func (d *Data) Classes() []string { return d.Class }
 
+func (d *Data) ClassSize() int {
+	if len(d.Class) > 2 {
+		return len(d.Class)
+	}
+	return 1
+}
+
 // Shape returns height, width
 func (d *Data) Shape() []int { return d.Dims }
 
 // Image returns given image number
-func (d *Data) Image(ix int, channel string) image.Image {
-	img, ok := d.Images[ix].(*image.NRGBA)
-	if channel == "" || !ok {
-		return d.Images[ix]
+func (d *Data) Image(ix int, channel string, norm bool) image.Image {
+	switch img := d.Images[ix].(type) {
+	case *image.NRGBA:
+		offset, haveChannel := map[string]int{"r": 0, "g": 1, "b": 2}[channel]
+		if !haveChannel && !norm {
+			return img
+		}
+		res := image.NewNRGBA(img.Bounds())
+		offsets := []int{0, 1, 2}
+		if haveChannel {
+			offsets = []int{offset}
+		}
+		for i := 0; i < len(img.Pix)/4; i++ {
+			for _, off := range offsets {
+				pixel := img.Pix[4*i+off]
+				if norm {
+					pixel = normalise(pixel, d.Mean[ix], d.StdDev[ix])
+				}
+				res.Pix[4*i+off] = pixel
+			}
+			res.Pix[4*i+3] = 255
+		}
+		return res
+	case *image.Gray:
+		if !norm {
+			return img
+		}
+		res := image.NewGray(img.Bounds())
+		for i, pixel := range img.Pix {
+			res.Pix[i] = normalise(pixel, d.Mean[ix], d.StdDev[ix])
+		}
+		return res
+	default:
+		return img
 	}
-	offset := map[string][3]int{"r": {0, 1, 2}, "g": {1, 0, 2}, "b": {2, 0, 1}}[channel]
-	res := image.NewNRGBA(img.Bounds())
-	for i := 0; i < len(img.Pix)/4; i++ {
-		val := img.Pix[4*i+offset[0]]
-		res.Pix[4*i+offset[0]] = val
-		//res.Pix[4*i+offset[1]] = 255 - val
-		//res.Pix[4*i+offset[2]] = 255 - val
-		res.Pix[4*i+3] = 255
-	}
-	return res
 }
 
 // Label returns classification for given images
@@ -101,33 +158,43 @@ func (d *Data) Label(index []int, label []int32) {
 
 // Input returns scaled input data in buf array
 func (d *Data) Input(index []int, buf []float32) {
-	nfeat := 1
-	for _, d := range d.Dims {
-		nfeat *= d
-	}
+	nfeat := d.nfeat()
 	for i, ix := range index {
 		Unpack(d.Images[ix], buf[i*nfeat:(i+1)*nfeat])
+		if d.normalise {
+			mean, std := float32(d.Mean[ix]), float32(d.StdDev[ix])
+			for j, val := range buf[i*nfeat : (i+1)*nfeat] {
+				val = (val - mean) / std
+				if val < 0 {
+					val = 0
+				}
+				if val > 1 {
+					val = 1
+				}
+				buf[j] = val
+			}
+		}
 	}
 }
 
 // Slice returns images from start to end
 func (d *Data) Slice(start, end int) *Data {
-	return &Data{
-		Epochs: d.Epochs,
-		Class:  d.Class,
-		Dims:   d.Dims,
-		Labels: d.Labels[start:end],
-		Images: d.Images[start:end],
-	}
+	data := *d
+	data.Labels = d.Labels[start:end]
+	data.Images = d.Images[start:end]
+	return &data
 }
 
-func (d *Data) SetFile(f io.ReadSeeker) { d.file = f }
+func (d *Data) File() string { return d.Path }
 
-func (d *Data) File() io.ReadSeeker {
-	if d.Epochs > 1 {
-		return d.file
+func (d *Data) SetFile(path string) { d.Path = path }
+
+func (d *Data) nfeat() int {
+	n := 1
+	for _, d := range d.Dims {
+		n *= d
 	}
-	return nil
+	return n
 }
 
 // Create a new grayscale image from data buffer
@@ -309,4 +376,15 @@ func toInt8(x float32) uint8 {
 		return 255
 	}
 	return uint8(255 * x)
+}
+
+func normalise(pixel uint8, mean, stddev float64) uint8 {
+	val := (float64(pixel)/255 - mean) / stddev
+	if val < 0 {
+		val = 0
+	}
+	if val > 1 {
+		val = 1
+	}
+	return uint8(val * 255)
 }

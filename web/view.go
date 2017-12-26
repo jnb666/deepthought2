@@ -99,6 +99,9 @@ func (p *ViewPage) Network() func(w http.ResponseWriter, r *http.Request) {
 		defer p.net.Unlock()
 		vars := mux.Vars(r)
 		p.Page = vars["page"]
+		if p.index > p.net.view.data.Len() {
+			p.index = 1
+		}
 		index := p.index - 1
 		if p.errors {
 			pred := p.net.Pred[p.net.view.dset]
@@ -129,10 +132,14 @@ func (p *ViewPage) getLayers(index int) {
 		// input image
 		classes := p.net.view.data.Classes()
 		label := p.net.Labels[p.net.view.dset][index]
+		norm := ""
+		if p.net.Network.NormalInput {
+			norm = "n"
+		}
 		p.addImage(
 			fmt.Sprintf("input %d %v => %s", index+1, p.net.view.inShape, classes[label]),
-			fmt.Sprintf("/img/%s/%d", p.net.view.dset, index+1),
-			p.net.view.inImage,
+			fmt.Sprintf("/img/%s/%d/%s", p.net.view.dset, index+1, norm),
+			p.net.view.data.Image(index, "", false),
 			len(p.net.view.inShape) == 3 && p.net.view.inShape[2] == 3,
 			0, 0, "input",
 		)
@@ -146,25 +153,19 @@ func (p *ViewPage) getLayers(index int) {
 				)
 			}
 		}
-		out := len(p.Layers) - 1
-		if l := p.net.view.lastLayer(); l != nil && out >= 0 {
-			max := l.outData[0]
-			imax := 0
-			for i, val := range l.outData[1:] {
-				if val > max {
-					max = val
-					imax = i + 1
+		if l := p.net.view.lastLayer(); l != nil {
+			if len(l.outData) > 1 {
+				imax := arrayMax(l.outData)
+				width := int(100 / float64(len(l.outData)))
+				for i, val := range l.outData {
+					p.addOutput(val, classes[i], i == imax, width)
 				}
-			}
-			for i, val := range l.outData {
-				col := color.Gray{Y: uint8(255 - 128*(1-val))}
-				tag := fmt.Sprintf(`<span style="color:%s;">%s</span>`, htmlColor(col), classes[i])
-				if i == imax {
-					tag = "<u>" + tag + "</u>"
+			} else {
+				class := classes[0]
+				if l.outData[0] > 0.5 {
+					class = classes[1]
 				}
-				p.Layers[out].Class = "outputs"
-				p.Layers[out].Values = append(p.Layers[out].Values, template.HTML(tag))
-				p.Layers[out].CellWidth = int(100 / float64(len(l.outData)))
+				p.addOutput(l.outData[0], class, false, 100)
 			}
 		}
 	case "weights":
@@ -182,23 +183,36 @@ func (p *ViewPage) getLayers(index int) {
 	}
 }
 
-func (p *ViewPage) addImage(desc, url string, img *image.NRGBA, channels bool, factorMin, scaleWidth int, class string) {
+func (p *ViewPage) addOutput(val float32, class string, underline bool, width int) {
+	out := len(p.Layers) - 1
+	col := color.Gray{Y: uint8(255 - 128*(1-val))}
+	tag := fmt.Sprintf(`<span style="color:%s;">%s</span>`, htmlColor(col), class)
+	if underline {
+		tag = "<u>" + tag + "</u>"
+	}
+	p.Layers[out].Class = "outputs"
+	p.Layers[out].Values = append(p.Layers[out].Values, template.HTML(tag))
+	p.Layers[out].CellWidth = width
+}
+
+func (p *ViewPage) addImage(desc, url string, img image.Image, channels bool, factorMin, scaleWidth int, class string) {
 	info := LayerInfo{Desc: desc, Width: 100, Class: class, Image: []string{}}
 	if img != nil {
 		info.Image = []string{url}
-		if channels {
-			for _, suffix := range []string{"/r", "/g", "/b"} {
-				info.Image = append(info.Image, url+suffix)
-			}
-		}
 		if class == "input" {
 			info.Width = 7
-		}
-		if img.Bounds().Dx() <= scaleWidth {
-			info.Width /= 2
-		}
-		if err := png.Encode(&info.ImageData, img); err != nil {
-			log.Println(err)
+			if channels {
+				for _, suffix := range []string{"r", "g", "b"} {
+					info.Image = append(info.Image, url+suffix)
+				}
+			}
+		} else {
+			if img.Bounds().Dx() <= scaleWidth {
+				info.Width /= 2
+			}
+			if err := png.Encode(&info.ImageData, img); err != nil {
+				log.Println(err)
+			}
 		}
 	}
 	info.PadWidth = 100 - len(info.Image)*info.Width
@@ -222,4 +236,16 @@ func (p *ViewPage) Image() func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-type", "image/png")
 		w.Write(p.Layers[layer].ImageData.Bytes())
 	}
+}
+
+func arrayMax(a []float32) int {
+	max := a[0]
+	imax := 0
+	for i, val := range a[1:] {
+		if val > max {
+			max = val
+			imax = i + 1
+		}
+	}
+	return imax
 }

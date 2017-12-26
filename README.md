@@ -9,8 +9,7 @@ Features:
 * Example data models including MNist digit recognition.
 
 To do:
-* Image normalisation
-* Cifar-10 image distortion: flip and zoom
+* Cifar-10 image distortion: ZCA whitening, flip and zoom
 * Edit layer setup from config screen
 
 Dependencies:

@@ -6,11 +6,11 @@ import (
 	_ "github.com/jnb666/deepthought2/img"
 	"github.com/jnb666/deepthought2/num"
 	"image"
+	"image/color"
 	"io"
 	"math/rand"
 	"os"
 	"path"
-	"strconv"
 	"sync"
 )
 
@@ -20,19 +20,22 @@ var (
 )
 
 func init() {
-	gob.Register(data{})
+	gob.Register(&data{})
 }
 
 // Data interface type represents the raw data for a training or test set
 type Data interface {
 	Len() int
 	Classes() []string
+	ClassSize() int
 	Shape() []int
 	Label(index []int, label []int32)
 	Input(index []int, buf []float32)
-	Image(i int, channel string) image.Image
-	SetFile(io.ReadSeeker)
-	File() io.ReadSeeker
+	Image(i int, channel string, normalise bool) image.Image
+	SetFile(path string)
+	File() string
+	Epochs() int
+	Normalise(on bool)
 }
 
 // Dataset type encapsulates a set of training, test or validation data.
@@ -50,35 +53,50 @@ type Dataset struct {
 	epoch     int
 	batch     int
 	rng       *rand.Rand
+	file      *os.File
+	normalise bool
 	sync.WaitGroup
 }
 
+// Config options for dataset
+type DatasetOptions struct {
+	BatchSize    int
+	MaxSamples   int
+	FlattenInput bool
+	NormalInput  bool
+}
+
 // Create a new Dataset struct, allocate array buffers  and set the batch size and maxSamples
-func NewDataset(dev num.Device, data Data, batchSize, maxSamples int, flattenInput bool, rng *rand.Rand) *Dataset {
+func NewDataset(dev num.Device, data Data, opts DatasetOptions, rng *rand.Rand) *Dataset {
+	var err error
 	d := &Dataset{Data: data, Samples: data.Len(), rng: rng}
-	if maxSamples > 0 && d.Samples > maxSamples {
-		d.Samples = maxSamples
+	if d.file, err = os.Open(data.File()); err != nil {
+		panic(err)
 	}
-	if batchSize == 0 || batchSize > d.Samples {
+	if opts.MaxSamples > 0 && d.Samples > opts.MaxSamples {
+		d.Samples = opts.MaxSamples
+	}
+	if opts.BatchSize == 0 || opts.BatchSize > d.Samples {
 		d.BatchSize = d.Samples
 	} else {
-		d.BatchSize = batchSize
+		d.BatchSize = opts.BatchSize
 	}
 	d.Batches = d.Samples / d.BatchSize
 	if d.Samples%d.BatchSize != 0 {
 		d.Batches++
 	}
+	d.Normalise(opts.NormalInput)
 	nfeat := num.Prod(data.Shape())
 	d.xBuffer = make([]float32, nfeat*d.BatchSize)
 	d.yBuffer = make([]int32, d.BatchSize)
 	for i := range d.x {
-		if flattenInput {
+		if opts.FlattenInput {
 			d.x[i] = dev.NewArray(num.Float32, nfeat, d.BatchSize)
 		} else {
 			d.x[i] = dev.NewArray(num.Float32, append(data.Shape(), d.BatchSize)...)
 		}
 		d.y[i] = dev.NewArray(num.Int32, d.BatchSize)
-		d.y1H[i] = dev.NewArray(num.Float32, len(d.Classes()), d.BatchSize)
+		d.y1H[i] = dev.NewArray(num.Float32, d.ClassSize(), d.BatchSize)
 	}
 	d.indexes = make([]int, d.Samples)
 	for i := range d.indexes {
@@ -112,7 +130,7 @@ func (d *Dataset) loadBatch() {
 		d.queue.Call(
 			num.Write(d.x[d.buf], d.xBuffer),
 			num.Write(d.y[d.buf], d.yBuffer),
-			num.Onehot(d.y[d.buf], d.y1H[d.buf], len(d.Classes())),
+			num.Onehot(d.y[d.buf], d.y1H[d.buf], d.ClassSize()),
 		)
 		d.queue.Finish()
 		d.Done()
@@ -134,6 +152,9 @@ func (d *Dataset) Rewind() {
 	d.Wait()
 	d.epoch = 0
 	d.batch = 0
+	if d.Epochs() > 1 {
+		d.file.Seek(0, io.SeekStart)
+	}
 	d.loadBatch()
 }
 
@@ -142,17 +163,16 @@ func (d *Dataset) NextEpoch() {
 	d.Wait()
 	d.epoch++
 	d.batch = 0
-	if f := d.File(); f != nil && d.epoch > 1 {
-		err := gob.NewDecoder(f).Decode(&d.Data)
+	if d.epoch > 1 && d.Epochs() > 1 {
+		err := gob.NewDecoder(d.file).Decode(&d.Data)
 		if err == io.EOF {
-			fmt.Println("rewind file")
-			f.Seek(0, io.SeekStart)
-			err = gob.NewDecoder(f).Decode(&d.Data)
+			fmt.Println("EOF: rewind file")
+			d.file.Seek(0, io.SeekStart)
+			err = gob.NewDecoder(d.file).Decode(&d.Data)
 		}
 		if err != nil {
 			panic(err)
 		}
-		d.SetFile(f)
 	}
 	d.loadBatch()
 }
@@ -190,7 +210,7 @@ func LoadDataFile(name string) (Data, error) {
 	if err = gob.NewDecoder(f).Decode(&d); err != nil {
 		return nil, err
 	}
-	d.SetFile(f)
+	d.SetFile(filePath)
 	fmt.Println(append(d.Shape(), d.Len()))
 	return d, nil
 }
@@ -227,38 +247,57 @@ type data struct {
 	Dims   []int
 	Labels []int32
 	Inputs []float32
+	path   string
 }
 
 // NewData function creates a new data set which implements the Data interface
-func NewData(nclasses int, shape []int, labels []int32, inputs []float32) data {
-	classes := make([]string, nclasses)
-	for i := range classes {
-		classes[i] = strconv.Itoa(i)
-	}
-	return data{Class: classes, Dims: shape, Labels: labels, Inputs: inputs}
+func NewData(classes []string, shape []int, labels []int32, inputs []float32) *data {
+	return &data{Class: classes, Dims: shape, Labels: labels, Inputs: inputs}
 }
 
-func (d data) Len() int { return len(d.Labels) }
+func (d *data) Len() int { return len(d.Labels) }
 
-func (d data) Classes() []string { return d.Class }
+func (d *data) Classes() []string { return d.Class }
 
-func (d data) Shape() []int { return d.Dims }
+func (d *data) ClassSize() int {
+	if len(d.Class) > 2 {
+		return len(d.Class)
+	}
+	return 1
+}
 
-func (d data) Label(index []int, label []int32) {
+func (d *data) Shape() []int { return d.Dims }
+
+func (d *data) Label(index []int, label []int32) {
 	for i, ix := range index {
 		label[i] = d.Labels[ix]
 	}
 }
 
-func (d data) Input(index []int, buf []float32) {
+func (d *data) Input(index []int, buf []float32) {
 	nfeat := num.Prod(d.Dims)
 	for i, ix := range index {
 		copy(buf[i*nfeat:], d.Inputs[ix*nfeat:(ix+1)*nfeat])
 	}
 }
 
-func (d data) Image(i int, channel string) image.Image { return nil }
+func (d *data) Image(i int, channel string, normalise bool) image.Image {
+	nfeat := num.Prod(d.Dims)
+	img := image.NewGray(image.Rect(0, 0, 1, nfeat))
+	for j := 0; j < nfeat; j++ {
+		img.Set(0, j, color.Gray{Y: uint8(d.Inputs[i*nfeat+j] * 255)})
+	}
+	return img
+}
 
-func (d data) SetFile(io.ReadSeeker) {}
+func (d *data) File() string { return d.path }
 
-func (d data) File() io.ReadSeeker { return nil }
+func (d *data) SetFile(path string) { d.path = path }
+
+func (d *data) Epochs() int { return 1 }
+
+func (d *data) Normalise(on bool) {
+	if on {
+		panic("not supported!")
+	}
+}

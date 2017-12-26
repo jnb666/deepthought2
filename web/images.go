@@ -24,6 +24,8 @@ type ImagePage struct {
 	Pages   int
 	Total   int
 	net     *Network
+	height  int
+	width   int
 }
 
 type LabelInfo struct {
@@ -33,17 +35,17 @@ type LabelInfo struct {
 }
 
 // Base data for handler functions to view input image dataset
-func NewImagePage(t *Templates, net *Network, scale float64, rows, cols int) *ImagePage {
-	p := &ImagePage{net: net, Templates: t, Page: 1}
-	for _, name := range []string{"all", "errors", "prev", "next", "distort"} {
-		p.AddOption(Link{Name: name, Url: "./" + name})
+func NewImagePage(t *Templates, net *Network, rows, cols, height, width int) *ImagePage {
+	p := &ImagePage{net: net,
+		Templates: t,
+		Page:      1,
+		Rows:      seq(rows),
+		Cols:      seq(cols),
+		height:    height,
+		width:     width,
 	}
-	dims := net.Data["train"].Shape()
-	if len(dims) >= 2 {
-		p.Width = int(float64(dims[1]) * scale)
-		p.Height = int(float64(dims[0]) * scale)
-		p.Rows = seq(rows)
-		p.Cols = seq(cols)
+	for _, name := range []string{"all", "errors", "prev", "next", "distort", "normalise"} {
+		p.AddOption(Link{Name: name, Url: "./" + name, Selected: name == "all"})
 	}
 	return p
 }
@@ -60,14 +62,6 @@ func (p *ImagePage) Base() func(w http.ResponseWriter, r *http.Request) {
 		}
 		base := "/images/" + p.Dset + "/"
 		p.Select(base)
-		sel := []string{"all"}
-		if p.Errors {
-			sel = []string{"errors"}
-		}
-		if p.Distort != "" {
-			sel = append(sel, "distort")
-		}
-		p.SelectOptions(sel)
 		p.Heading = p.net.heading()
 		template := "blank"
 		if d, ok := p.net.Data[p.Dset]; ok {
@@ -76,6 +70,18 @@ func (p *ImagePage) Base() func(w http.ResponseWriter, r *http.Request) {
 			for i, class := range d.Classes() {
 				p.Dropdown = append(p.Dropdown, Link{Name: class, Url: base + strconv.Itoa(i+1), Selected: i+1 == p.Class})
 			}
+			dims := d.Shape()
+			h, w := dims[0], 1
+			scale := int((((float64(p.height) - 100) / float64(len(p.Rows))) - 18)) / h
+			if len(dims) >= 2 {
+				w = dims[1]
+				scalex := int((((float64(p.width) - 32) / float64(len(p.Cols))) - 4)) / w
+				if scalex < scale {
+					scale = scalex
+				}
+			}
+			p.Width = w * scale
+			p.Height = h * scale
 		} else {
 			p.Dropdown = nil
 		}
@@ -113,8 +119,12 @@ func (p *ImagePage) Setopt() func(w http.ResponseWriter, r *http.Request) {
 		switch vars["opt"] {
 		case "all":
 			p.Errors = false
+			p.ToggleOption("all")
+			p.ToggleOption("errors")
 		case "errors":
 			p.Errors = true
+			p.ToggleOption("all")
+			p.ToggleOption("errors")
 		case "prev":
 			p.Page = mod(p.Page-1, 1, p.Pages)
 		case "next":
@@ -125,6 +135,9 @@ func (p *ImagePage) Setopt() func(w http.ResponseWriter, r *http.Request) {
 			} else {
 				p.Distort = ""
 			}
+			p.ToggleOption("distort")
+		case "normalise":
+			p.ToggleOption("normalise")
 		}
 		http.Redirect(w, r, "/images/"+p.Dset+"/", http.StatusFound)
 	}
@@ -174,6 +187,17 @@ func (p *ImagePage) Index(row, col int) int {
 	return 0
 }
 
+func (p *ImagePage) Url(i int) string {
+	url := strconv.Itoa(i) + "/"
+	if p.OptionSelected("normalise") {
+		url += "n"
+	}
+	if p.Distort != "" {
+		url += "?d=" + p.Distort
+	}
+	return url
+}
+
 func (p *ImagePage) Label(i int) (l LabelInfo) {
 	i--
 	l.Class = "image-ok"
@@ -218,7 +242,13 @@ func (p *ImagePage) Image() func(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		res := data.Image(id, vars["col"])
+		opts := vars["opts"]
+		norm := false
+		if len(opts) > 0 && opts[0] == 'n' {
+			norm = true
+			opts = opts[1:]
+		}
+		res := data.Image(id, opts, norm)
 		if vars["col"] == "" {
 			if r.FormValue("d") != "" {
 				var err error

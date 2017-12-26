@@ -34,7 +34,7 @@ func main() {
 	nnet.CheckErr(err)
 
 	// mnist2 dataset is 50000*40 distorted train + 10000 valid + 10000 test images
-	distort(train, "mnist2_train", split, epochs)
+	distort(train.Slice(0, split), "mnist2_train", epochs)
 
 	valid := train.Slice(split, train.Len())
 	err = nnet.SaveDataFile(valid, "mnist2_valid", false)
@@ -45,21 +45,17 @@ func main() {
 }
 
 // apply image distortion
-func distort(d *img.Data, name string, nimg, epochs int) {
+func distort(d *img.Data, name string, epochs int) {
 	rng := nnet.SetSeed(0)
-	res := &img.Data{
-		Epochs: epochs,
-		Class:  classes,
-		Dims:   d.Dims,
-		Labels: make([]int32, nimg),
-		Images: make([]image.Image, nimg),
-	}
 	t := img.NewTransformer(d.Dims[1], d.Dims[0], img.ConvAccel, rng)
+	res := img.NewDataLike(d, epochs)
+	index := make([]int, d.Len())
+	for i := range index {
+		index[i] = i
+	}
 	for epoch := 0; epoch < epochs; epoch++ {
-		index := rng.Perm(nimg)
-		d.Label(index, res.Labels)
 		t.TransformBatch(index, d.Images, res.Images)
-		err := nnet.SaveDataFile(res, name, epoch > 0)
+		err := nnet.SaveDataFile(res.Init(), name, epoch > 0)
 		nnet.CheckErr(err)
 		fmt.Printf("\rdistort: epoch %d/%d  ", epoch+1, epochs)
 	}
@@ -75,7 +71,7 @@ func loadData(imageFile, labelFile string) (*img.Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	return img.NewData(classes, labels, images), nil
+	return img.NewData(classes, labels, images).Init(), nil
 }
 
 func readImages(name string) (images []image.Image, err error) {

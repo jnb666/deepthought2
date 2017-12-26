@@ -16,11 +16,7 @@
             {{ if $i -}}
               {{ $l := $p.Label $i -}}
               <div class="{{$l.Class}}">
-                {{ if $p.Distort -}}
-                  <img src="/img/{{$p.Dset}}/{{$i}}?d={{$p.Distort}}" width="{{$p.Width}}" height="{{$p.Height}}" alt="{{$l.Desc}}" title="{{$l.Desc}}">
-                {{ else -}}
-                  <img src="/img/{{$p.Dset}}/{{$i}}" width="{{$p.Width}}" height="{{$p.Height}}" alt="{{$l.Desc}}" title="{{$l.Desc}}">
-                {{ end -}}
+                <img src="/img/{{$p.Dset}}/{{$p.Url $i}}" width="{{$p.Width}}" height="{{$p.Height}}" alt="{{$l.Desc}}" title="{{$l.Desc}}">
                 <span class="image-label">{{$l.Pred}}</span>
               </div>
             {{ end -}}

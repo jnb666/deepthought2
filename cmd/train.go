@@ -9,7 +9,7 @@ import (
 )
 
 func predict(q num.Queue, net *nnet.Network, d nnet.Data) {
-	dset := nnet.NewDataset(q.Dev(), d, net.TrainBatch, net.TrainBatch, net.FlattenInput, nil)
+	dset := nnet.NewDataset(q.Dev(), d, net.DatasetConfig(true), nil)
 	dset.Rewind()
 	x, y, _ := dset.NextBatch()
 	classes := q.NewArray(num.Int32, y.Dims()[0])
@@ -50,7 +50,7 @@ func main() {
 	// load traing and test data
 	data, err := nnet.LoadData(conf.DataSet)
 	nnet.CheckErr(err)
-	trainData := nnet.NewDataset(dev, data["train"], conf.TrainBatch, conf.MaxSamples, conf.FlattenInput, rng)
+	trainData := nnet.NewDataset(dev, data["train"], conf.DatasetConfig(false), rng)
 
 	// create network and initialise weights
 	trainNet := nnet.New(q, conf, trainData.BatchSize, trainData.Shape(), rng)

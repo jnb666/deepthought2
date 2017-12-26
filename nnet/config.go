@@ -18,6 +18,7 @@ type Config struct {
 	Bias          float64
 	NormalWeights bool
 	FlattenInput  bool
+	NormalInput   bool
 	Shuffle       bool
 	TrainRuns     int
 	TrainBatch    int
@@ -47,6 +48,19 @@ func LoadConfig(name string) (c Config, err error) {
 	dec := json.NewDecoder(f)
 	err = dec.Decode(&c)
 	return
+}
+
+func (c Config) DatasetConfig(test bool) DatasetOptions {
+	opts := DatasetOptions{
+		BatchSize:    c.TrainBatch,
+		MaxSamples:   c.MaxSamples,
+		FlattenInput: c.FlattenInput,
+		NormalInput:  c.NormalInput,
+	}
+	if test {
+		opts.BatchSize = c.TestBatch
+	}
+	return opts
 }
 
 func (c Config) Copy() Config {
@@ -129,6 +143,8 @@ func (c Config) SetString(key, val string) (Config, error) {
 		}
 	case reflect.String:
 		f.SetString(val)
+	case reflect.Bool:
+		f.SetBool(val == "true")
 	default:
 		return c, fmt.Errorf("invalid type for SetString: %v", f.Type().Kind())
 	}

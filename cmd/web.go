@@ -11,9 +11,10 @@ import (
 )
 
 const (
-	scale = 3
-	rows  = 6
-	cols  = 10
+	rows   = 7
+	cols   = 10
+	width  = 1200
+	height = 900
 )
 
 func main() {
@@ -55,12 +56,12 @@ func main() {
 	r.HandleFunc("/stats/update", trainPage.Filter()).Methods("POST")
 	r.HandleFunc("/ws", trainPage.Websocket())
 
-	imagePage := web.NewImagePage(t.Clone(), net, scale, rows, cols)
+	imagePage := web.NewImagePage(t.Clone(), net, rows, cols, height, width)
 	r.HandleFunc("/images/{dset}/{class:[0-9]*}", imagePage.Base())
 	r.HandleFunc("/images/{dset}/{opt:[a-z]+}", imagePage.Setopt())
 	r.HandleFunc("/grid/{dset}", imagePage.Grid())
-	r.HandleFunc("/img/{dset}/{id:[0-9]+}", imagePage.Image())
-	r.HandleFunc("/img/{dset}/{id:[0-9]+}/{col:(?:r|g|b)}", imagePage.Image())
+	r.HandleFunc("/img/{dset}/{id:[0-9]+}/", imagePage.Image())
+	r.HandleFunc("/img/{dset}/{id:[0-9]+}/{opts}", imagePage.Image())
 
 	viewPage := web.NewViewPage(t.Clone(), net)
 	r.HandleFunc("/view/{page}/", viewPage.Base())

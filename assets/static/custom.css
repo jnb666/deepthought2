@@ -78,10 +78,9 @@ body, html {
 
 .img-box {
   float: right;
-  padding-top: 8px;
+  padding-left: 16px;
   padding-right: 16px;
-  width: 466px;
-  height: 358px;
+  background-color: #222;
 }
 
 .model-select {
@@ -172,6 +171,14 @@ body, html {
   border: 1px solid #a00;
 }
 
+.image-ok img {
+  image-rendering: pixelated;
+}
+
+.image-error img {
+  image-rendering: pixelated;
+}
+
 .image-label {
   position: absolute;
   top: 0;
@@ -208,6 +215,7 @@ input {
 img.input {
   width: 100%;
   height: auto;
+  image-rendering: pixelated;
 }
 
 img.weights {
@@ -221,3 +229,4 @@ img.outputs {
   height: 30px;
   image-rendering: pixelated;
 }
+

@@ -123,9 +123,7 @@ func (t *Templates) Exec(w http.ResponseWriter, name string, data interface{}, t
 		return err
 	}
 	if err := tmpl.Execute(w, data); err != nil {
-		err := fmt.Errorf("error processing template %s topLevel=%v: %s", name, topLevel, err)
-		t.logError(w, http.StatusBadRequest, err)
-		return err
+		log.Printf("error processing template %s: %s", name, err)
 	}
 	return nil
 }

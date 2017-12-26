@@ -32,12 +32,12 @@ func main() {
 		train.Labels = append(train.Labels, d.Labels...)
 		train.Images = append(train.Images, d.Images...)
 	}
-	err = nnet.SaveDataFile(train, "cifar10_train", false)
+	err = nnet.SaveDataFile(train.Init(), "cifar10_train", false)
 	nnet.CheckErr(err)
 
 	test, err := loadBatch("test_batch.bin", classes)
 	nnet.CheckErr(err)
-	err = nnet.SaveDataFile(test, "cifar10_test", false)
+	err = nnet.SaveDataFile(test.Init(), "cifar10_test", false)
 	nnet.CheckErr(err)
 }
 

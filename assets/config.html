@@ -32,8 +32,8 @@
         <legend class="white-text">Tune parameters</legend>
         {{ range .TuneFields -}}
         <div class="pure-control-group">
-          <label for="{{.Name}}">{{.Name}}</label>
-          <input id="{{.Name}}" type="text" name="{{.Name}}" type="text" size="20" value="{{.Value}}" onchange="this.form.submit()">
+          <label for="{{.Name}}">{{.Name}}</label>         
+          <input id="{{.Name}}" name="{{.Name}}" type="text" size="20" value="{{.Value}}" onchange="this.form.submit()">
           <span class="error-text">{{.Error}}</span>
         </div>
         {{ end -}}

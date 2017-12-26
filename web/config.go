@@ -58,6 +58,10 @@ func (p *ConfigPage) init(data *NetworkData) error {
 	p.Fields = getFields(p.net)
 	p.Layers = getLayers(p.net)
 	p.TuneFields = getTuneFields(p.net.Tuners)
+	for key, d := range p.net.Data {
+		log.Printf("init %s: normalise=%v\n", key, p.net.Conf.NormalInput)
+		d.Normalise(p.net.Conf.NormalInput)
+	}
 	return nil
 }
 
@@ -131,6 +135,7 @@ func (p *ConfigPage) Save() func(w http.ResponseWriter, r *http.Request) {
 			}
 			p.net.Conf = conf
 			p.net.Export()
+			p.init(nil)
 			p.net.updated = true
 			if err := SaveNetwork(p.net.NetworkData, newModel); err != nil {
 				p.logError(w, http.StatusBadRequest, err)
@@ -174,16 +179,22 @@ func (p *ConfigPage) Tune() func(w http.ResponseWriter, r *http.Request) {
 		var conf nnet.Config
 		for i, f := range p.TuneFields {
 			sval := r.Form.Get(f.Name)
-			//log.Println("update tuner", f.Name, "=>", sval)
-			p.TuneFields[i].Value = sval
+			log.Println("update tuner", f.Name, "=>", sval)
 			vals[i] = strings.Fields(sval)
 			var err error
+			p.TuneFields[i].Value = sval
 			if len(vals[i]) == 0 {
 				err = ErrMissingField
 			}
 			for _, v := range vals[i] {
-				if _, err = conf.SetString(f.Name, v); err != nil {
-					break
+				if f.Boolean {
+					if v != "false" && v != "true" {
+						err = ErrMissingField
+					}
+				} else {
+					if _, err = conf.SetString(f.Name, v); err != nil {
+						break
+					}
 				}
 			}
 			p.TuneFields[i].Error = ""

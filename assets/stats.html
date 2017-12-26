@@ -51,8 +51,9 @@
     {{ end -}}
   </div>
   <div class="pure-u-1-2">
+    {{ $p := . -}}
     {{ range .Plots -}}
-      <div class="img-box">{{.}}</div>
+      <div class="img-box" style="width:{{$p.PlotWidth}}px;height:{{$p.PlotHeight}}px;">{{.}}</div>
     {{ end -}} 
   </div>
 </div>
