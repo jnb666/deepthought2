@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"github.com/jnb666/deepthought2/img"
 	"github.com/jnb666/deepthought2/nnet"
-	"image"
+	"image/color"
 	"os"
 	"path"
 )
@@ -25,10 +25,14 @@ func main() {
 	// mnist dataset is 60000 train + 10000 test images
 	train, err := loadData("train-images-idx3-ubyte", "train-labels-idx1-ubyte")
 	nnet.CheckErr(err)
-	err = nnet.SaveDataFile(train, "mnist_train", false)
+	test, err := loadData("t10k-images-idx3-ubyte", "t10k-labels-idx1-ubyte")
 	nnet.CheckErr(err)
 
-	test, err := loadData("t10k-images-idx3-ubyte", "t10k-labels-idx1-ubyte")
+	mean, std := img.GetStats(append(train.Images, test.Images...))
+	train.Mean, train.StdDev = mean, std
+	test.Mean, test.StdDev = mean, std
+
+	err = nnet.SaveDataFile(train, "mnist_train", false)
 	nnet.CheckErr(err)
 	err = nnet.SaveDataFile(test, "mnist_test", false)
 	nnet.CheckErr(err)
@@ -47,15 +51,15 @@ func main() {
 // apply image distortion
 func distort(d *img.Data, name string, epochs int) {
 	rng := nnet.SetSeed(0)
-	t := img.NewTransformer(d.Dims[1], d.Dims[0], img.ConvAccel, rng)
+	t := img.NewTransformer(d, img.GrayTrans, img.ConvAccel, rng)
 	res := img.NewDataLike(d, epochs)
 	index := make([]int, d.Len())
 	for i := range index {
 		index[i] = i
 	}
 	for epoch := 0; epoch < epochs; epoch++ {
-		t.TransformBatch(index, d.Images, res.Images)
-		err := nnet.SaveDataFile(res.Init(), name, epoch > 0)
+		t.TransformBatch(index, res.Images)
+		err := nnet.SaveDataFile(res, name, epoch > 0)
 		nnet.CheckErr(err)
 		fmt.Printf("\rdistort: epoch %d/%d  ", epoch+1, epochs)
 	}
@@ -71,10 +75,10 @@ func loadData(imageFile, labelFile string) (*img.Data, error) {
 	if err != nil {
 		return nil, err
 	}
-	return img.NewData(classes, labels, images).Init(), nil
+	return img.NewData(classes, labels, images), nil
 }
 
-func readImages(name string) (images []image.Image, err error) {
+func readImages(name string) (images []img.Image, err error) {
 	var f *os.File
 	pathName := path.Join(nnet.DataDir, "mnist", name)
 	if f, err = os.Open(pathName); err != nil {
@@ -87,12 +91,15 @@ func readImages(name string) (images []image.Image, err error) {
 	}
 	n, h, w := int(head.Num), int(head.Height), int(head.Width)
 	fmt.Printf("read %d %dx%d images from %s\n", n, h, w, name)
-	images = make([]image.Image, n)
-	shape := image.Rect(0, 0, w, h)
+	images = make([]img.Image, n)
+	pixels := make([]uint8, w*h)
 	for i := range images {
-		img := image.NewGray(shape)
-		if _, err = f.Read(img.Pix); err != nil {
+		if _, err = f.Read(pixels); err != nil {
 			return
+		}
+		img := img.NewGray(w, h)
+		for j, pix := range pixels {
+			img.Set(j%w, j/w, color.Gray{Y: pix})
 		}
 		images[i] = img
 	}

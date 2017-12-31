@@ -20,6 +20,7 @@ func main() {
 		LogEvery:     25,
 		MinLoss:      0.05,
 		FlattenInput: true,
+		WeightInit:   nnet.RandomUniform,
 	}.AddLayers(
 		nnet.Linear{Nout: 2},
 		nnet.Activation{Atype: "sigmoid"},

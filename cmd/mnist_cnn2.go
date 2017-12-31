@@ -7,16 +7,16 @@ import (
 
 func main() {
 	conf := nnet.Config{
-		DataSet:       "mnist",
-		Eta:           0.03,
-		Lambda:        0.1,
-		NormalWeights: true,
-		TrainRuns:     1,
-		MaxEpoch:      10,
-		TrainBatch:    10,
-		TestBatch:     100,
-		Shuffle:       true,
-		UseGPU:        true,
+		DataSet:    "mnist",
+		Eta:        0.16,
+		Lambda:     0.1,
+		TrainRuns:  1,
+		MaxEpoch:   20,
+		TrainBatch: 64,
+		TestBatch:  250,
+		Shuffle:    true,
+		UseGPU:     true,
+		WeightInit: nnet.LecunNormal,
 	}.AddLayers(
 		nnet.Conv{Nfeats: 20, Size: 5},
 		nnet.Activation{Atype: "relu"},
@@ -31,6 +31,15 @@ func main() {
 		nnet.Activation{Atype: "softmax"},
 	)
 	fmt.Println(conf)
-	err := conf.Save("mnist_cnn_deep.conf")
+	err := conf.Save("mnist_cnn2.conf")
+	nnet.CheckErr(err)
+
+	// with image distortion
+	conf.DataSet = "mnist2"
+	conf.MaxEpoch = 40
+	conf.StopAfter = 1
+	conf.ExtraEpochs = 2
+	fmt.Println(conf)
+	err = conf.Save("mnist_cnn2d.conf")
 	nnet.CheckErr(err)
 }

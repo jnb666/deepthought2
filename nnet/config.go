@@ -10,30 +10,36 @@ import (
 	"strings"
 )
 
+type OptionList interface {
+	Options() []string
+	String() string
+}
+
 // Training configuration settings
 type Config struct {
-	DataSet       string
-	Eta           float64
-	Lambda        float64
-	Bias          float64
-	NormalWeights bool
-	FlattenInput  bool
-	NormalInput   bool
-	Shuffle       bool
-	TrainRuns     int
-	TrainBatch    int
-	TestBatch     int
-	MaxEpoch      int
-	MaxSamples    int
-	LogEvery      int
-	StopAfter     int
-	ExtraEpochs   int
-	MinLoss       float64
-	RandSeed      int64
-	DebugLevel    int
-	UseGPU        bool
-	Profile       bool
-	Layers        []LayerConfig
+	DataSet      string
+	Eta          float64
+	Lambda       float64
+	Bias         float64
+	WeightInit   InitType
+	FlattenInput bool
+	Shuffle      bool
+	Normalise    bool
+	Distort      bool
+	TrainRuns    int
+	TrainBatch   int
+	TestBatch    int
+	MaxEpoch     int
+	MaxSamples   int
+	LogEvery     int
+	StopAfter    int
+	ExtraEpochs  int
+	MinLoss      float64
+	RandSeed     int64
+	DebugLevel   int
+	UseGPU       bool
+	Profile      bool
+	Layers       []LayerConfig
 }
 
 // Load network from json file under DataDir
@@ -52,13 +58,14 @@ func LoadConfig(name string) (c Config, err error) {
 
 func (c Config) DatasetConfig(test bool) DatasetOptions {
 	opts := DatasetOptions{
-		BatchSize:    c.TrainBatch,
+		BatchSize:    c.TestBatch,
 		MaxSamples:   c.MaxSamples,
 		FlattenInput: c.FlattenInput,
-		NormalInput:  c.NormalInput,
+		Normalise:    c.Normalise,
 	}
-	if test {
-		opts.BatchSize = c.TestBatch
+	if !test {
+		opts.BatchSize = c.TrainBatch
+		opts.Distort = c.Distort
 	}
 	return opts
 }
@@ -144,19 +151,9 @@ func (c Config) SetString(key, val string) (Config, error) {
 	case reflect.String:
 		f.SetString(val)
 	case reflect.Bool:
-		f.SetBool(val == "true")
+		f.SetBool(val != "")
 	default:
 		return c, fmt.Errorf("invalid type for SetString: %v", f.Type().Kind())
 	}
 	return c, err
-}
-
-func (c Config) SetBool(key string, val bool) (Config, error) {
-	s := reflect.ValueOf(&c).Elem()
-	f := s.FieldByName(key)
-	if f.Type().Kind() == reflect.Bool {
-		f.SetBool(val)
-		return c, nil
-	}
-	return c, fmt.Errorf("invalid type for SetBool: %v", f.Type().Kind())
 }

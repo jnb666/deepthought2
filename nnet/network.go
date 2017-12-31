@@ -11,6 +11,24 @@ import (
 	"time"
 )
 
+// Weight initialisation type
+type InitType int
+
+const (
+	RandomNormal InitType = iota
+	RandomUniform
+	LecunNormal
+	GlorotUniform
+)
+
+func (t InitType) Options() []string {
+	return []string{"RandomNormal", "RandomUniform", "LecunNormal", "GlorotUniform"}
+}
+
+func (t InitType) String() string {
+	return t.Options()[t]
+}
+
 // Network type represents a multilayer neural network model.
 type Network struct {
 	Config
@@ -73,21 +91,33 @@ func (n *Network) Release() {
 // Initialise network weights using a linear or normal distribution.
 // Weights for each layer are scaled by 1/sqrt(nin)
 func (n *Network) InitWeights(rng *rand.Rand) {
+	var wInit func() float64
 	for i, layer := range n.Layers {
 		if l, ok := layer.(ParamLayer); ok {
-			shape := layer.InShape()
-			nin := num.Prod(shape[:len(shape)-1])
-			// if next layer is a pooling layer adjust the no. of inputs by scale factor
-			if i < len(n.Layers)-2 {
-				if pool, ok := n.Layers[i+2].(*poolDNN); ok {
-					nin /= (pool.Size * pool.Size)
-				}
+			W, _ := l.Params()
+			dims := W.Dims()
+			var nin, nout int
+			if len(dims) == 2 {
+				nin, nout = dims[0], dims[1]
+			} else {
+				nin, nout = dims[0]*dims[1]*dims[2], dims[0]*dims[1]*dims[3]
 			}
-			scale := 1 / math.Sqrt(float64(nin))
 			if n.DebugLevel >= 1 {
-				fmt.Printf("layer %d: set weights scale=%.3g bias=%.3g normal=%v\n", i, scale, n.Bias, n.NormalWeights)
+				fmt.Printf("layer %d: set weights init=%s nin=%d, nout=%d bias=%.3g\n", i, n.WeightInit, nin, nout, n.Bias)
 			}
-			l.InitParams(n.queue, float32(scale), float32(n.Bias), n.NormalWeights, rng)
+			switch n.WeightInit {
+			case RandomNormal:
+				wInit = func() float64 { return rng.NormFloat64() }
+			case RandomUniform:
+				wInit = func() float64 { return rng.Float64() }
+			case LecunNormal:
+				scale := 1 / math.Sqrt(float64(nin))
+				wInit = func() float64 { return rng.NormFloat64() * scale }
+			case GlorotUniform:
+				scale := math.Sqrt(6 / float64(nin+nout))
+				wInit = func() float64 { return (2*rng.Float64() - 1) * scale }
+			}
+			l.InitParams(n.queue, wInit, float32(n.Bias))
 		}
 	}
 	if n.DebugLevel >= 2 {

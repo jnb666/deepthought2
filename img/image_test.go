@@ -2,7 +2,6 @@ package img
 
 import (
 	"image"
-	"image/color"
 	"math/rand"
 	"strings"
 	"testing"
@@ -41,24 +40,32 @@ func runTest(t *testing.T, mode ConvMode) {
 	size := 10
 	seed := time.Now().UTC().UnixNano()
 	rng := rand.New(rand.NewSource(seed))
-	trans := NewTransformer(size, size, mode, rng)
-
-	src := image.NewGray(image.Rect(0, 0, size, size))
+	src := NewGray(size, size)
 	for i := 1; i < size-1; i++ {
-		src.Set(size-i-1, i, color.Gray{Y: 255})
+		src.Set(size-i-1, i, Gray{Y: 1})
 	}
 	t.Logf("\n%s", printImage(src))
 
-	trans.Trans = Scale
-	dst := trans.Transform(src, 0)
+	d := NewData([]string{}, []int32{}, []Image{src})
+	trans := NewTransformer(d, Scale, mode, rng)
+	dst, err := trans.Transform(src, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Logf("scale\n%s", printImage(dst))
 
 	trans.Trans = Rotate
-	dst = trans.Transform(src, 0)
+	dst, err = trans.Transform(src, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Logf("rotate\n%s", printImage(dst))
 
 	trans.Trans = Elastic
-	dst = trans.Transform(src, 0)
+	dst, err = trans.Transform(src, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Logf("elastic\n%s", printImage(dst))
 }
 
@@ -80,15 +87,18 @@ func runBench(b *testing.B, mode ConvMode, dis TransType) {
 	size := 28
 	seed := time.Now().UTC().UnixNano()
 	rng := rand.New(rand.NewSource(seed))
-	data := make([]float32, size*size)
-	for i := range data {
-		data[i] = rng.Float32()
+	src := NewGray(size, size)
+	for i := range src.Pix {
+		src.Pix[i] = rng.Float32()
 	}
-	src := NewGray(image.Rect(0, 0, size, size), data)
-	trans := NewTransformer(size, size, mode, rng)
-	trans.Trans = dis
+	d := NewData([]string{}, []int32{}, []Image{src})
+	trans := NewTransformer(d, dis, mode, rng)
+	var err error
 	for i := 0; i < b.N; i++ {
-		dst = trans.Transform(src, 0)
+		dst, err = trans.Transform(src, 0)
+		if err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 

@@ -206,6 +206,11 @@ input {
   font-size: 0.8em;
 }
 
+.form-select {
+  color: black;
+  font-size: 0.8em;
+}
+
 .read-only input[readonly] {
   color: black;
   background-color: white;

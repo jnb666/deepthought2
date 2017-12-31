@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -27,7 +28,7 @@ type Field struct {
 	Value   string
 	Error   string
 	Boolean bool
-	On      bool
+	Options []string
 }
 
 type Layer struct {
@@ -58,10 +59,6 @@ func (p *ConfigPage) init(data *NetworkData) error {
 	p.Fields = getFields(p.net)
 	p.Layers = getLayers(p.net)
 	p.TuneFields = getTuneFields(p.net.Tuners)
-	for key, d := range p.net.Data {
-		log.Printf("init %s: normalise=%v\n", key, p.net.Conf.NormalInput)
-		d.Normalise(p.net.Conf.NormalInput)
-	}
 	return nil
 }
 
@@ -114,11 +111,11 @@ func (p *ConfigPage) Save() func(w http.ResponseWriter, r *http.Request) {
 				} else {
 					err = ErrMissingField
 				}
-			} else if fld.Boolean {
-				p.Fields[i].On = (val == "true")
-				conf, err = conf.SetBool(fld.Name, p.Fields[i].On)
 			} else {
 				p.Fields[i].Value = val
+				if fld.Options != nil {
+					val = getOption(fld.Options, val)
+				}
 				conf, err = conf.SetString(fld.Name, val)
 			}
 			p.Fields[i].Error = ""
@@ -179,7 +176,6 @@ func (p *ConfigPage) Tune() func(w http.ResponseWriter, r *http.Request) {
 		var conf nnet.Config
 		for i, f := range p.TuneFields {
 			sval := r.Form.Get(f.Name)
-			log.Println("update tuner", f.Name, "=>", sval)
 			vals[i] = strings.Fields(sval)
 			var err error
 			p.TuneFields[i].Value = sval
@@ -250,8 +246,19 @@ func getFields(net *Network) []Field {
 	flds := []Field{{Name: "Model", Value: net.Model}}
 	keys := conf.Fields()
 	for _, key := range keys {
-		f := Field{Name: key, Value: fmt.Sprint(conf.Get(key))}
-		f.On, f.Boolean = conf.Get(key).(bool)
+		f := Field{Name: key}
+		switch c := conf.Get(key).(type) {
+		default:
+			f.Value = fmt.Sprint(c)
+		case bool:
+			f.Boolean = true
+			if c {
+				f.Value = "true"
+			}
+		case nnet.OptionList:
+			f.Options = c.Options()
+			f.Value = c.String()
+		}
 		flds = append(flds, f)
 	}
 	return flds
@@ -279,4 +286,13 @@ func getTuneFields(tuners []TuneParams) []Field {
 		flds[i] = Field{Name: f.Name, Value: strings.Join(val, " ")}
 	}
 	return flds
+}
+
+func getOption(opts []string, val string) string {
+	for id, opt := range opts {
+		if val == opt {
+			return strconv.Itoa(id)
+		}
+	}
+	return ""
 }

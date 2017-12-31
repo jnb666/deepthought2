@@ -133,13 +133,13 @@ func (p *ViewPage) getLayers(index int) {
 		classes := p.net.view.data.Classes()
 		label := p.net.Labels[p.net.view.dset][index]
 		norm := ""
-		if p.net.Network.NormalInput {
+		if p.net.Network.Normalise {
 			norm = "n"
 		}
 		p.addImage(
 			fmt.Sprintf("input %d %v => %s", index+1, p.net.view.inShape, classes[label]),
 			fmt.Sprintf("/img/%s/%d/%s", p.net.view.dset, index+1, norm),
-			p.net.view.data.Image(index, "", false),
+			p.net.view.data.Image(index, ""),
 			len(p.net.view.inShape) == 3 && p.net.view.inShape[2] == 3,
 			0, 0, "input",
 		)

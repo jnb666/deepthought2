@@ -3,10 +3,8 @@ package nnet
 import (
 	"encoding/gob"
 	"fmt"
-	_ "github.com/jnb666/deepthought2/img"
+	"github.com/jnb666/deepthought2/img"
 	"github.com/jnb666/deepthought2/num"
-	"image"
-	"image/color"
 	"io"
 	"math/rand"
 	"os"
@@ -30,12 +28,11 @@ type Data interface {
 	ClassSize() int
 	Shape() []int
 	Label(index []int, label []int32)
-	Input(index []int, buf []float32)
-	Image(i int, channel string, normalise bool) image.Image
+	Input(index []int, buf []float32, t *img.Transformer)
+	Image(i int, channel string) img.Image
 	SetFile(path string)
 	File() string
 	Epochs() int
-	Normalise(on bool)
 }
 
 // Dataset type encapsulates a set of training, test or validation data.
@@ -54,7 +51,7 @@ type Dataset struct {
 	batch     int
 	rng       *rand.Rand
 	file      *os.File
-	normalise bool
+	trans     *img.Transformer
 	sync.WaitGroup
 }
 
@@ -63,7 +60,8 @@ type DatasetOptions struct {
 	BatchSize    int
 	MaxSamples   int
 	FlattenInput bool
-	NormalInput  bool
+	Normalise    bool
+	Distort      bool
 }
 
 // Create a new Dataset struct, allocate array buffers  and set the batch size and maxSamples
@@ -85,8 +83,11 @@ func NewDataset(dev num.Device, data Data, opts DatasetOptions, rng *rand.Rand) 
 	if d.Samples%d.BatchSize != 0 {
 		d.Batches++
 	}
-	d.Normalise(opts.NormalInput)
 	nfeat := num.Prod(data.Shape())
+	if imgData, ok := data.(*img.Data); ok && (opts.Normalise || opts.Distort) {
+		trans := imgData.Images[0].TransformType(opts.Normalise, opts.Distort)
+		d.trans = img.NewTransformer(imgData, trans, img.ConvAccel, rng)
+	}
 	d.xBuffer = make([]float32, nfeat*d.BatchSize)
 	d.yBuffer = make([]int32, d.BatchSize)
 	for i := range d.x {
@@ -104,6 +105,14 @@ func NewDataset(dev num.Device, data Data, opts DatasetOptions, rng *rand.Rand) 
 	}
 	d.queue = dev.NewQueue()
 	return d
+}
+
+// Transforms applied to input data
+func (d *Dataset) Trans() img.TransType {
+	if d.trans == nil {
+		return 0
+	}
+	return d.trans.Trans
 }
 
 // release allocated buffers
@@ -125,7 +134,7 @@ func (d *Dataset) loadBatch() {
 		if end > d.Samples {
 			end = d.Samples
 		}
-		d.Input(d.indexes[start:end], d.xBuffer)
+		d.Input(d.indexes[start:end], d.xBuffer, d.trans)
 		d.Label(d.indexes[start:end], d.yBuffer)
 		d.queue.Call(
 			num.Write(d.x[d.buf], d.xBuffer),
@@ -274,19 +283,17 @@ func (d *data) Label(index []int, label []int32) {
 	}
 }
 
-func (d *data) Input(index []int, buf []float32) {
+func (d *data) Input(index []int, buf []float32, t *img.Transformer) {
 	nfeat := num.Prod(d.Dims)
 	for i, ix := range index {
 		copy(buf[i*nfeat:], d.Inputs[ix*nfeat:(ix+1)*nfeat])
 	}
 }
 
-func (d *data) Image(i int, channel string, normalise bool) image.Image {
+func (d *data) Image(i int, channel string) img.Image {
 	nfeat := num.Prod(d.Dims)
-	img := image.NewGray(image.Rect(0, 0, 1, nfeat))
-	for j := 0; j < nfeat; j++ {
-		img.Set(0, j, color.Gray{Y: uint8(d.Inputs[i*nfeat+j] * 255)})
-	}
+	img := img.NewGray(1, nfeat)
+	copy(img.Pix, d.Inputs[i*nfeat:(i+1)*nfeat])
 	return img
 }
 
@@ -295,9 +302,3 @@ func (d *data) File() string { return d.path }
 func (d *data) SetFile(path string) { d.path = path }
 
 func (d *data) Epochs() int { return 1 }
-
-func (d *data) Normalise(on bool) {
-	if on {
-		panic("not supported!")
-	}
-}

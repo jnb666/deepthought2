@@ -197,20 +197,20 @@ func (p *TrainPage) StatsHeaders() []string {
 }
 
 func (p *TrainPage) LatestStats(n int) []nnet.Stats {
+	nstats := len(p.net.test.Stats)
 	logEvery := p.net.LogEvery
 	if logEvery == 0 {
 		logEvery = 1
 	}
+	if nstats > logEvery*n {
+		logEvery = 1 + nstats/n
+	}
 	res := []nnet.Stats{}
-	last := len(p.net.test.Stats) - 1
-	if last >= 0 {
-		res = append(res, p.net.test.Stats[last])
-		for i := logEvery*(last/logEvery) - 1; i >= 0 && len(res) < n; i -= logEvery {
+	if nstats > 0 {
+		res = append(res, p.net.test.Stats[nstats-1])
+		for i := logEvery*((nstats-1)/logEvery) - 1; i >= 0; i -= logEvery {
 			res = append(res, p.net.test.Stats[i])
 		}
-	}
-	if len(res) < n && p.OptionSelected("history") && len(p.net.History) > 0 {
-		res = append(res, p.net.History[len(p.net.History)-1].Stats)
 	}
 	return res
 }
@@ -308,6 +308,9 @@ func (p *TrainPage) matrixPlot() template.HTML {
 	if !ok {
 		dset = "train"
 		data = p.net.Data[dset]
+	}
+	if _, ok := p.net.Pred[dset]; !ok {
+		return ""
 	}
 	nclass := len(data.Classes())
 	hmap := newHeatMap(nclass, p.net.Labels[dset], p.net.Pred[dset], moreland.BlackBody())

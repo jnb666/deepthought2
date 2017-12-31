@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/jnb666/deepthought2/img"
 	"github.com/jnb666/deepthought2/nnet"
-	"image"
 	"image/color"
 	"io"
 	"os"
@@ -32,12 +31,17 @@ func main() {
 		train.Labels = append(train.Labels, d.Labels...)
 		train.Images = append(train.Images, d.Images...)
 	}
-	err = nnet.SaveDataFile(train.Init(), "cifar10_train", false)
-	nnet.CheckErr(err)
-
 	test, err := loadBatch("test_batch.bin", classes)
 	nnet.CheckErr(err)
-	err = nnet.SaveDataFile(test.Init(), "cifar10_test", false)
+
+	mean, std := img.GetStats(append(train.Images, test.Images...))
+	train.Mean, train.StdDev = mean, std
+	test.Mean, test.StdDev = mean, std
+
+	err = nnet.SaveDataFile(train, "cifar10_train", false)
+	nnet.CheckErr(err)
+
+	err = nnet.SaveDataFile(test, "cifar10_test", false)
 	nnet.CheckErr(err)
 }
 
@@ -50,9 +54,8 @@ func loadBatch(name string, classes []string) (*img.Data, error) {
 	}
 	defer f.Close()
 	labels := make([]int32, 0, 10000)
-	images := make([]image.Image, 0, 10000)
-	shape := image.Rect(0, 0, imageWidth, imageHeight)
-	bytes := make([]byte, imageBytes)
+	images := make([]img.Image, 0, 10000)
+	bytes := make([]uint8, imageBytes)
 	for {
 		n, err := f.Read(bytes)
 		if err == io.EOF {
@@ -65,10 +68,10 @@ func loadBatch(name string, classes []string) (*img.Data, error) {
 			return nil, fmt.Errorf("incomplete read: expected %d bytes got %d", imageBytes, n)
 		}
 		labels = append(labels, int32(bytes[0]))
-		img := image.NewNRGBA(shape)
-		for i := 0; i < imageSize; i++ {
-			col := color.NRGBA{R: bytes[1+i], G: bytes[1+imageSize+i], B: bytes[1+2*imageSize+i], A: 255}
-			img.Set(i%imageWidth, i/imageWidth, col)
+		img := img.NewRGB(imageWidth, imageHeight)
+		for j := 0; j < imageSize; j++ {
+			col := color.NRGBA{R: bytes[1+j], G: bytes[1+imageSize+j], B: bytes[1+imageSize*2+j], A: 255}
+			img.Set(j%imageWidth, j/imageWidth, col)
 		}
 		images = append(images, img)
 	}

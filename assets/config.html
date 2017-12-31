@@ -14,7 +14,12 @@
         <div class="pure-control-group">
           <label for="{{.Name}}">{{.Name}}</label>
           {{ if .Boolean -}}
-          <input id="{{.Name}}" name="{{.Name}}" type="checkbox" value="true" {{if .On}}checked{{end}}>
+          <input id="{{.Name}}" name="{{.Name}}" type="checkbox" value="true" {{if .Value}}checked{{end}}>
+          {{ else if .Options -}}
+          {{ $val := .Value -}}
+          <select id="{{.Name}}" name="{{.Name}}" class="form-select">
+            {{ range .Options }}<option{{if eq $val .}} selected{{end}}>{{.}}</option>{{ end -}}
+          </select>
           {{ else -}}
           <input id="{{.Name}}" name="{{.Name}}" type="text" size="20" value="{{.Value}}">
           {{ end -}}

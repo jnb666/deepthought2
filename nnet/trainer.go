@@ -55,13 +55,21 @@ func (s Stats) FormatItem(i int) string {
 	return fmt.Sprintf("%6.2f%%", s.Values[i]*100)
 }
 
+func (s Stats) FormatElapsed() string {
+	format := "%.2fs"
+	if s.Elapsed >= 60*time.Second {
+		format = "%.0fs"
+	}
+	return fmt.Sprintf(format, s.Elapsed.Seconds())
+}
+
 func (s Stats) String(headers []string, done bool) string {
 	msg := fmt.Sprintf("epoch %3d:", s.Epoch)
 	for i, val := range s.Format() {
 		msg += fmt.Sprintf("  %s =%s", headers[i], val)
 	}
 	if done {
-		msg += fmt.Sprintf("\nrun time: %s", s.Elapsed.Round(10*time.Millisecond))
+		msg += fmt.Sprintf("\nrun time: %s", s.FormatElapsed())
 	}
 	return msg
 }

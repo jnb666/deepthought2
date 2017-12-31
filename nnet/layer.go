@@ -24,7 +24,7 @@ type Layer interface {
 // ParamLayer is a layer with weight and bias parameters
 type ParamLayer interface {
 	Layer
-	InitParams(q num.Queue, scale, bias float32, normal bool, rng *rand.Rand)
+	InitParams(q num.Queue, fn func() float64, bias float32)
 	Params() (W, B num.Array)
 	ParamGrads() (dW, dB num.Array)
 	SetParams(q num.Queue, W, B num.Array)
@@ -428,14 +428,10 @@ func (p paramBase) ParamGrads() (dW, dB num.Array) {
 	return p.dw, p.db
 }
 
-func (p paramBase) InitParams(q num.Queue, scale, bias float32, normal bool, rng *rand.Rand) {
+func (p paramBase) InitParams(q num.Queue, wInit func() float64, bias float32) {
 	weights := make([]float32, num.Prod(p.w.Dims()))
 	for i := range weights {
-		if normal {
-			weights[i] = float32(rng.NormFloat64()) * scale
-		} else {
-			weights[i] = rng.Float32() * scale
-		}
+		weights[i] = float32(wInit())
 	}
 	q.Call(
 		num.Write(p.w, weights),

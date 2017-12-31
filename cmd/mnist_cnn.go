@@ -7,15 +7,15 @@ import (
 
 func main() {
 	conf := nnet.Config{
-		DataSet:       "mnist",
-		Eta:           0.1,
-		NormalWeights: true,
-		TrainRuns:     1,
-		MaxEpoch:      10,
-		TrainBatch:    10,
-		TestBatch:     100,
-		Shuffle:       true,
-		UseGPU:        true,
+		DataSet:    "mnist",
+		Eta:        0.1,
+		TrainRuns:  1,
+		MaxEpoch:   10,
+		TrainBatch: 10,
+		TestBatch:  100,
+		Shuffle:    true,
+		UseGPU:     true,
+		WeightInit: nnet.LecunNormal,
 	}.AddLayers(
 		nnet.Conv{Nfeats: 20, Size: 5, Pad: 2},
 		nnet.Activation{Atype: "relu"},

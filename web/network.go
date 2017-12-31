@@ -25,14 +25,14 @@ import (
 )
 
 const (
-	aspectOutput     = 0.125
-	aspectWeights    = 0.25
+	aspectOutput     = 0.1
+	aspectWeights    = 0.2
 	factorMinOutput  = 20
 	factorMinWeights = 20
 )
 
-var tuneOpts = []string{"Eta", "Lambda", "TrainBatch", "NormalInput"}
-var tuneOptHtml = []string{"&eta;", "&lambda;", "batch", "norm"}
+var tuneOpts = []string{"Eta", "Lambda", "TrainBatch"}
+var tuneOptHtml = []string{"&eta;", "&lambda;", "batch"}
 
 // Network and associated training / test data and configuration
 type Network struct {
@@ -40,8 +40,8 @@ type Network struct {
 	*nnet.Network
 	Data      map[string]nnet.Data
 	Labels    map[string][]int32
+	trans     map[string]*img.Transformer
 	test      *nnet.TestBase
-	trans     *img.Transformer
 	conn      *websocket.Conn
 	trainData *nnet.Dataset
 	queue     num.Queue
@@ -112,17 +112,23 @@ func (n *Network) Init(conf nnet.Config) error {
 		n.view.queue.Finish()
 		n.queue.Finish()
 	}
-	if n.Network == nil || conf.DataSet != n.Network.DataSet {
-		if n.Data, err = nnet.LoadData(conf.DataSet); err != nil {
-			return err
-		}
-	}
 	if n.Network == nil || conf.UseGPU != n.Network.UseGPU {
 		n.queue = num.NewDevice(conf.UseGPU).NewQueue()
 	}
 	if n.Network == nil || conf.RandSeed != n.Network.RandSeed {
 		n.rng = nnet.SetSeed(conf.RandSeed)
 		n.testRng = nnet.SetSeed(conf.RandSeed)
+	}
+	if n.Network == nil || conf.DataSet != n.Network.DataSet {
+		if n.Data, err = nnet.LoadData(conf.DataSet); err != nil {
+			return err
+		}
+		n.trans = make(map[string]*img.Transformer)
+		for key, data := range n.Data {
+			if d, ok := data.(*img.Data); ok {
+				n.trans[key] = img.NewTransformer(d, img.NoTrans, img.ConvAccel, n.testRng)
+			}
+		}
 	}
 	n.release()
 	n.trainData = nnet.NewDataset(n.queue.Dev(), n.Data["train"], conf.DatasetConfig(false), n.rng)
@@ -136,12 +142,14 @@ func (n *Network) Init(conf nnet.Config) error {
 		n.Labels[key] = make([]int32, dset.Samples)
 		dset.Label(seq(dset.Samples), n.Labels[key])
 	}
-	dims := n.trainData.Shape()
-	if len(dims) >= 2 {
-		n.trans = img.NewTransformer(dims[1], dims[0], img.ConvAccel, n.testRng)
+	if d, ok := n.Data["test"]; ok {
+		n.view = newViewData(n.queue.Dev(), "test", d, n.trans["test"], conf, n.testRng)
+	} else if d, ok = n.Data["train"]; ok {
+		n.view = newViewData(n.queue.Dev(), "train", d, nil, conf, n.testRng)
+	} else {
+		err = fmt.Errorf("Network init: no test or train data")
 	}
-	n.view = newViewData(n.queue, n.Data, conf, n.testRng)
-	return nil
+	return err
 }
 
 // release allocated buffers
@@ -487,6 +495,7 @@ type viewData struct {
 	layers  []viewLayer
 	dset    string
 	data    nnet.Data
+	trans   *img.Transformer
 	input   num.Array
 	inShape []int
 	inData  []float32
@@ -494,40 +503,34 @@ type viewData struct {
 }
 
 type viewLayer struct {
-	ltype    string
-	outShape []int
-	outData  []float32
-	outImage *image.NRGBA
-	ox, oy   int
-	wShape   []int
-	bShape   []int
-	wData    []float32
-	bData    []float32
-	wImage   *image.NRGBA
-	wix, wiy int
-	wox, woy int
-	wborder  int
-	cmapW    palette.ColorMap
-	cmapB    palette.ColorMap
+	ltype      string
+	outShape   []int
+	outData    []float32
+	outImage   *image.NRGBA
+	ox, oy     int
+	wShape     []int
+	bShape     []int
+	wData      []float32
+	bData      []float32
+	wImage     *image.NRGBA
+	wix, wiy   int
+	wix2, wiy2 int
+	wox, woy   int
+	wborder    int
+	cmapW      palette.ColorMap
+	cmapB      palette.ColorMap
 }
 
-func newViewData(dev num.Device, data map[string]nnet.Data, conf nnet.Config, rng *rand.Rand) *viewData {
-	v := &viewData{queue: dev.NewQueue()}
-	if _, ok := data["test"]; ok {
-		v.dset, v.data = "test", data["test"]
-	} else {
-		v.dset, v.data = "train", data["train"]
-	}
-	v.Network = nnet.New(v.queue, conf, 1, v.data.Shape(), rng)
-
-	v.inShape = v.data.Shape()
+func newViewData(dev num.Device, dset string, data nnet.Data, trans *img.Transformer, conf nnet.Config, rng *rand.Rand) *viewData {
+	v := &viewData{queue: dev.NewQueue(), dset: dset, data: data, trans: trans}
+	v.inShape = data.Shape()
+	v.Network = nnet.New(v.queue, conf, 1, v.inShape, rng)
 	v.inData = make([]float32, num.Prod(v.inShape))
 	if conf.FlattenInput {
 		v.input = dev.NewArray(num.Float32, len(v.inData), 1)
 	} else {
 		v.input = dev.NewArray(num.Float32, append(v.inShape, 1)...)
 	}
-
 	for i, layer := range v.Layers {
 		l := viewLayer{ltype: layer.Type()}
 		// filter output layers
@@ -552,7 +555,6 @@ func newViewData(dev num.Device, data map[string]nnet.Data, conf nnet.Config, rn
 			l.cmapB.SetMin(-1)
 			l.cmapB.SetMax(1)
 		}
-
 		v.layers = append(v.layers, l)
 	}
 	// allocate buffers and output images
@@ -573,17 +575,24 @@ func (v *viewData) loadWeights(net *nnet.Network) {
 
 // update output images with given index from test set
 func (v *viewData) updateOutputs(index int) {
-	v.data.Input([]int{index}, v.inData)
+	if v.trans != nil {
+		if v.Normalise {
+			v.trans.Trans = img.Normalise
+		} else {
+			v.trans.Trans = img.NoTrans
+		}
+	}
+	v.data.Input([]int{index}, v.inData, v.trans)
 	v.queue.Call(
 		num.Write(v.input, v.inData),
 	)
 	v.Fprop(v.input, false)
-	for i, l := range v.layers {
+	for iLayer, l := range v.layers {
 		if l.outImage == nil {
 			continue
 		}
 		v.queue.Call(
-			num.Read(v.Layers[i].Output(), l.outData),
+			num.Read(v.Layers[iLayer].Output(), l.outData),
 		).Finish()
 		switch len(l.outShape) {
 		case 1:
@@ -592,13 +601,13 @@ func (v *viewData) updateOutputs(index int) {
 				l.outImage.Set(i/height, i%height, mapColor(val, v.cmapOut))
 			}
 		case 3:
-			bw, bh := l.outShape[0], l.outShape[1]
+			bh, bw := l.outShape[0], l.outShape[1]
 			for i := 0; i < l.ox*l.oy; i++ {
 				xb := (bw + 1) * (i % l.ox)
 				yb := (bh + 1) * (i / l.ox)
 				for j := 0; j < bw*bh; j++ {
 					col := mapColor(l.outData[i*bw*bh+j], v.cmapOut)
-					l.outImage.Set(xb+j%bw+1, yb+j/bw+1, col)
+					l.outImage.Set(xb+j/bh+1, yb+j%bh+1, col)
 				}
 			}
 		}
@@ -607,32 +616,43 @@ func (v *viewData) updateOutputs(index int) {
 
 // update weight and bias images
 func (v *viewData) updateWeights() {
-	for i, l := range v.layers {
+	for iLayer, l := range v.layers {
 		if l.wImage == nil {
 			continue
 		}
-		W, B := v.Layers[i].(nnet.ParamLayer).Params()
+		W, B := v.Layers[iLayer].(nnet.ParamLayer).Params()
 		v.queue.Call(
 			num.Read(W, l.wData),
 			num.Read(B, l.bData),
 		).Finish()
-		// draw bias
-		for i := 0; i < l.wox*l.woy; i++ {
-			xb, yb := l.block(i)
-			biasCol := mapColor(l.bData[i], l.cmapB)
+		for out := 0; out < l.wox*l.woy; out++ {
+			xb := (l.wix + l.wborder) * (out % l.wox)
+			yb := (l.wiy + l.wborder) * (out / l.wox)
+			// draw bias
+			biasCol := mapColor(l.bData[out], l.cmapB)
 			for j := 0; j < l.wix; j++ {
 				l.wImage.Set(xb+j, yb, biasCol)
 			}
 			for j := 0; j < l.wiy; j++ {
 				l.wImage.Set(xb, yb+j, biasCol)
 			}
-		}
-		// draw weights
-		bsize := l.wix * l.wiy
-		for i := 0; i < l.wox*l.woy; i++ {
-			xb, yb := l.block(i)
-			for j := 0; j < bsize; j++ {
-				l.wImage.Set(xb+j%l.wix+1, yb+j/l.wix+1, mapColor(l.wData[i*bsize+j], l.cmapW))
+			// draw weights
+			switch len(l.wShape) {
+			case 2:
+				nin := l.wShape[0]
+				for j, val := range l.wData[out*nin : (out+1)*nin] {
+					l.wImage.Set(xb+j/l.wiy+1, yb+j%l.wiy+1, mapColor(val, l.cmapW))
+				}
+			case 4:
+				w, h, nin := l.wShape[0], l.wShape[1], l.wShape[2]
+				base := out * nin * w * h
+				for in := 0; in < nin; in++ {
+					xb2 := xb + w*(in%l.wix2) + 1
+					yb2 := yb + h*(in/l.wix2) + 1
+					for j, val := range l.wData[base+in*w*h : base+(in+1)*w*h] {
+						l.wImage.Set(xb2+j/h, yb2+j%h, mapColor(val, l.cmapW))
+					}
+				}
 			}
 		}
 	}
@@ -660,7 +680,6 @@ func (l *viewLayer) addOutputImage(layer int, dims []int) {
 		log.Printf("viewLayer: output shape not supported %v", dims)
 	}
 	l.outData = make([]float32, num.Prod(dims))
-	//log.Printf("viewLayer: %d output %v => %dx%d\n", layer, dims, width, height)
 	l.outImage = image.NewNRGBA(image.Rect(0, 0, width, height))
 }
 
@@ -672,18 +691,15 @@ func (l *viewLayer) addWeightImage(layer int, wDims, bDims []int) {
 	l.wShape, l.bShape = wDims, bDims
 	switch len(wDims) {
 	case 2:
-		// fully connected layer
+		// fully connected layer: wDims = [nIn, nOut]
 		l.wiy, l.wix = factorise(wDims[0], 0, 1)
 		l.woy, l.wox = factorise(wDims[1], factorMinWeights, aspectWeights)
 		l.wborder = 1
 	case 4:
-		// convolutional layer
-		l.wix, l.wiy = wDims[0], wDims[1]*wDims[2]
-		if wDims[2] == 1 {
-			l.woy, l.wox = factorise(wDims[3], factorMinWeights, aspectWeights)
-		} else {
-			l.woy, l.wox = 1, wDims[3]
-		}
+		// convolutional layer: wDims = [w, h, nIn, nOut]
+		l.woy, l.wox = factorise(wDims[3], factorMinWeights, aspectWeights)
+		l.wiy2, l.wix2 = factorise(wDims[2], 0, 1)
+		l.wix, l.wiy = l.wix2*wDims[0], l.wiy2*wDims[1]
 		l.wborder = 2
 	default:
 		log.Printf("viewLayer %d: weight shape not supported %v %v", layer, wDims, bDims)
@@ -691,14 +707,7 @@ func (l *viewLayer) addWeightImage(layer int, wDims, bDims []int) {
 	}
 	l.wData = make([]float32, num.Prod(wDims))
 	l.bData = make([]float32, num.Prod(bDims))
-	//log.Printf("viewLayer: %d %v %v in=%dx%d out=%dx%d\n", layer, wDims, bDims, l.wix, l.wiy, l.wox, l.woy)
 	l.wImage = image.NewNRGBA(image.Rect(0, 0, (l.wix+l.wborder)*l.wox, (l.wiy+l.wborder)*l.woy))
-}
-
-func (l *viewLayer) block(i int) (x, y int) {
-	x = (l.wix + l.wborder) * (i % l.wox)
-	y = (l.wiy + l.wborder) * (i / l.wox)
-	return
 }
 
 // if n > nmin returns f1, f2 where f1*f2 = n and f1 <= aspect * f2 else 1, n

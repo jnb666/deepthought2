@@ -40,6 +40,7 @@ func main() {
 	flag.IntVar(&conf.DebugLevel, "debug", conf.DebugLevel, "debug logging level")
 	flag.BoolVar(&conf.Profile, "profile", conf.Profile, "print profiling info")
 	flag.BoolVar(&conf.UseGPU, "gpu", conf.UseGPU, "use Cuda GPU acceleration")
+	flag.BoolVar(&conf.Normalise, "norm", conf.Normalise, "normalise input data")
 	flag.Parse()
 
 	dev := num.NewDevice(conf.UseGPU)

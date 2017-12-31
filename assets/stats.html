@@ -9,13 +9,13 @@
       <table class="stats-table pure-table pure-table-bordered">
         <thead>
           <tr>
-            <th>epoch</th>{{ range .StatsHeaders }}<th>{{.}}</th>{{ end -}}
+            <th>epoch</th>{{ range .StatsHeaders }}<th>{{.}}</th>{{ end -}}<th>time</th>
           </tr>
         </thead>
         <tbody>
-          {{ range $s := .LatestStats 10 -}}
+          {{ range $s := .LatestStats 20 -}}
           <tr>
-            <td>{{$s.Epoch}}</td>{{ range $s.Format }}<td>{{.}}</td>{{ end -}}
+            <td>{{$s.Epoch}}</td>{{ range $s.Format }}<td>{{.}}</td>{{ end -}}<td>{{$s.FormatElapsed}}</td>
           </tr>
           {{ end -}}
         </tbody>

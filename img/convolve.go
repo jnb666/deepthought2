@@ -8,6 +8,7 @@ package img
 import "C"
 
 import (
+	"encoding/gob"
 	"fmt"
 	"math"
 	"runtime"
@@ -21,6 +22,16 @@ const (
 	ConvAccel
 	ConvBoxBlur
 )
+
+var gaussian1, gaussian2 []float32
+
+func init() {
+	gob.Register(&Data{})
+	gob.Register(&GrayImage{})
+	gob.Register(&RGBImage{})
+	gaussian1 = gaussian1d(KernelSigma, KernelSize)
+	gaussian2 = gaussian2d(KernelSigma, KernelSize)
+}
 
 func gaussian1d(sigma float64, size int) []float32 {
 	kernel := make([]float32, 2*size+1)

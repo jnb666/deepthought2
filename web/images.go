@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"github.com/gorilla/mux"
+	"github.com/jnb666/deepthought2/img"
 	"image/png"
 	"log"
 	"math/rand"
@@ -44,8 +45,8 @@ func NewImagePage(t *Templates, net *Network, rows, cols, height, width int) *Im
 		height:    height,
 		width:     width,
 	}
-	for _, name := range []string{"all", "errors", "prev", "next", "distort", "normalise"} {
-		p.AddOption(Link{Name: name, Url: "./" + name, Selected: name == "all"})
+	for _, name := range []string{"errors", "prev", "next", "distort", "normalise"} {
+		p.AddOption(Link{Name: name, Url: "./" + name})
 	}
 	return p
 }
@@ -117,14 +118,8 @@ func (p *ImagePage) Setopt() func(w http.ResponseWriter, r *http.Request) {
 		p.Dset = vars["dset"]
 		p.Total, p.Pages = p.pageCount()
 		switch vars["opt"] {
-		case "all":
-			p.Errors = false
-			p.ToggleOption("all")
-			p.ToggleOption("errors")
 		case "errors":
-			p.Errors = true
-			p.ToggleOption("all")
-			p.ToggleOption("errors")
+			p.Errors = p.ToggleOption("errors")
 		case "prev":
 			p.Page = mod(p.Page-1, 1, p.Pages)
 		case "next":
@@ -207,7 +202,7 @@ func (p *ImagePage) Label(i int) (l LabelInfo) {
 	if data == nil || labels == nil || i < 0 || i >= len(labels) {
 		return
 	}
-	l.Desc = fmt.Sprintf("%d: %s", i, data.Classes()[labels[i]])
+	l.Desc = fmt.Sprintf("%d: %s", i+1, data.Classes()[labels[i]])
 	if predict == nil || i >= len(predict) {
 		return
 	}
@@ -216,16 +211,6 @@ func (p *ImagePage) Label(i int) (l LabelInfo) {
 		l.Class = "image-error"
 	}
 	return
-}
-
-func (p *ImagePage) Desc(i int) string {
-	i--
-	data := p.net.Data[p.Dset]
-	labels := p.net.Labels[p.Dset]
-	if data == nil || labels == nil || i < 0 || i >= len(labels) {
-		return ""
-	}
-	return fmt.Sprintf("%d: %s", i, data.Classes()[labels[i]])
 }
 
 // Handler function for the image data
@@ -248,18 +233,29 @@ func (p *ImagePage) Image() func(w http.ResponseWriter, r *http.Request) {
 			norm = true
 			opts = opts[1:]
 		}
-		res := data.Image(id, opts, norm)
-		if vars["col"] == "" {
-			if r.FormValue("d") != "" {
-				var err error
-				if res, err = p.net.trans.Transform(res, 0); err != nil {
-					log.Println(err)
-				}
-			}
+		m := data.Image(id, opts)
+		distort := r.FormValue("d") != ""
+		if norm || distort {
+			m = p.transform(m, dset, id, norm, distort)
 		}
+		inError := p.net.Pred[dset] != nil && id < len(p.net.Pred[dset]) && p.net.Pred[dset][id] != p.net.Labels[dset][id]
+		m = img.Highlight(m, inError)
 		w.Header().Set("Content-type", "image/png")
-		png.Encode(w, res)
+		png.Encode(w, m)
 	}
+}
+
+func (p *ImagePage) transform(src img.Image, dset string, id int, norm, distort bool) img.Image {
+	t := p.net.trans[dset]
+	if t == nil {
+		return src
+	}
+	t.Trans = src.TransformType(norm, distort)
+	dst, err := t.Transform(src, 0)
+	if err != nil {
+		log.Println(err)
+	}
+	return dst
 }
 
 func seq(n int) []int {
