@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	epochs = 40
+	epochs = 25
 	split  = 50000
 )
 
@@ -28,42 +28,24 @@ func main() {
 	test, err := loadData("t10k-images-idx3-ubyte", "t10k-labels-idx1-ubyte")
 	nnet.CheckErr(err)
 
-	mean, std := img.GetStats(append(train.Images, test.Images...))
+	mean, std := img.GetStats(train.Images, test.Images)
 	train.Mean, train.StdDev = mean, std
 	test.Mean, test.StdDev = mean, std
 
-	err = nnet.SaveDataFile(train, "mnist_train", false)
+	err = nnet.SaveDataFile(train, "mnist_train")
 	nnet.CheckErr(err)
-	err = nnet.SaveDataFile(test, "mnist_test", false)
-	nnet.CheckErr(err)
-
-	// mnist2 dataset is 50000*40 distorted train + 10000 valid + 10000 test images
-	distort(train.Slice(0, split), "mnist2_train", epochs)
-
-	valid := train.Slice(split, train.Len())
-	err = nnet.SaveDataFile(valid, "mnist2_valid", false)
+	err = nnet.SaveDataFile(test, "mnist_test")
 	nnet.CheckErr(err)
 
-	err = nnet.SaveDataFile(test, "mnist2_test", false)
+	// mnist2 dataset is 50000 train + 10000 valid + 10000 test images
+	err = nnet.SaveDataFile(train.Slice(0, split), "mnist2_train")
 	nnet.CheckErr(err)
-}
 
-// apply image distortion
-func distort(d *img.Data, name string, epochs int) {
-	rng := nnet.SetSeed(0)
-	t := img.NewTransformer(d, img.GrayTrans, img.ConvAccel, rng)
-	res := img.NewDataLike(d, epochs)
-	index := make([]int, d.Len())
-	for i := range index {
-		index[i] = i
-	}
-	for epoch := 0; epoch < epochs; epoch++ {
-		t.TransformBatch(index, res.Images)
-		err := nnet.SaveDataFile(res, name, epoch > 0)
-		nnet.CheckErr(err)
-		fmt.Printf("\rdistort: epoch %d/%d  ", epoch+1, epochs)
-	}
-	fmt.Println()
+	err = nnet.SaveDataFile(train.Slice(split, train.Len()), "mnist2_valid")
+	nnet.CheckErr(err)
+
+	err = nnet.SaveDataFile(test, "mnist2_test")
+	nnet.CheckErr(err)
 }
 
 func loadData(imageFile, labelFile string) (*img.Data, error) {
@@ -78,7 +60,7 @@ func loadData(imageFile, labelFile string) (*img.Data, error) {
 	return img.NewData(classes, labels, images), nil
 }
 
-func readImages(name string) (images []img.Image, err error) {
+func readImages(name string) (images []*img.Image, err error) {
 	var f *os.File
 	pathName := path.Join(nnet.DataDir, "mnist", name)
 	if f, err = os.Open(pathName); err != nil {
@@ -91,13 +73,13 @@ func readImages(name string) (images []img.Image, err error) {
 	}
 	n, h, w := int(head.Num), int(head.Height), int(head.Width)
 	fmt.Printf("read %d %dx%d images from %s\n", n, h, w, name)
-	images = make([]img.Image, n)
+	images = make([]*img.Image, n)
 	pixels := make([]uint8, w*h)
 	for i := range images {
 		if _, err = f.Read(pixels); err != nil {
 			return
 		}
-		img := img.NewGray(w, h)
+		img := img.NewImage(w, h, 1)
 		for j, pix := range pixels {
 			img.Set(j%w, j/w, color.Gray{Y: pix})
 		}

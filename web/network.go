@@ -126,7 +126,7 @@ func (n *Network) Init(conf nnet.Config) error {
 		n.trans = make(map[string]*img.Transformer)
 		for key, data := range n.Data {
 			if d, ok := data.(*img.Data); ok {
-				n.trans[key] = img.NewTransformer(d, img.NoTrans, img.ConvAccel, n.testRng)
+				n.trans[key] = img.NewTransformer(d, img.NoTrans, img.ConvBoxBlur, n.testRng)
 			}
 		}
 	}
@@ -223,16 +223,17 @@ func (n *Network) Train(restart bool) error {
 				}
 				n.Epoch = 1
 			}
-			n.trainData.Rewind()
 			log.Printf("train run %d / %d epoch=%d\n", n.Run+1, len(runs), n.Epoch)
+			n.trainData.SetTrans(n.Normalise, n.Distort)
 			epoch := n.Epoch
 			done := false
+			epilogue := false
 			net := n.Network
 			for !done && !quit {
-				if n.test.Epilogue() {
-					extra := net.ExtraEpochs - net.MaxEpoch + epoch
-					log.Printf("training for %d/%d extra epochs\n", extra, net.ExtraEpochs)
-					n.trainData.Rewind()
+				if n.test.Epilogue() && !epilogue {
+					log.Printf("training for %d extra epochs\n", net.ExtraEpochs)
+					n.trainData.SetTrans(n.Normalise, false)
+					epilogue = true
 				}
 				start := time.Now()
 				loss := nnet.TrainEpoch(net, n.trainData, acc)

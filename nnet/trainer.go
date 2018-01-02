@@ -87,7 +87,6 @@ type TestBase struct {
 	Pred     map[string][]int32
 	Stats    []Stats
 	Headers  []string
-	Samples  int
 	epilogue bool
 }
 
@@ -108,21 +107,27 @@ func (t *TestBase) Release() {
 
 // Initialise the test dataset, network and other configuration.
 func (t *TestBase) Init(queue num.Queue, conf Config, data map[string]Data, rng *rand.Rand) *TestBase {
+	opts := conf.DatasetConfig(true)
 	t.Data = make(map[string]*Dataset)
 	t.Headers = StatsHeaders(data)
-	t.Samples = min(conf.MaxSamples, data["train"].Len())
+	if opts.MaxSamples == 0 {
+		opts.MaxSamples = data["train"].Len()
+	}
+	for _, d := range data {
+		opts.MaxSamples = min(opts.MaxSamples, d.Len())
+	}
 	t.Pred = nil
 	t.epilogue = false
 	if conf.DebugLevel >= 1 {
-		fmt.Printf("init tester: samples=%d batch size=%d\n", t.Samples, conf.TestBatch)
+		fmt.Printf("init tester: samples=%d batch size=%d\n", opts.MaxSamples, opts.BatchSize)
 	}
 	for key, d := range data {
 		if conf.DebugLevel >= 1 {
 			fmt.Println("dataset =>", key)
 		}
-		t.Data[key] = NewDataset(queue.Dev(), d, conf.DatasetConfig(true), rng)
+		t.Data[key] = NewDataset(queue.Dev(), d, opts, rng)
 	}
-	t.Net = New(queue, conf, t.Data["train"].BatchSize, t.Data["train"].Shape(), rng)
+	t.Net = New(queue, conf, opts.BatchSize, t.Data["train"].Shape(), rng)
 	return t
 }
 
@@ -226,15 +231,19 @@ func (t testLogger) Test(net *Network, epoch int, loss float64, start time.Time)
 func Train(net *Network, dset *Dataset, test Tester) {
 	acc := net.queue.NewArray(num.Float32)
 	done := false
+	epilogue := false
 	for epoch := 1; epoch <= net.MaxEpoch && !done; epoch++ {
-		if test.Epilogue() {
-			extra := net.ExtraEpochs - net.MaxEpoch + epoch
-			fmt.Printf("training for %d/%d extra epochs\n", extra, net.ExtraEpochs)
-			dset.Rewind()
+		if test.Epilogue() && !epilogue {
+			fmt.Printf("training for %d extra epochs\n", net.ExtraEpochs)
+			dset.SetTrans(net.Normalise, false)
+			epilogue = true
 		}
 		start := time.Now()
 		loss := TrainEpoch(net, dset, acc)
 		done = test.Test(net, epoch, loss, start)
+	}
+	if epilogue {
+		dset.SetTrans(net.Normalise, net.Distort)
 	}
 }
 

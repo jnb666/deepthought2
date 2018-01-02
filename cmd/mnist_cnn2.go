@@ -36,6 +36,7 @@ func main() {
 
 	// with image distortion
 	conf.DataSet = "mnist2"
+	conf.Distort = true
 	conf.MaxEpoch = 40
 	conf.StopAfter = 1
 	conf.ExtraEpochs = 2

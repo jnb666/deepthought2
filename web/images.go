@@ -245,7 +245,7 @@ func (p *ImagePage) Image() func(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (p *ImagePage) transform(src img.Image, dset string, id int, norm, distort bool) img.Image {
+func (p *ImagePage) transform(src *img.Image, dset string, id int, norm, distort bool) *img.Image {
 	t := p.net.trans[dset]
 	if t == nil {
 		return src

@@ -13,10 +13,12 @@ import (
 )
 
 const (
+	batchSize   = 10000
 	imageWidth  = 32
 	imageHeight = 32
 	imageSize   = imageWidth * imageHeight
 	imageBytes  = imageSize*3 + 1
+	testSplit   = 5000
 )
 
 func main() {
@@ -34,14 +36,17 @@ func main() {
 	test, err := loadBatch("test_batch.bin", classes)
 	nnet.CheckErr(err)
 
-	mean, std := img.GetStats(append(train.Images, test.Images...))
+	mean, std := img.GetStats(train.Images, test.Images)
 	train.Mean, train.StdDev = mean, std
 	test.Mean, test.StdDev = mean, std
 
-	err = nnet.SaveDataFile(train, "cifar10_train", false)
+	err = nnet.SaveDataFile(train, "cifar10_train")
 	nnet.CheckErr(err)
 
-	err = nnet.SaveDataFile(test, "cifar10_test", false)
+	err = nnet.SaveDataFile(test.Slice(0, testSplit), "cifar10_test")
+	nnet.CheckErr(err)
+
+	err = nnet.SaveDataFile(test.Slice(testSplit, test.Len()), "cifar10_valid")
 	nnet.CheckErr(err)
 }
 
@@ -53,10 +58,10 @@ func loadBatch(name string, classes []string) (*img.Data, error) {
 		return nil, err
 	}
 	defer f.Close()
-	labels := make([]int32, 0, 10000)
-	images := make([]img.Image, 0, 10000)
+	labels := make([]int32, batchSize)
+	images := make([]*img.Image, batchSize)
 	bytes := make([]uint8, imageBytes)
-	for {
+	for i := range labels {
 		n, err := f.Read(bytes)
 		if err == io.EOF {
 			break
@@ -67,15 +72,15 @@ func loadBatch(name string, classes []string) (*img.Data, error) {
 		if n != imageBytes {
 			return nil, fmt.Errorf("incomplete read: expected %d bytes got %d", imageBytes, n)
 		}
-		labels = append(labels, int32(bytes[0]))
-		img := img.NewRGB(imageWidth, imageHeight)
+		m := img.NewImage(imageWidth, imageHeight, 3)
 		for j := 0; j < imageSize; j++ {
 			col := color.NRGBA{R: bytes[1+j], G: bytes[1+imageSize+j], B: bytes[1+imageSize*2+j], A: 255}
-			img.Set(j%imageWidth, j/imageWidth, col)
+			m.Set(j%imageWidth, j/imageWidth, col)
 		}
-		images = append(images, img)
+		images[i] = m
+		labels[i] = int32(bytes[0])
 	}
-	fmt.Printf("read %d images from %s\n", len(labels), name)
+	fmt.Printf("read %d images from %s\n", batchSize, name)
 	d := img.NewData(classes, labels, images)
 	return d, nil
 }

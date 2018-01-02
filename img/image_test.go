@@ -40,13 +40,13 @@ func runTest(t *testing.T, mode ConvMode) {
 	size := 10
 	seed := time.Now().UTC().UnixNano()
 	rng := rand.New(rand.NewSource(seed))
-	src := NewGray(size, size)
+	src := NewImage(size, size, 1)
 	for i := 1; i < size-1; i++ {
-		src.Set(size-i-1, i, Gray{Y: 1})
+		src.Set(size-i-1, i, Color{1})
 	}
 	t.Logf("\n%s", printImage(src))
 
-	d := NewData([]string{}, []int32{}, []Image{src})
+	d := NewData([]string{}, []int32{}, []*Image{src})
 	trans := NewTransformer(d, Scale, mode, rng)
 	dst, err := trans.Transform(src, 0)
 	if err != nil {
@@ -87,11 +87,11 @@ func runBench(b *testing.B, mode ConvMode, dis TransType) {
 	size := 28
 	seed := time.Now().UTC().UnixNano()
 	rng := rand.New(rand.NewSource(seed))
-	src := NewGray(size, size)
+	src := NewImage(size, size, 1)
 	for i := range src.Pix {
 		src.Pix[i] = rng.Float32()
 	}
-	d := NewData([]string{}, []int32{}, []Image{src})
+	d := NewData([]string{}, []int32{}, []*Image{src})
 	trans := NewTransformer(d, dis, mode, rng)
 	var err error
 	for i := 0; i < b.N; i++ {

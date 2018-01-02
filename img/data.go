@@ -1,41 +1,40 @@
 package img
 
 import (
+	"encoding/gob"
 	"fmt"
 	"github.com/jnb666/deepthought2/stats"
+	"io"
 )
 
 // Image data set which implements the nnet.Data interface
 type Data struct {
-	Epoch  int
+	DataHead
+	Images []*Image
+}
+
+type DataHead struct {
+	Epochs int
 	Class  []string
 	Dims   []int
 	Labels []int32
-	Images []Image
-	Path   string
 	Mean   []float32
 	StdDev []float32
 }
 
 // Create a new image set
-func NewData(classes []string, labels []int32, images []Image) *Data {
+func NewData(classes []string, labels []int32, images []*Image) *Data {
 	src := images[0]
-	b := src.Bounds()
-	dims := []int{b.Dy(), b.Dx(), 0}
-	switch src.(type) {
-	case *GrayImage:
-		dims[2] = 1
-	case *RGBImage:
-		dims[2] = 3
-	default:
-		panic(fmt.Sprintf("NewData: image type %T not supported", src))
+	dims := []int{src.Height, src.Width, src.Channels}
+	return &Data{
+		DataHead: DataHead{Epochs: 1, Class: classes, Dims: dims, Labels: labels},
+		Images:   images,
 	}
-	return &Data{Epoch: 1, Class: classes, Dims: dims, Labels: labels, Images: images}
 }
 
-func NewDataLike(d *Data, epochs int) *Data {
+func NewDataLike(d *Data) *Data {
 	data := *d
-	data.Images = make([]Image, d.Len())
+	data.Images = make([]*Image, d.Len())
 	return &data
 }
 
@@ -67,42 +66,35 @@ func (d *Data) Input(index []int, buf []float32, t *Transformer) {
 	nfeat := d.nfeat()
 	if t == nil {
 		for i, ix := range index {
-			copy(buf[i*nfeat:], d.Images[ix].Pixels(-1))
+			copy(buf[i*nfeat:], d.Images[ix].Pix)
 		}
 		return
 	}
 	temp := t.TransformBatch(index, nil)
 	for i := range index {
-		copy(buf[i*nfeat:], temp[i].Pixels(-1))
+		copy(buf[i*nfeat:], temp[i].Pix)
 	}
 }
 
 // Image returns given image number, if channel is set then just show this colour channel
-func (d *Data) Image(ix int, channel string) Image {
+func (d *Data) Image(ix int, channel string) *Image {
 	src := d.Images[ix]
 	ch, haveChannel := map[string]int{"r": 0, "g": 1, "b": 2}[channel]
 	if !haveChannel {
 		return src
 	}
 	dst := NewImageLike(src)
-	for i := 0; i < src.Channels(); i++ {
+	for i := 0; i < src.Channels; i++ {
 		copy(dst.Pixels(i), src.Pixels(ch))
 	}
 	return dst
 }
 
-func (d *Data) File() string { return d.Path }
-
-func (d *Data) SetFile(path string) { d.Path = path }
-
-// Number of epochs stored
-func (d *Data) Epochs() int { return d.Epoch }
-
 // Slice returns images from start to end
 func (d *Data) Slice(start, end int) *Data {
 	data := *d
-	data.Labels = d.Labels[start:end]
-	data.Images = d.Images[start:end]
+	data.Labels = append([]int32{}, d.Labels[start:end]...)
+	data.Images = append([]*Image{}, d.Images[start:end]...)
 	return &data
 }
 
@@ -114,17 +106,49 @@ func (d *Data) nfeat() int {
 	return n
 }
 
+// Encode data to binary file
+func (d *Data) Encode(w io.Writer) error {
+	enc := gob.NewEncoder(w)
+	if err := enc.Encode(&d.DataHead); err != nil {
+		return fmt.Errorf("error encoding header: %s", err)
+	}
+	for i, img := range d.Images {
+		if err := enc.Encode(img); err != nil {
+			return fmt.Errorf("error encoding image %d: %s", i, err)
+		}
+	}
+	return nil
+}
+
+// Decode data from binary file
+func (d *Data) Decode(r io.Reader) error {
+	d.DataHead = DataHead{}
+	dec := gob.NewDecoder(r)
+	if err := dec.Decode(&d.DataHead); err != nil {
+		return fmt.Errorf("error decoding header: %s", err)
+	}
+	d.Images = make([]*Image, d.Len())
+	for i := range d.Images {
+		if err := dec.Decode(&d.Images[i]); err != nil {
+			return fmt.Errorf("error decoding image %d: %s", i, err)
+		}
+	}
+	return nil
+}
+
 // Calculate mean and stddev from set of images
-func GetStats(images []Image) (mean, std []float32) {
-	channels := images[0].Channels()
+func GetStats(imgList ...[]*Image) (mean, std []float32) {
+	channels := imgList[0][0].Channels
 	stat := make([]*stats.Average, channels)
 	for i := range stat {
 		stat[i] = new(stats.Average)
 	}
-	for _, img := range images {
-		for ch, s := range stat {
-			for _, val := range img.Pixels(ch) {
-				s.Add(float64(val))
+	for _, images := range imgList {
+		for _, img := range images {
+			for ch, s := range stat {
+				for _, val := range img.Pixels(ch) {
+					s.Add(float64(val))
+				}
 			}
 		}
 	}

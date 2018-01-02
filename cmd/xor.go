@@ -9,7 +9,7 @@ type Data struct{}
 
 func main() {
 	data := nnet.NewData([]string{"0", "1"}, []int{2}, []int32{0, 1, 1, 0}, []float32{0, 0, 0, 1, 1, 0, 1, 1})
-	err := nnet.SaveDataFile(data, "xor_train", false)
+	err := nnet.SaveDataFile(data, "xor_train")
 	nnet.CheckErr(err)
 
 	conf := nnet.Config{

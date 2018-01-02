@@ -9,8 +9,12 @@ import (
 	"math/rand"
 	"os"
 	"path"
+	"strconv"
+	"strings"
 	"sync"
 )
+
+const headerBytes = 16
 
 var (
 	DataDir   = os.Getenv("GOPATH") + "/src/github.com/jnb666/deepthought2/data"
@@ -29,10 +33,9 @@ type Data interface {
 	Shape() []int
 	Label(index []int, label []int32)
 	Input(index []int, buf []float32, t *img.Transformer)
-	Image(i int, channel string) img.Image
-	SetFile(path string)
-	File() string
-	Epochs() int
+	Image(ix int, channel string) *img.Image
+	Encode(w io.Writer) error
+	Decode(r io.Reader) error
 }
 
 // Dataset type encapsulates a set of training, test or validation data.
@@ -50,7 +53,6 @@ type Dataset struct {
 	epoch     int
 	batch     int
 	rng       *rand.Rand
-	file      *os.File
 	trans     *img.Transformer
 	sync.WaitGroup
 }
@@ -66,11 +68,7 @@ type DatasetOptions struct {
 
 // Create a new Dataset struct, allocate array buffers  and set the batch size and maxSamples
 func NewDataset(dev num.Device, data Data, opts DatasetOptions, rng *rand.Rand) *Dataset {
-	var err error
 	d := &Dataset{Data: data, Samples: data.Len(), rng: rng}
-	if d.file, err = os.Open(data.File()); err != nil {
-		panic(err)
-	}
 	if opts.MaxSamples > 0 && d.Samples > opts.MaxSamples {
 		d.Samples = opts.MaxSamples
 	}
@@ -83,11 +81,8 @@ func NewDataset(dev num.Device, data Data, opts DatasetOptions, rng *rand.Rand) 
 	if d.Samples%d.BatchSize != 0 {
 		d.Batches++
 	}
+	d.SetTrans(opts.Normalise, opts.Distort)
 	nfeat := num.Prod(data.Shape())
-	if imgData, ok := data.(*img.Data); ok && (opts.Normalise || opts.Distort) {
-		trans := imgData.Images[0].TransformType(opts.Normalise, opts.Distort)
-		d.trans = img.NewTransformer(imgData, trans, img.ConvAccel, rng)
-	}
 	d.xBuffer = make([]float32, nfeat*d.BatchSize)
 	d.yBuffer = make([]int32, d.BatchSize)
 	for i := range d.x {
@@ -105,6 +100,14 @@ func NewDataset(dev num.Device, data Data, opts DatasetOptions, rng *rand.Rand) 
 	}
 	d.queue = dev.NewQueue()
 	return d
+}
+
+// Set image transform
+func (d *Dataset) SetTrans(normalise, distort bool) {
+	if imgData, ok := d.Data.(*img.Data); ok {
+		trans := imgData.Images[0].TransformType(normalise, distort)
+		d.trans = img.NewTransformer(imgData, trans, img.ConvBoxBlur, d.rng)
+	}
 }
 
 // Transforms applied to input data
@@ -156,33 +159,10 @@ func (d *Dataset) NextBatch() (x, y, yOneHot num.Array) {
 	return
 }
 
-// Rewind to start of data
-func (d *Dataset) Rewind() {
-	d.Wait()
-	d.epoch = 0
-	d.batch = 0
-	if d.Epochs() > 1 {
-		d.file.Seek(0, io.SeekStart)
-	}
-	d.loadBatch()
-}
-
 // Called at start of each epoch
 func (d *Dataset) NextEpoch() {
 	d.Wait()
-	d.epoch++
 	d.batch = 0
-	if d.epoch > 1 && d.Epochs() > 1 {
-		err := gob.NewDecoder(d.file).Decode(&d.Data)
-		if err == io.EOF {
-			fmt.Println("EOF: rewind file")
-			d.file.Seek(0, io.SeekStart)
-			err = gob.NewDecoder(d.file).Decode(&d.Data)
-		}
-		if err != nil {
-			panic(err)
-		}
-	}
 	d.loadBatch()
 }
 
@@ -212,36 +192,41 @@ func LoadDataFile(name string) (Data, error) {
 	filePath := path.Join(DataDir, name+".dat")
 	f, err := os.Open(filePath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Error opening file %s.dat: %s", name, err)
 	}
-	fmt.Printf("loading data from %s.dat:\t", name)
+	buf := make([]byte, headerBytes)
+	if n, err := f.Read(buf); err != nil || n != headerBytes {
+		return nil, fmt.Errorf("Error reading file %s.dat: %s", name, err)
+	}
+	dtype := strings.TrimSpace(string(buf))
 	var d Data
-	if err = gob.NewDecoder(f).Decode(&d); err != nil {
-		return nil, err
+	switch dtype {
+	case "*nnet.data":
+		d = &data{}
+	case "*img.Data":
+		d = &img.Data{}
+	default:
+		return nil, fmt.Errorf("Error reading file %s.dat: invalid type header %s", name, dtype)
 	}
-	d.SetFile(filePath)
+	fmt.Printf("loading data from %s.dat\t", name)
+	if err = d.Decode(f); err != nil {
+		return nil, fmt.Errorf("Error decoding file %s.dat: %s", name, err)
+	}
 	fmt.Println(append(d.Shape(), d.Len()))
 	return d, nil
 }
 
 // Encode in gob format and save to file under DataDir
-func SaveDataFile(d Data, name string, append bool) error {
+func SaveDataFile(d Data, name string) error {
 	filePath := path.Join(DataDir, name+".dat")
-	var flags int
-	if append {
-		flags = os.O_WRONLY | os.O_CREATE | os.O_APPEND
-	} else {
-		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
-	}
-	f, err := os.OpenFile(filePath, flags, 0644)
+	f, err := os.Create(filePath)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	if !append {
-		fmt.Println("saving data to", name+".dat")
-	}
-	return gob.NewEncoder(f).Encode(&d)
+	fmt.Printf("saving data to %s.dat\n", name)
+	fmt.Fprintf(f, "%-"+strconv.Itoa(headerBytes)+"T", d)
+	return d.Encode(f)
 }
 
 // Check if file exists under DataDir
@@ -256,7 +241,6 @@ type data struct {
 	Dims   []int
 	Labels []int32
 	Inputs []float32
-	path   string
 }
 
 // NewData function creates a new data set which implements the Data interface
@@ -290,15 +274,17 @@ func (d *data) Input(index []int, buf []float32, t *img.Transformer) {
 	}
 }
 
-func (d *data) Image(i int, channel string) img.Image {
+func (d *data) Image(ix int, channel string) *img.Image {
 	nfeat := num.Prod(d.Dims)
-	img := img.NewGray(1, nfeat)
-	copy(img.Pix, d.Inputs[i*nfeat:(i+1)*nfeat])
+	img := img.NewImage(1, nfeat, 1)
+	copy(img.Pix, d.Inputs[ix*nfeat:(ix+1)*nfeat])
 	return img
 }
 
-func (d *data) File() string { return d.path }
+func (d *data) Encode(w io.Writer) error {
+	return gob.NewEncoder(w).Encode(*d)
+}
 
-func (d *data) SetFile(path string) { d.path = path }
-
-func (d *data) Epochs() int { return 1 }
+func (d *data) Decode(r io.Reader) error {
+	return gob.NewDecoder(r).Decode(d)
+}

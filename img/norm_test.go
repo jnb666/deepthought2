@@ -10,7 +10,7 @@ import (
 
 var chars = "  ...+++**"
 
-func printImage(m img.Image) string {
+func printImage(m *img.Image) string {
 	s := ""
 	w, h := m.Bounds().Dx(), m.Bounds().Dy()
 	for channel := 0; channel < 3; channel++ {
@@ -36,7 +36,7 @@ func printImage(m img.Image) string {
 func TestNorm(t *testing.T) {
 	data, err := nnet.LoadDataFile("cifar10_test")
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	d := data.(*img.Data)
 	t.Log(printImage(d.Images[3]))

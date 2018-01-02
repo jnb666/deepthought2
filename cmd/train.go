@@ -9,8 +9,8 @@ import (
 )
 
 func predict(q num.Queue, net *nnet.Network, d nnet.Data) {
-	dset := nnet.NewDataset(q.Dev(), d, net.DatasetConfig(true), nil)
-	dset.Rewind()
+	rng := nnet.SetSeed(net.RandSeed)
+	dset := nnet.NewDataset(q.Dev(), d, net.DatasetConfig(false), rng)
 	x, y, _ := dset.NextBatch()
 	classes := q.NewArray(num.Int32, y.Dims()[0])
 	yPred := net.Predict(x, classes)
@@ -41,6 +41,7 @@ func main() {
 	flag.BoolVar(&conf.Profile, "profile", conf.Profile, "print profiling info")
 	flag.BoolVar(&conf.UseGPU, "gpu", conf.UseGPU, "use Cuda GPU acceleration")
 	flag.BoolVar(&conf.Normalise, "norm", conf.Normalise, "normalise input data")
+	flag.BoolVar(&conf.Distort, "distort", conf.Distort, "apply image distortion")
 	flag.Parse()
 
 	dev := num.NewDevice(conf.UseGPU)

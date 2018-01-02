@@ -27,8 +27,6 @@ var gaussian1, gaussian2 []float32
 
 func init() {
 	gob.Register(&Data{})
-	gob.Register(&GrayImage{})
-	gob.Register(&RGBImage{})
 	gaussian1 = gaussian1d(KernelSigma, KernelSize)
 	gaussian2 = gaussian2d(KernelSigma, KernelSize)
 }

@@ -94,9 +94,9 @@ func NewTransformer(data *Data, trans TransType, mode ConvMode, rng *rand.Rand) 
 }
 
 // Transform a batch of images in parallel
-func (t *Transformer) TransformBatch(index []int, dst []Image) []Image {
+func (t *Transformer) TransformBatch(index []int, dst []*Image) []*Image {
 	if dst == nil {
-		dst = make([]Image, len(index))
+		dst = make([]*Image, len(index))
 	}
 	var wg sync.WaitGroup
 	queue := make(chan int, len(t.rng))
@@ -123,13 +123,13 @@ func (t *Transformer) TransformBatch(index []int, dst []Image) []Image {
 }
 
 // Perform one or more image transforms
-func (t *Transformer) Transform(img Image, thread int) (Image, error) {
+func (t *Transformer) Transform(img *Image, thread int) (*Image, error) {
 	rng := t.rng[thread]
 	if t.Trans&(Scale|Rotate|Elastic) != 0 {
-		if m, ok := img.(*GrayImage); ok {
-			img = t.transformGray(m, thread)
+		if img.Channels == 1 {
+			img = t.transformGray(img, thread)
 		} else {
-			return img, fmt.Errorf("ImageTransformer: image type %T not supported for %s", img, t.Trans)
+			return img, fmt.Errorf("ImageTransformer: image with %d channels not supported for %s", img.Channels, t.Trans)
 		}
 	}
 	if t.Trans&HorizFlip != 0 && rng.Float64() > 0.5 {
@@ -150,13 +150,12 @@ func (t *Transformer) Transform(img Image, thread int) (Image, error) {
 	return img, err
 }
 
-func (t *Transformer) normalise(src Image) (Image, error) {
-	channels := src.Channels()
-	if t.data.Mean == nil || t.data.StdDev == nil || len(t.data.Mean) != channels || len(t.data.StdDev) != channels {
+func (t *Transformer) normalise(src *Image) (*Image, error) {
+	if t.data.Mean == nil || t.data.StdDev == nil || len(t.data.Mean) != src.Channels || len(t.data.StdDev) != src.Channels {
 		return src, fmt.Errorf("error applying normalisation - missing mean and stddev")
 	}
 	dst := NewImageLike(src)
-	for ch := 0; ch < channels; ch++ {
+	for ch := 0; ch < src.Channels; ch++ {
 		pix := dst.Pixels(ch)
 		for i, val := range src.Pixels(ch) {
 			pix[i] = (val - t.data.Mean[ch]) / t.data.StdDev[ch]
@@ -165,7 +164,7 @@ func (t *Transformer) normalise(src Image) (Image, error) {
 	return dst, nil
 }
 
-func (t *Transformer) transformGray(src *GrayImage, thread int) *GrayImage {
+func (t *Transformer) transformGray(src *Image, thread int) *Image {
 	rng := t.rng[thread]
 	dx := make([]float32, t.w*t.h)
 	dy := make([]float32, t.w*t.h)
@@ -201,7 +200,7 @@ func (t *Transformer) transformGray(src *GrayImage, thread int) *GrayImage {
 			dy[x+y*t.w] = dy[x+y*t.w]*elY + ym*(sy+cosa) + xm*sina
 		}
 	}
-	dst := NewGray(t.w, t.h)
+	dst := NewImage(t.w, t.h, 1)
 	for y := 0; y < t.h; y++ {
 		for x := 0; x < t.w; x++ {
 			pos := x + y*t.w
@@ -209,21 +208,20 @@ func (t *Transformer) transformGray(src *GrayImage, thread int) *GrayImage {
 			yv := float32(y) + dy[pos]
 			ix, iy := int(xv), int(yv)
 			xf, yf := xv-float32(ix), yv-float32(iy)
-			avg0 := src.GrayAt(ix, iy).Y*(1-xf) + src.GrayAt(ix+1, iy).Y*xf
-			avg1 := src.GrayAt(ix, iy+1).Y*(1-xf) + src.GrayAt(ix+1, iy+1).Y*xf
-			dst.Set(x, y, Gray{Y: avg0*(1-yf) + avg1*yf})
+			avg0 := src.GrayAt(ix, iy)*(1-xf) + src.GrayAt(ix+1, iy)*xf
+			avg1 := src.GrayAt(ix, iy+1)*(1-xf) + src.GrayAt(ix+1, iy+1)*xf
+			dst.SetColor(x, y, Color{avg0*(1-yf) + avg1*yf})
 		}
 	}
 	return dst
 }
 
-func transform(src Image, fn func(x, y int) (int, int)) Image {
+func transform(src *Image, fn func(x, y int) (int, int)) *Image {
 	dst := NewImageLike(src)
-	dx, dy := src.Bounds().Dx(), src.Bounds().Dy()
-	for y := 0; y < dy; y++ {
-		for x := 0; x < dx; x++ {
+	for x := 0; x < src.Width; x++ {
+		for y := 0; y < src.Height; y++ {
 			sx, sy := fn(x, y)
-			dst.Set(x, y, src.At(sx, sy))
+			dst.SetColor(x, y, src.At(sx, sy).(Color))
 		}
 	}
 	return dst
