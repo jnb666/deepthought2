@@ -16,6 +16,9 @@ const (
 	ActivBprop
 	DropoutFprop
 	DropoutBprop
+	BnormFpropInfer
+	BnormFpropTrain
+	BnormBprop
 	ConvFprop
 	ConvFpropBias
 	ConvBpropData
@@ -36,6 +39,9 @@ var opName = map[int]string{
 	ActivBprop:      "activ_bprop",
 	DropoutFprop:    "dropout_fprop",
 	DropoutBprop:    "dropout_bprop",
+	BnormFpropInfer: "batchnorm_fprop_infer",
+	BnormFpropTrain: "batchnorm_fprop_train",
+	BnormBprop:      "batchnorm_bprop",
 	ConvFprop:       "conv_fprop",
 	ConvFpropBias:   "conv_fprop_bias",
 	ConvBpropData:   "conv_bprop_data",
@@ -259,6 +265,26 @@ func (l *DropoutLayer) Release() {
 		l.freed = true
 	}
 }
+
+// Batch normalisation layer descriptor
+type BatchNormLayer struct {
+	Src   *Layout
+	Shape *Layout
+}
+
+// Create new BatchNorm layer
+func BatchNorm(n, c, h, w int) *BatchNormLayer {
+	l := &BatchNormLayer{}
+	l.Src = NewLayout(n, c, h, w)
+	l.Shape = NewLayout(1, c, 1, 1)
+	return l
+}
+
+func (l *BatchNormLayer) InShape() []int { return l.Src.Dims }
+
+func (l *BatchNormLayer) OutShape() []int { return l.Src.Dims }
+
+func (l *BatchNormLayer) FilterShape() []int { return l.Shape.Dims }
 
 // Layout type represents a cuDNN tensor descriptor
 type Layout struct {

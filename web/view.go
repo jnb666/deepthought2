@@ -176,7 +176,7 @@ func (p *ViewPage) getLayers(index int) {
 				p.addImage(
 					fmt.Sprintf("%d: %s %v %v", i, l.ltype, l.wShape, l.bShape),
 					fmt.Sprintf("/net/weights/%d?ts=%d", len(p.Layers), ts),
-					l.wImage, false, factorMinWeights, 200, "weights",
+					l.wImage, false, factorMinWeights, 100, "weights",
 				)
 			}
 		}

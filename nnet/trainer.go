@@ -110,12 +110,6 @@ func (t *TestBase) Init(queue num.Queue, conf Config, data map[string]Data, rng 
 	opts := conf.DatasetConfig(true)
 	t.Data = make(map[string]*Dataset)
 	t.Headers = StatsHeaders(data)
-	if opts.MaxSamples == 0 {
-		opts.MaxSamples = data["train"].Len()
-	}
-	for _, d := range data {
-		opts.MaxSamples = min(opts.MaxSamples, d.Len())
-	}
 	t.Pred = nil
 	t.epilogue = false
 	if conf.DebugLevel >= 1 {

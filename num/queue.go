@@ -232,10 +232,10 @@ func (p *profile) Profile() string {
 	totalMsec := 0.0
 	s := ""
 	for _, r := range list {
-		s += fmt.Sprintf("%-20s %8d calls %10.1f msec\n", r.name, r.calls, r.msec)
+		s += fmt.Sprintf("%-22s %8d calls %10.1f msec\n", r.name, r.calls, r.msec)
 		totalCalls += r.calls
 		totalMsec += r.msec
 	}
-	s += fmt.Sprintf("%-20s %8d calls %10.1f msec", "TOTAL", totalCalls, totalMsec)
+	s += fmt.Sprintf("%-22s %8d calls %10.1f msec", "TOTAL", totalCalls, totalMsec)
 	return s
 }

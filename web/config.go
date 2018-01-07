@@ -52,9 +52,7 @@ func (p *ConfigPage) init(data *NetworkData) error {
 		if err := p.net.Init(p.net.Conf); err != nil {
 			return err
 		}
-		if err := p.net.Import(); err != nil {
-			return err
-		}
+		p.net.Import()
 	}
 	p.Fields = getFields(p.net)
 	p.Layers = getLayers(p.net)

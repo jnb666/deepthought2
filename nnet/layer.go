@@ -12,7 +12,7 @@ type Layer interface {
 	Init(q num.Queue, inShape []int, index int, rng *rand.Rand) int
 	InShape() []int
 	OutShape() []int
-	Fprop(q num.Queue, in, work num.Array, enableDropout bool) num.Array
+	Fprop(q num.Queue, in, work num.Array, trainMode bool) num.Array
 	Bprop(q num.Queue, grad, work num.Array) num.Array
 	IsActiv() bool
 	Type() string
@@ -29,6 +29,13 @@ type ParamLayer interface {
 	ParamGrads() (dW, dB num.Array)
 	SetParams(q num.Queue, W, B num.Array)
 	UpdateParams(q num.Queue, learningRate, weightDecay float32)
+}
+
+// BatchNormLayer also stores the running mean and variance
+type BatchNormLayer interface {
+	ParamLayer
+	Stats() (runMean, runVar num.Array)
+	SetStats(q num.Queue, runMean, runVar num.Array)
 }
 
 // OutputLayer is the final layer in the stack
@@ -65,6 +72,9 @@ func (l LayerConfig) Unmarshal() Layer {
 	case "dropout":
 		cfg := new(Dropout)
 		return cfg.unmarshal(l.Data)
+	case "batchNorm":
+		cfg := new(BatchNorm)
+		return cfg.unmarshal(l.Data)
 	case "flatten":
 		return &flatten{}
 	default:
@@ -77,9 +87,7 @@ func (l LayerConfig) String() string {
 }
 
 // Convolutional layer, implements ParamLayer interface.
-type Conv struct {
-	Nfeats, Size, Stride, Pad int
-}
+type Conv struct{ Nfeats, Size, Stride, Pad int }
 
 func (c Conv) Marshal() LayerConfig {
 	if c.Stride == 0 {
@@ -88,13 +96,9 @@ func (c Conv) Marshal() LayerConfig {
 	return LayerConfig{Type: "conv", Data: marshal(c)}
 }
 
-func (c Conv) ToString() string {
-	return fmt.Sprintf("conv %+v", c)
-}
+func (c Conv) ToString() string { return fmt.Sprintf("conv %+v", c) }
 
-func (c Conv) Type() string {
-	return "conv"
-}
+func (c Conv) Type() string { return "conv" }
 
 func (c *Conv) unmarshal(data json.RawMessage) Layer {
 	unmarshal(data, c)
@@ -102,9 +106,7 @@ func (c *Conv) unmarshal(data json.RawMessage) Layer {
 }
 
 // Max pooling layer, should follow conv layer.
-type MaxPool struct {
-	Size, Stride int
-}
+type MaxPool struct{ Size, Stride int }
 
 func (c MaxPool) Marshal() LayerConfig {
 	if c.Stride == 0 {
@@ -113,17 +115,11 @@ func (c MaxPool) Marshal() LayerConfig {
 	return LayerConfig{Type: "maxPool", Data: marshal(c)}
 }
 
-func (c MaxPool) ToString() string {
-	return fmt.Sprintf("maxPool %+v", c)
-}
+func (c MaxPool) ToString() string { return fmt.Sprintf("maxPool %+v", c) }
 
-func (c MaxPool) Type() string {
-	return "maxPool"
-}
+func (c MaxPool) Type() string { return "maxPool" }
 
-func (c MaxPool) IsActiv() bool {
-	return false
-}
+func (c MaxPool) IsActiv() bool { return false }
 
 func (c *MaxPool) unmarshal(data json.RawMessage) Layer {
 	unmarshal(data, c)
@@ -131,21 +127,15 @@ func (c *MaxPool) unmarshal(data json.RawMessage) Layer {
 }
 
 // Linear fully connected layer, implements ParamLayer interface.
-type Linear struct {
-	Nout int
-}
+type Linear struct{ Nout int }
 
 func (c Linear) Marshal() LayerConfig {
 	return LayerConfig{Type: "linear", Data: marshal(c)}
 }
 
-func (c Linear) ToString() string {
-	return fmt.Sprintf("linear %+v", c)
-}
+func (c Linear) ToString() string { return fmt.Sprintf("linear %+v", c) }
 
-func (c Linear) Type() string {
-	return "linear"
-}
+func (c Linear) Type() string { return "linear" }
 
 func (c *Linear) unmarshal(data json.RawMessage) Layer {
 	unmarshal(data, c)
@@ -153,25 +143,17 @@ func (c *Linear) unmarshal(data json.RawMessage) Layer {
 }
 
 // Sigmoid, tanh or relu activation layer, implements OutputLayer interface.
-type Activation struct {
-	Atype string
-}
+type Activation struct{ Atype string }
 
 func (c Activation) Marshal() LayerConfig {
 	return LayerConfig{Type: "activation", Data: marshal(c)}
 }
 
-func (c Activation) ToString() string {
-	return fmt.Sprintf("activation %+v", c)
-}
+func (c Activation) ToString() string { return fmt.Sprintf("activation %+v", c) }
 
-func (c Activation) Type() string {
-	return c.Atype
-}
+func (c Activation) Type() string { return c.Atype }
 
-func (c Activation) IsActiv() bool {
-	return true
-}
+func (c Activation) IsActiv() bool { return true }
 
 func (c *Activation) unmarshal(data json.RawMessage) Layer {
 	unmarshal(data, c)
@@ -179,37 +161,55 @@ func (c *Activation) unmarshal(data json.RawMessage) Layer {
 }
 
 // Dropout layer, randomly drops given ratio of nodes.
-type Dropout struct {
-	Ratio float64
-}
+type Dropout struct{ Ratio float64 }
 
 func (c Dropout) Marshal() LayerConfig {
 	return LayerConfig{Type: "dropout", Data: marshal(c)}
 }
 
-func (c Dropout) ToString() string {
-	return fmt.Sprintf("dropout %+v", c)
-}
+func (c Dropout) ToString() string { return fmt.Sprintf("dropout %+v", c) }
 
-func (c Dropout) Type() string {
-	return "dropout"
-}
+func (c Dropout) Type() string { return "dropout" }
 
-func (c Dropout) IsActiv() bool {
-	return false
-}
+func (c Dropout) IsActiv() bool { return false }
 
 func (c *Dropout) unmarshal(data json.RawMessage) Layer {
 	unmarshal(data, c)
 	return &dropout{Dropout: *c}
 }
 
+// Batch normalisation layer.
+type BatchNorm struct{ AvgFactor, Epsilon float64 }
+
+func (c BatchNorm) Marshal() LayerConfig {
+	if c.Epsilon == 0 {
+		c.Epsilon = 0.001
+	}
+	if c.AvgFactor == 0 {
+		c.AvgFactor = 0.1
+	}
+	return LayerConfig{Type: "batchNorm", Data: marshal(c)}
+}
+
+func (c BatchNorm) ToString() string { return fmt.Sprintf("batchNorm %+v", c) }
+
+func (c BatchNorm) Type() string { return "batchNorm" }
+
+func (c *BatchNorm) unmarshal(data json.RawMessage) Layer {
+	unmarshal(data, c)
+	return &batchNorm{BatchNorm: *c}
+}
+
 // Flatten layer reshapes from 4 to 2 dimensions.
 type Flatten struct{}
 
-func (c Flatten) Marshal() LayerConfig {
-	return LayerConfig{Type: "flatten"}
-}
+func (c Flatten) Marshal() LayerConfig { return LayerConfig{Type: "flatten"} }
+
+func (c Flatten) ToString() string { return "flatten" }
+
+func (c Flatten) Type() string { return "flatten" }
+
+func (c Flatten) IsActiv() bool { return false }
 
 // linear layer implementation
 type linear struct {
@@ -231,7 +231,7 @@ func (l *linear) Init(q num.Queue, inShape []int, ix int, rng *rand.Rand) int {
 	}
 	nBatch, nIn := inShape[1], inShape[0]
 	l.inShape = inShape
-	l.paramBase = newParams(q, []int{nIn, l.Nout}, nBatch)
+	l.paramBase = newParams(q, []int{nIn, l.Nout}, []int{l.Nout}, 1/float32(nBatch))
 	l.dst = q.NewArray(num.Float32, l.Nout, nBatch)
 	l.temp1 = q.NewArray(num.Float32, nBatch, l.Nout)
 	if ix > 0 {
@@ -258,7 +258,7 @@ func (l *linear) Release() {
 
 func (l *linear) Output() num.Array { return l.dst }
 
-func (l *linear) Fprop(q num.Queue, in, work num.Array, enableDropout bool) num.Array {
+func (l *linear) Fprop(q num.Queue, in, work num.Array, trainMode bool) num.Array {
 	l.src = in
 	q.Call(
 		num.Copy(l.b, l.temp1),
@@ -295,7 +295,7 @@ type convDNN struct {
 
 func (l *convDNN) Init(q num.Queue, inShape []int, ix int, rng *rand.Rand) int {
 	layer, workSize := num.NewConvLayer(q, ix, inShape, l.Nfeats, l.Size, l.Stride, l.Pad)
-	l.paramBase = newParams(q, layer.FilterShape(), inShape[3])
+	l.paramBase = newParams(q, layer.FilterShape(), []int{l.Nfeats}, 1/float32(inShape[3]))
 	layer.SetParamData(l.w, l.b, l.dw, l.db)
 	l.Layer = layer
 	return workSize
@@ -350,25 +350,53 @@ type dropout struct {
 	num.Layer
 }
 
-func (l *dropout) IsActiv() bool { return false }
-
 func (l *dropout) Init(q num.Queue, inShape []int, ix int, rng *rand.Rand) int {
 	l.Layer = num.NewDropoutLayer(q, l.Ratio, inShape, rng.Int63())
 	return 0
 }
 
+// batch normalisation layer implementation
+type batchNorm struct {
+	BatchNorm
+	paramBase
+	num.Layer
+	runMean num.Array
+	runVar  num.Array
+}
+
+func (l *batchNorm) Init(q num.Queue, inShape []int, ix int, rng *rand.Rand) int {
+	l.runMean = q.NewArray(num.Float32, inShape[2])
+	l.runVar = q.NewArray(num.Float32, inShape[2])
+	q.Call(num.Fill(l.runVar, 1))
+	layer := num.NewBatchNormLayer(q, l.AvgFactor, l.Epsilon, inShape, l.runMean, l.runVar)
+	l.paramBase = newParams(q, layer.FilterShape(), layer.FilterShape(), 1/float32(inShape[3]))
+	layer.SetParamData(l.w, l.b, l.dw, l.db)
+	l.Layer = layer
+	return 0
+}
+
+func (l *batchNorm) Stats() (m, v num.Array) {
+	return l.runMean, l.runVar
+}
+
+func (l *batchNorm) SetStats(q num.Queue, runMean, runVar num.Array) {
+	q.Call(num.Copy(runMean, l.runMean), num.Copy(runVar, l.runVar))
+}
+
+func (l *batchNorm) Release() {
+	l.paramBase.release()
+	l.Layer.Release()
+	l.runMean.Release()
+	l.runVar.Release()
+}
+
 // flatten layer implementation
 type flatten struct {
+	Flatten
 	inShape  []int
 	outShape []int
 	dst      num.Array
 }
-
-func (l *flatten) IsActiv() bool { return false }
-
-func (l *flatten) Type() string { return "flatten" }
-
-func (l *flatten) ToString() string { return "flatten" }
 
 func (l *flatten) InShape() []int { return l.inShape }
 
@@ -384,7 +412,7 @@ func (l *flatten) Release() {}
 
 func (l *flatten) Output() num.Array { return l.dst }
 
-func (l *flatten) Fprop(q num.Queue, in, work num.Array, enableDropout bool) num.Array {
+func (l *flatten) Fprop(q num.Queue, in, work num.Array, trainMode bool) num.Array {
 	l.dst = in.Reshape(l.outShape...)
 	return l.dst
 }
@@ -397,17 +425,16 @@ func (l *flatten) Bprop(q num.Queue, grad, work num.Array) num.Array {
 type paramBase struct {
 	w, b   num.Array
 	dw, db num.Array
-	nBatch float32
+	scale  float32
 }
 
-func newParams(q num.Queue, filterShape []int, nBatch int) paramBase {
-	nout := filterShape[len(filterShape)-1]
+func newParams(q num.Queue, filterShape, biasShape []int, scale float32) paramBase {
 	return paramBase{
-		w:      q.NewArray(num.Float32, filterShape...),
-		b:      q.NewArray(num.Float32, nout),
-		dw:     q.NewArray(num.Float32, filterShape...),
-		db:     q.NewArray(num.Float32, nout),
-		nBatch: float32(nBatch),
+		w:     q.NewArray(num.Float32, filterShape...),
+		b:     q.NewArray(num.Float32, biasShape...),
+		dw:    q.NewArray(num.Float32, filterShape...),
+		db:    q.NewArray(num.Float32, biasShape...),
+		scale: scale,
 	}
 }
 
@@ -444,12 +471,15 @@ func (p paramBase) SetParams(q num.Queue, W, B num.Array) {
 }
 
 func (p paramBase) UpdateParams(q num.Queue, learningRate, weightDecay float32) {
+	if p.scale == 0 {
+		return
+	}
 	if weightDecay != 0 {
-		q.Call(num.Axpy(-weightDecay*p.nBatch, p.w, p.dw))
+		q.Call(num.Axpy(-weightDecay/p.scale, p.w, p.dw))
 	}
 	q.Call(
-		num.Axpy(-learningRate/p.nBatch, p.dw, p.w),
-		num.Axpy(-learningRate/p.nBatch, p.db, p.b),
+		num.Axpy(-learningRate*p.scale, p.dw, p.w),
+		num.Axpy(-learningRate*p.scale, p.db, p.b),
 	)
 }
 

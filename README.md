@@ -9,7 +9,7 @@ Features:
 * Example data models including MNist digit recognition.
 
 To do:
-* Add batch normalisation layers
+* Learning rate schedule and momentum
 * Edit layer setup from config screen
 
 Dependencies:

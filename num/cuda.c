@@ -100,6 +100,30 @@ void callGPU(Args* a, Stream* s, cublasStatus_t* blasStatus, cudnnStatus_t* dnnS
 			(cudnnTensorDescriptor_t)(a->p[1]), a->p[3],				// diffSrc
 			a->p[4], a->i[0]);											// reserve
 		break;
+	case CUDNN_BNORM_FPROP_INFER:
+		*dnnStatus = cudnnBatchNormalizationForwardInference(s->cudnn, CUDNN_BATCHNORM_SPATIAL, &one, &zero,
+			(cudnnTensorDescriptor_t)(a->p[0]), a->p[1], 				// src
+			(cudnnTensorDescriptor_t)(a->p[0]), a->p[2], 				// dst
+			(cudnnTensorDescriptor_t)(a->p[3]), a->p[4], a->p[5],		// weight, bias
+			a->p[6], a->p[7],(double)(a->f[0]));						// mean, variance, epsilon
+		break;
+	case CUDNN_BNORM_FPROP_TRAIN:
+		*dnnStatus = cudnnBatchNormalizationForwardTraining(s->cudnn, CUDNN_BATCHNORM_SPATIAL, &one, &zero,
+			(cudnnTensorDescriptor_t)(a->p[0]), a->p[1], 				// src
+			(cudnnTensorDescriptor_t)(a->p[0]), a->p[2], 				// dst
+			(cudnnTensorDescriptor_t)(a->p[3]), a->p[4], a->p[5],		// weight, bias
+			(double)(a->f[1]), a->p[6], a->p[7],						// avgFactor, mean, variance
+			(double)(a->f[0]), a->p[8], a->p[9]);						// epsion, saved mean and stddev
+		break;
+	case CUDNN_BNORM_BPROP:
+		*dnnStatus = cudnnBatchNormalizationBackward(s->cudnn, CUDNN_BATCHNORM_SPATIAL, 
+			&one, &zero, &one, &zero,
+			(cudnnTensorDescriptor_t)(a->p[0]), a->p[1], 					// src
+			(cudnnTensorDescriptor_t)(a->p[0]), a->p[2],					// diffDst
+			(cudnnTensorDescriptor_t)(a->p[0]), a->p[3],					// diffSrc			
+			(cudnnTensorDescriptor_t)(a->p[4]), a->p[5], a->p[6], a->p[7], 	// weight, dw, db
+			(double)(a->f[0]), a->p[8], a->p[9]);							// epsilon, saved mean and stddev
+		break;
 	case CUDNN_CONV_FPROP:
 		*dnnStatus = cudnnConvolutionForward(s->cudnn,
 			&one, (cudnnTensorDescriptor_t)(a->p[3]), a->p[6], 			// src

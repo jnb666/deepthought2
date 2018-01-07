@@ -15,18 +15,53 @@ import (
 type InitType int
 
 const (
-	RandomNormal InitType = iota
+	Zeros InitType = iota
+	Ones
+	RandomNormal
 	RandomUniform
 	LecunNormal
 	GlorotUniform
 )
 
 func (t InitType) Options() []string {
-	return []string{"RandomNormal", "RandomUniform", "LecunNormal", "GlorotUniform"}
+	return []string{"Zeros", "Ones", "RandomNormal", "RandomUniform", "LecunNormal", "GlorotUniform"}
 }
 
 func (t InitType) String() string {
 	return t.Options()[t]
+}
+
+func (t InitType) WeightFunc(dims []int, rng *rand.Rand) func() float64 {
+	switch t {
+	case Zeros:
+		return func() float64 { return 0 }
+	case Ones:
+		return func() float64 { return 1 }
+	case RandomNormal:
+		return func() float64 { return rng.NormFloat64() }
+	case RandomUniform:
+		return func() float64 { return rng.Float64() }
+	case LecunNormal:
+		nin, _ := getSize(dims)
+		scale := 1 / math.Sqrt(float64(nin))
+		return func() float64 { return rng.NormFloat64() * scale }
+	case GlorotUniform:
+		nin, nout := getSize(dims)
+		scale := math.Sqrt(6 / float64(nin+nout))
+		return func() float64 { return (2*rng.Float64() - 1) * scale }
+	default:
+		panic("invalid InitType")
+	}
+}
+
+func getSize(dims []int) (nin, nout int) {
+	n := len(dims)
+	size := 1
+	if n == 4 {
+		size = dims[0] * dims[1]
+	}
+	nin, nout = size*dims[n-2], size*dims[n-1]
+	return
 }
 
 // Network type represents a multilayer neural network model.
@@ -91,33 +126,18 @@ func (n *Network) Release() {
 // Initialise network weights using a linear or normal distribution.
 // Weights for each layer are scaled by 1/sqrt(nin)
 func (n *Network) InitWeights(rng *rand.Rand) {
-	var wInit func() float64
 	for i, layer := range n.Layers {
 		if l, ok := layer.(ParamLayer); ok {
 			W, _ := l.Params()
 			dims := W.Dims()
-			var nin, nout int
-			if len(dims) == 2 {
-				nin, nout = dims[0], dims[1]
-			} else {
-				nin, nout = dims[0]*dims[1]*dims[2], dims[0]*dims[1]*dims[3]
+			wInit := n.WeightInit
+			if l.Type() == "batchNorm" {
+				wInit = Ones
 			}
 			if n.DebugLevel >= 1 {
-				fmt.Printf("layer %d: set weights init=%s nin=%d, nout=%d bias=%.3g\n", i, n.WeightInit, nin, nout, n.Bias)
+				fmt.Printf("layer %d: %s %v set weights init=%s bias=%.3g\n", i, l.Type(), dims, wInit, n.Bias)
 			}
-			switch n.WeightInit {
-			case RandomNormal:
-				wInit = func() float64 { return rng.NormFloat64() }
-			case RandomUniform:
-				wInit = func() float64 { return rng.Float64() }
-			case LecunNormal:
-				scale := 1 / math.Sqrt(float64(nin))
-				wInit = func() float64 { return rng.NormFloat64() * scale }
-			case GlorotUniform:
-				scale := math.Sqrt(6 / float64(nin+nout))
-				wInit = func() float64 { return (2*rng.Float64() - 1) * scale }
-			}
-			l.InitParams(n.queue, wInit, float32(n.Bias))
+			l.InitParams(n.queue, wInit.WeightFunc(dims, rng), float32(n.Bias))
 		}
 	}
 	if n.DebugLevel >= 2 {
@@ -132,6 +152,10 @@ func (n *Network) CopyTo(net *Network, sync bool) {
 			W, B := l.Params()
 			net.Layers[i].(ParamLayer).SetParams(n.queue, W, B)
 		}
+		if l, ok := layer.(BatchNormLayer); ok {
+			runMean, runVar := l.Stats()
+			net.Layers[i].(BatchNormLayer).SetStats(n.queue, runMean, runVar)
+		}
 	}
 	if sync {
 		n.queue.Finish()
@@ -144,13 +168,13 @@ func (n *Network) OutLayer() OutputLayer {
 }
 
 // Feed forward the input to get the predicted output
-func (n *Network) Fprop(input num.Array, enableDropout bool) num.Array {
+func (n *Network) Fprop(input num.Array, trainMode bool) num.Array {
 	pred := input
 	for i, layer := range n.Layers {
 		if n.DebugLevel >= 2 && pred != nil {
 			fmt.Printf("layer %d input\n%s", i, pred.String(n.queue))
 		}
-		pred = layer.Fprop(n.queue, pred, n.WorkSpace, enableDropout)
+		pred = layer.Fprop(n.queue, pred, n.WorkSpace, trainMode)
 	}
 	return pred
 }
