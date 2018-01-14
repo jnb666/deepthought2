@@ -5,37 +5,44 @@ import (
 	"fmt"
 	"github.com/jnb666/deepthought2/num"
 	"math/rand"
+	"reflect"
+	"strings"
 )
 
 // Layer interface type represents one layer of the neural net.
 type Layer interface {
-	Init(q num.Queue, inShape []int, index int, rng *rand.Rand) int
+	Init(q num.Queue, inShape []int, layerId int, rng *rand.Rand) int
 	InShape() []int
 	OutShape() []int
 	Fprop(q num.Queue, in, work num.Array, trainMode bool) num.Array
 	Bprop(q num.Queue, grad, work num.Array) num.Array
-	IsActiv() bool
 	Type() string
 	ToString() string
 	Output() num.Array
+	Memory() (weights, outputs, temp int)
 	Release()
+}
+
+// UpdateLayer has a method which is called to update the paramters after each batch
+type UpdateLayer interface {
+	Layer
+	UpdateParams(q num.Queue, learningRate, weightDecay float32)
+	Copy(q num.Queue, layer Layer)
 }
 
 // ParamLayer is a layer with weight and bias parameters
 type ParamLayer interface {
-	Layer
+	UpdateLayer
 	InitParams(q num.Queue, fn func() float64, bias float32)
 	Params() (W, B num.Array)
 	ParamGrads() (dW, dB num.Array)
 	SetParams(q num.Queue, W, B num.Array)
-	UpdateParams(q num.Queue, learningRate, weightDecay float32)
 }
 
-// BatchNormLayer also stores the running mean and variance
+// BatchNormLayer stores the scale, shift, running mean and variance
 type BatchNormLayer interface {
-	ParamLayer
-	Stats() (runMean, runVar num.Array)
-	SetStats(q num.Queue, runMean, runVar num.Array)
+	UpdateLayer
+	Stats() (w, b, runMean, runVar num.Array)
 }
 
 // OutputLayer is the final layer in the stack
@@ -60,8 +67,8 @@ func (l LayerConfig) Unmarshal() Layer {
 	case "conv":
 		cfg := new(Conv)
 		return cfg.unmarshal(l.Data)
-	case "maxPool":
-		cfg := new(MaxPool)
+	case "pool":
+		cfg := new(Pool)
 		return cfg.unmarshal(l.Data)
 	case "linear":
 		cfg := new(Linear)
@@ -87,16 +94,26 @@ func (l LayerConfig) String() string {
 }
 
 // Convolutional layer, implements ParamLayer interface.
-type Conv struct{ Nfeats, Size, Stride, Pad int }
+type Conv struct {
+	Nfeats int
+	Size   int
+	Stride int
+	Pad    bool
+	NoBias bool
+}
+
+var convDefault = Conv{Stride: 1}
 
 func (c Conv) Marshal() LayerConfig {
 	if c.Stride == 0 {
-		c.Stride = 1
+		c.Stride = convDefault.Stride
 	}
 	return LayerConfig{Type: "conv", Data: marshal(c)}
 }
 
-func (c Conv) ToString() string { return fmt.Sprintf("conv %+v", c) }
+func (c Conv) ToString() string {
+	return "conv" + structToString(c, convDefault)
+}
 
 func (c Conv) Type() string { return "conv" }
 
@@ -106,24 +123,34 @@ func (c *Conv) unmarshal(data json.RawMessage) Layer {
 }
 
 // Max pooling layer, should follow conv layer.
-type MaxPool struct{ Size, Stride int }
+type Pool struct {
+	Size    int
+	Stride  int
+	Pad     bool
+	Average bool
+}
 
-func (c MaxPool) Marshal() LayerConfig {
+func (c Pool) Marshal() LayerConfig {
 	if c.Stride == 0 {
 		c.Stride = c.Size
 	}
-	return LayerConfig{Type: "maxPool", Data: marshal(c)}
+	return LayerConfig{Type: "pool", Data: marshal(c)}
 }
 
-func (c MaxPool) ToString() string { return fmt.Sprintf("maxPool %+v", c) }
+func (c Pool) ToString() string {
+	def := Pool{Stride: c.Size}
+	if c.Average {
+		return "pool" + structToString(c, def)
+	} else {
+		return "maxPool" + structToString(c, def)
+	}
+}
 
-func (c MaxPool) Type() string { return "maxPool" }
+func (c Pool) Type() string { return "pool" }
 
-func (c MaxPool) IsActiv() bool { return false }
-
-func (c *MaxPool) unmarshal(data json.RawMessage) Layer {
+func (c *Pool) unmarshal(data json.RawMessage) Layer {
 	unmarshal(data, c)
-	return &poolDNN{MaxPool: *c}
+	return &poolDNN{Pool: *c}
 }
 
 // Linear fully connected layer, implements ParamLayer interface.
@@ -133,7 +160,9 @@ func (c Linear) Marshal() LayerConfig {
 	return LayerConfig{Type: "linear", Data: marshal(c)}
 }
 
-func (c Linear) ToString() string { return fmt.Sprintf("linear %+v", c) }
+func (c Linear) ToString() string {
+	return fmt.Sprintf("linear(%d)", c.Nout)
+}
 
 func (c Linear) Type() string { return "linear" }
 
@@ -149,11 +178,9 @@ func (c Activation) Marshal() LayerConfig {
 	return LayerConfig{Type: "activation", Data: marshal(c)}
 }
 
-func (c Activation) ToString() string { return fmt.Sprintf("activation %+v", c) }
+func (c Activation) ToString() string { return c.Atype }
 
-func (c Activation) Type() string { return c.Atype }
-
-func (c Activation) IsActiv() bool { return true }
+func (c Activation) Type() string { return "activation" }
 
 func (c *Activation) unmarshal(data json.RawMessage) Layer {
 	unmarshal(data, c)
@@ -167,11 +194,11 @@ func (c Dropout) Marshal() LayerConfig {
 	return LayerConfig{Type: "dropout", Data: marshal(c)}
 }
 
-func (c Dropout) ToString() string { return fmt.Sprintf("dropout %+v", c) }
+func (c Dropout) ToString() string {
+	return fmt.Sprintf("dropout(%g)", c.Ratio)
+}
 
 func (c Dropout) Type() string { return "dropout" }
-
-func (c Dropout) IsActiv() bool { return false }
 
 func (c *Dropout) unmarshal(data json.RawMessage) Layer {
 	unmarshal(data, c)
@@ -181,17 +208,21 @@ func (c *Dropout) unmarshal(data json.RawMessage) Layer {
 // Batch normalisation layer.
 type BatchNorm struct{ AvgFactor, Epsilon float64 }
 
+var batchNormDefault = BatchNorm{Epsilon: 0.001, AvgFactor: 0.1}
+
 func (c BatchNorm) Marshal() LayerConfig {
 	if c.Epsilon == 0 {
-		c.Epsilon = 0.001
+		c.Epsilon = batchNormDefault.Epsilon
 	}
 	if c.AvgFactor == 0 {
-		c.AvgFactor = 0.1
+		c.AvgFactor = batchNormDefault.AvgFactor
 	}
 	return LayerConfig{Type: "batchNorm", Data: marshal(c)}
 }
 
-func (c BatchNorm) ToString() string { return fmt.Sprintf("batchNorm %+v", c) }
+func (c BatchNorm) ToString() string {
+	return "batchNorm" + structToString(c, batchNormDefault)
+}
 
 func (c BatchNorm) Type() string { return "batchNorm" }
 
@@ -209,12 +240,11 @@ func (c Flatten) ToString() string { return "flatten" }
 
 func (c Flatten) Type() string { return "flatten" }
 
-func (c Flatten) IsActiv() bool { return false }
-
 // linear layer implementation
 type linear struct {
 	Linear
 	paramBase
+	layerId        int
 	inShape        []int
 	src, dst, dsrc num.Array
 	temp1, temp2   num.Array
@@ -225,20 +255,21 @@ func (l *linear) InShape() []int { return l.inShape }
 
 func (l *linear) OutShape() []int { return []int{l.Nout, l.inShape[1]} }
 
-func (l *linear) Init(q num.Queue, inShape []int, ix int, rng *rand.Rand) int {
+func (l *linear) Init(q num.Queue, inShape []int, layerId int, rng *rand.Rand) int {
 	if len(inShape) != 2 {
 		panic("Linear: expect 2 dimensional input")
 	}
 	nBatch, nIn := inShape[1], inShape[0]
+	l.layerId = layerId
 	l.inShape = inShape
 	l.paramBase = newParams(q, []int{nIn, l.Nout}, []int{l.Nout}, 1/float32(nBatch))
 	l.dst = q.NewArray(num.Float32, l.Nout, nBatch)
 	l.temp1 = q.NewArray(num.Float32, nBatch, l.Nout)
-	if ix > 0 {
-		l.dsrc = q.NewArray(num.Float32, nIn, nBatch)
-		l.temp2 = q.NewArray(num.Float32, nBatch, nIn)
-	}
 	return 0
+}
+
+func (l *linear) Memory() (weights, outputs, temp int) {
+	return l.paramBase.memory(), num.Bytes(l.dst, l.dsrc), num.Bytes(l.temp1, l.temp2, l.ones)
 }
 
 func (l *linear) Release() {
@@ -277,7 +308,12 @@ func (l *linear) Bprop(q num.Queue, grad, work num.Array) num.Array {
 		num.Gemv(grad, l.ones, l.db, num.NoTrans),
 		num.Gemm(l.src, grad, l.dw, num.NoTrans, num.Trans, false),
 	)
-	if l.dsrc != nil {
+	if l.layerId > 0 {
+		if l.dsrc == nil {
+			nBatch, nIn := l.inShape[1], l.inShape[0]
+			l.dsrc = q.NewArray(num.Float32, nIn, nBatch)
+			l.temp2 = q.NewArray(num.Float32, nBatch, nIn)
+		}
 		q.Call(
 			num.Gemm(grad, l.w, l.temp2, num.Trans, num.Trans, false),
 			num.Transpose(l.temp2, l.dsrc),
@@ -293,12 +329,17 @@ type convDNN struct {
 	num.Layer
 }
 
-func (l *convDNN) Init(q num.Queue, inShape []int, ix int, rng *rand.Rand) int {
-	layer, workSize := num.NewConvLayer(q, ix, inShape, l.Nfeats, l.Size, l.Stride, l.Pad)
+func (l *convDNN) Init(q num.Queue, inShape []int, layerId int, rng *rand.Rand) int {
+	layer, workSize := num.NewConvLayer(q, layerId, inShape, l.Nfeats, l.Size, l.Stride, l.Pad, l.NoBias)
 	l.paramBase = newParams(q, layer.FilterShape(), []int{l.Nfeats}, 1/float32(inShape[3]))
 	layer.SetParamData(l.w, l.b, l.dw, l.db)
 	l.Layer = layer
 	return workSize
+}
+
+func (l *convDNN) Memory() (weights, outputs, temp int) {
+	_, outputs, temp = l.Layer.Memory()
+	return l.paramBase.memory(), outputs, temp
 }
 
 func (l *convDNN) Release() {
@@ -308,12 +349,12 @@ func (l *convDNN) Release() {
 
 // pool layer implentation
 type poolDNN struct {
-	MaxPool
+	Pool
 	num.Layer
 }
 
-func (l *poolDNN) Init(q num.Queue, inShape []int, ix int, rng *rand.Rand) int {
-	l.Layer = num.NewMaxPoolLayer(q, inShape, l.Size, l.Stride)
+func (l *poolDNN) Init(q num.Queue, inShape []int, layerId int, rng *rand.Rand) int {
+	l.Layer = num.NewPoolLayer(q, inShape, l.Size, l.Stride, l.Pad, l.Average)
 	return 0
 }
 
@@ -324,18 +365,27 @@ type activation struct {
 	loss num.Array
 }
 
-func (l *activation) Init(q num.Queue, inShape []int, ix int, rng *rand.Rand) int {
+func (l *activation) Init(q num.Queue, inShape []int, layerId int, rng *rand.Rand) int {
 	l.Layer = num.NewActivationLayer(q, l.Atype, inShape)
-	l.loss = q.NewArray(num.Float32, inShape...)
 	return 0
+}
+
+func (l *activation) Memory() (weights, outputs, temp int) {
+	_, outputs, temp = l.Layer.Memory()
+	return 0, outputs, temp + num.Bytes(l.loss)
 }
 
 func (l *activation) Release() {
 	l.Layer.Release()
-	l.loss.Release()
+	if l.loss != nil {
+		l.loss.Release()
+	}
 }
 
 func (l *activation) Loss(q num.Queue, yOneHot, yPred num.Array) num.Array {
+	if l.loss == nil {
+		l.loss = q.NewArray(num.Float32, l.InShape()...)
+	}
 	if l.Atype == "softmax" {
 		q.Call(num.SoftmaxLoss(yOneHot, yPred, l.loss))
 	} else {
@@ -350,7 +400,7 @@ type dropout struct {
 	num.Layer
 }
 
-func (l *dropout) Init(q num.Queue, inShape []int, ix int, rng *rand.Rand) int {
+func (l *dropout) Init(q num.Queue, inShape []int, layerId int, rng *rand.Rand) int {
 	l.Layer = num.NewDropoutLayer(q, l.Ratio, inShape, rng.Int63())
 	return 0
 }
@@ -358,36 +408,35 @@ func (l *dropout) Init(q num.Queue, inShape []int, ix int, rng *rand.Rand) int {
 // batch normalisation layer implementation
 type batchNorm struct {
 	BatchNorm
-	paramBase
-	num.Layer
-	runMean num.Array
-	runVar  num.Array
+	num.BatchNormLayer
+	scale float32
 }
 
-func (l *batchNorm) Init(q num.Queue, inShape []int, ix int, rng *rand.Rand) int {
-	l.runMean = q.NewArray(num.Float32, inShape[2])
-	l.runVar = q.NewArray(num.Float32, inShape[2])
-	q.Call(num.Fill(l.runVar, 1))
-	layer := num.NewBatchNormLayer(q, l.AvgFactor, l.Epsilon, inShape, l.runMean, l.runVar)
-	l.paramBase = newParams(q, layer.FilterShape(), layer.FilterShape(), 1/float32(inShape[3]))
-	layer.SetParamData(l.w, l.b, l.dw, l.db)
-	l.Layer = layer
+func (l *batchNorm) Init(q num.Queue, inShape []int, layerId int, rng *rand.Rand) int {
+	l.scale = 1 / float32(inShape[3])
+	l.BatchNormLayer = num.NewBatchNormLayer(q, l.AvgFactor, l.Epsilon, inShape)
 	return 0
 }
 
-func (l *batchNorm) Stats() (m, v num.Array) {
-	return l.runMean, l.runVar
+func (l *batchNorm) UpdateParams(q num.Queue, learningRate, weightDecay float32) {
+	l.UpdateStats(q, -learningRate*l.scale)
 }
 
-func (l *batchNorm) SetStats(q num.Queue, runMean, runVar num.Array) {
-	q.Call(num.Copy(runMean, l.runMean), num.Copy(runVar, l.runVar))
-}
-
-func (l *batchNorm) Release() {
-	l.paramBase.release()
-	l.Layer.Release()
-	l.runMean.Release()
-	l.runVar.Release()
+func (l *batchNorm) Copy(q num.Queue, layer Layer) {
+	if src, ok := layer.(*batchNorm); ok {
+		wSrc, bSrc, meanSrc, varSrc := src.Stats()
+		wDst, bDst, meanDst, varDst := l.Stats()
+		q.Call(
+			num.Copy(meanSrc, meanDst),
+			num.Copy(varSrc, varDst),
+			num.Copy(wSrc, wDst),
+		)
+		if bDst != nil {
+			q.Call(num.Copy(bSrc, bDst))
+		}
+	} else {
+		panic("invalid layer type for copy!")
+	}
 }
 
 // flatten layer implementation
@@ -402,10 +451,14 @@ func (l *flatten) InShape() []int { return l.inShape }
 
 func (l *flatten) OutShape() []int { return l.outShape }
 
-func (l *flatten) Init(q num.Queue, inShape []int, ix int, rng *rand.Rand) int {
+func (l *flatten) Init(q num.Queue, inShape []int, layerId int, rng *rand.Rand) int {
 	l.inShape = inShape
 	l.outShape = []int{num.Prod(l.inShape[:3]), l.inShape[3]}
 	return 0
+}
+
+func (l *flatten) Memory() (weights, outputs, temp int) {
+	return 0, 0, 0
 }
 
 func (l *flatten) Release() {}
@@ -418,6 +471,9 @@ func (l *flatten) Fprop(q num.Queue, in, work num.Array, trainMode bool) num.Arr
 }
 
 func (l *flatten) Bprop(q num.Queue, grad, work num.Array) num.Array {
+	if grad == nil {
+		return nil
+	}
 	return grad.Reshape(l.inShape...)
 }
 
@@ -438,6 +494,10 @@ func newParams(q num.Queue, filterShape, biasShape []int, scale float32) paramBa
 	}
 }
 
+func (p paramBase) memory() int {
+	return num.Bytes(p.w, p.b, p.dw, p.db)
+}
+
 func (p paramBase) release() {
 	p.w.Release()
 	p.b.Release()
@@ -445,14 +505,19 @@ func (p paramBase) release() {
 	p.db.Release()
 }
 
-func (p paramBase) IsActiv() bool { return false }
-
 func (p paramBase) Params() (W, B num.Array) {
 	return p.w, p.b
 }
 
 func (p paramBase) ParamGrads() (dW, dB num.Array) {
 	return p.dw, p.db
+}
+
+func (p paramBase) SetParams(q num.Queue, W, B num.Array) {
+	q.Call(
+		num.Copy(W, p.w),
+		num.Copy(B, p.b),
+	)
 }
 
 func (p paramBase) InitParams(q num.Queue, wInit func() float64, bias float32) {
@@ -466,14 +531,16 @@ func (p paramBase) InitParams(q num.Queue, wInit func() float64, bias float32) {
 	)
 }
 
-func (p paramBase) SetParams(q num.Queue, W, B num.Array) {
-	q.Call(num.Copy(W, p.w), num.Copy(B, p.b))
+func (p paramBase) Copy(q num.Queue, layer Layer) {
+	if l, ok := layer.(ParamLayer); ok {
+		W, B := l.Params()
+		p.SetParams(q, W, B)
+	} else {
+		panic(fmt.Errorf("invalid layer type for copy: %T", layer))
+	}
 }
 
 func (p paramBase) UpdateParams(q num.Queue, learningRate, weightDecay float32) {
-	if p.scale == 0 {
-		return
-	}
 	if weightDecay != 0 {
 		q.Call(num.Axpy(-weightDecay/p.scale, p.w, p.dw))
 	}
@@ -496,4 +563,27 @@ func unmarshal(data json.RawMessage, v interface{}) {
 	if err != nil {
 		panic(err)
 	}
+}
+
+func structToString(val, defVal interface{}) string {
+	params := []string{}
+	def := reflect.ValueOf(defVal)
+	st := reflect.TypeOf(val)
+	s := reflect.ValueOf(val)
+	for i := 0; i < s.NumField(); i++ {
+		val := s.Field(i).Interface()
+		if !reflect.DeepEqual(val, def.Field(i).Interface()) {
+			if _, isBool := val.(bool); isBool {
+				params = append(params, st.Field(i).Name)
+			} else if i == 0 {
+				params = append(params, fmt.Sprint(val))
+			} else {
+				params = append(params, fmt.Sprintf("%s:%v", st.Field(i).Name, val))
+			}
+		}
+	}
+	if len(params) == 0 {
+		return ""
+	}
+	return "(" + strings.Join(params, " ") + ")"
 }

@@ -231,3 +231,13 @@ func SameShape(xd, yd []int) bool {
 	}
 	return true
 }
+
+// Total size of one of more arrays in bytes
+func Bytes(arr ...Array) (bytes int) {
+	for _, a := range arr {
+		if a != nil {
+			bytes += 4 * a.Size()
+		}
+	}
+	return bytes
+}

@@ -39,6 +39,7 @@ func main() {
 	flag.IntVar(&conf.TestBatch, "testbatch", conf.TestBatch, "test batch size")
 	flag.IntVar(&conf.DebugLevel, "debug", conf.DebugLevel, "debug logging level")
 	flag.BoolVar(&conf.Profile, "profile", conf.Profile, "print profiling info")
+	flag.BoolVar(&conf.MemProfile, "memprofile", conf.Profile, "print memory profiling info")
 	flag.BoolVar(&conf.UseGPU, "gpu", conf.UseGPU, "use Cuda GPU acceleration")
 	flag.BoolVar(&conf.Normalise, "norm", conf.Normalise, "normalise input data")
 	flag.BoolVar(&conf.Distort, "distort", conf.Distort, "apply image distortion")
@@ -46,13 +47,14 @@ func main() {
 
 	dev := num.NewDevice(conf.UseGPU)
 	q := dev.NewQueue()
-	q.Profiling(conf.Profile)
+	q.Profiling(conf.Profile, "main")
 	rng := nnet.SetSeed(conf.RandSeed)
 
 	// load traing and test data
 	data, err := nnet.LoadData(conf.DataSet)
 	nnet.CheckErr(err)
 	trainData := nnet.NewDataset(dev, data["train"], conf.DatasetConfig(false), rng)
+	trainData.Profiling(conf.Profile, "train")
 
 	// create network and initialise weights
 	trainNet := nnet.New(q, conf, trainData.BatchSize, trainData.Shape(), rng)
@@ -73,8 +75,11 @@ func main() {
 		fmt.Println("== After ==")
 		predict(q, trainNet, data["train"])
 	}
-	q.Shutdown()
-	if conf.Profile {
-		fmt.Printf("== Profile ==\n%s\n", q.Profile())
+	if conf.MemProfile {
+		fmt.Printf(trainNet.MemoryProfile())
+		fmt.Printf(tester.MemoryProfile())
 	}
+	trainData.Release()
+	tester.Release()
+	q.Shutdown()
 }

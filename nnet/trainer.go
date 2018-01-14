@@ -15,6 +15,7 @@ type Stats struct {
 	Epoch     int
 	Values    []float64
 	BestSince int
+	TrainTime time.Duration
 	Elapsed   time.Duration
 }
 
@@ -56,11 +57,7 @@ func (s Stats) FormatItem(i int) string {
 }
 
 func (s Stats) FormatElapsed() string {
-	format := "%.2fs"
-	if s.Elapsed >= 60*time.Second {
-		format = "%.0fs"
-	}
-	return fmt.Sprintf(format, s.Elapsed.Seconds())
+	return FormatDuration(s.Elapsed)
 }
 
 func (s Stats) String(headers []string, done bool) string {
@@ -69,15 +66,25 @@ func (s Stats) String(headers []string, done bool) string {
 		msg += fmt.Sprintf("  %s =%s", headers[i], val)
 	}
 	if done {
-		msg += fmt.Sprintf("\nrun time: %s", s.FormatElapsed())
+		msg += fmt.Sprintf("\ntrain time:%s  total:%s", FormatDuration(s.TrainTime), FormatDuration(s.Elapsed))
 	}
 	return msg
+}
+
+func FormatDuration(d time.Duration) string {
+	format := "%.2fs"
+	if d >= 60*time.Second {
+		format = "%.0fs"
+	}
+	return fmt.Sprintf(format, d.Seconds())
 }
 
 // Tester interface to evaluate the performance after each epoch, Test method returns true if training should stop.
 type Tester interface {
 	Test(net *Network, epoch int, loss float64, start time.Time) bool
 	Epilogue() bool
+	MemoryProfile() string
+	Release()
 }
 
 // Tester which evaluates the loss and error for each of the data sets and updates the stats.
@@ -105,6 +112,13 @@ func (t *TestBase) Release() {
 	}
 }
 
+func (t *TestBase) MemoryProfile() string {
+	if t.Net == nil {
+		return ""
+	}
+	return t.Net.MemoryProfile()
+}
+
 // Initialise the test dataset, network and other configuration.
 func (t *TestBase) Init(queue num.Queue, conf Config, data map[string]Data, rng *rand.Rand) *TestBase {
 	opts := conf.DatasetConfig(true)
@@ -120,8 +134,12 @@ func (t *TestBase) Init(queue num.Queue, conf Config, data map[string]Data, rng 
 			fmt.Println("dataset =>", key)
 		}
 		t.Data[key] = NewDataset(queue.Dev(), d, opts, rng)
+		t.Data[key].Profiling(conf.Profile, "tester:"+key)
 	}
-	t.Net = New(queue, conf, opts.BatchSize, t.Data["train"].Shape(), rng)
+	if opts.BatchSize != conf.TrainBatch {
+		t.Net = New(queue, conf, t.Data["train"].BatchSize, t.Data["train"].Shape(), rng)
+		fmt.Println("allocate test network: input shape ", t.Net.inShape)
+	}
 	return t
 }
 
@@ -142,11 +160,20 @@ func (t *TestBase) Reset() {
 
 // Test performance of the network, called from the Train function on completion of each epoch.
 func (t *TestBase) Test(net *Network, epoch int, loss float64, start time.Time) bool {
-	net.CopyTo(t.Net, false)
+	s := Stats{
+		Epoch:     epoch,
+		Values:    []float64{loss},
+		BestSince: -1,
+		TrainTime: time.Since(start),
+	}
+	if t.Net != nil {
+		// copy the weights to net with different input shape
+		net.CopyTo(t.Net, false)
+		net = t.Net
+	}
 	if net.DebugLevel >= 1 {
 		fmt.Printf("== TEST EPOCH %d ==\n", epoch)
 	}
-	s := Stats{Epoch: epoch, Values: []float64{loss}, BestSince: -1}
 	for ix, key := range DataTypes {
 		if dset, ok := t.Data[key]; ok {
 			if dset.Samples < dset.Len() {
@@ -156,7 +183,7 @@ func (t *TestBase) Test(net *Network, epoch int, loss float64, start time.Time) 
 			if t.Predict != nil {
 				pred = t.Pred[key]
 			}
-			errVal := t.Net.Error(dset, pred)
+			errVal := net.Error(dset, pred)
 			s.Values = append(s.Values, errVal)
 			if key == "valid" {
 				// save average validation error
@@ -179,6 +206,7 @@ func (t *TestBase) Test(net *Network, epoch int, loss float64, start time.Time) 
 	}
 	s.Elapsed = time.Since(start)
 	if len(t.Stats) > 0 {
+		s.TrainTime += t.Stats[len(t.Stats)-1].TrainTime
 		s.Elapsed += t.Stats[len(t.Stats)-1].Elapsed
 	}
 	t.Stats = append(t.Stats, s)
@@ -292,7 +320,7 @@ func TrainEpoch(net *Network, dset *Dataset, acc num.Array) float64 {
 		}
 		// update weights
 		for _, layer := range net.Layers {
-			if l, ok := layer.(ParamLayer); ok {
+			if l, ok := layer.(UpdateLayer); ok {
 				l.UpdateParams(q, float32(net.Eta), weightDecay)
 			}
 		}

@@ -11,7 +11,6 @@ import "C"
 import (
 	"errors"
 	"fmt"
-	"runtime"
 	"unsafe"
 )
 
@@ -34,7 +33,6 @@ type Attr struct {
 func NewAttr() *Attr {
 	a := new(Attr)
 	chk(C.dnnPrimitiveAttributesCreate_F32(&a.h))
-	runtime.SetFinalizer(a, func(obj *Attr) { obj.Release() })
 	return a
 }
 
@@ -49,7 +47,6 @@ type Primitive struct {
 
 func NewPrimitive() *Primitive {
 	p := new(Primitive)
-	runtime.SetFinalizer(p, func(obj *Primitive) { obj.Release() })
 	return p
 }
 
@@ -70,7 +67,6 @@ type Layer struct {
 	outShape       []int
 	filtShape      []int
 	name           string
-	params         bool
 }
 
 func NewLayer(typ string, inShape, outShape []int) *Layer {
@@ -79,6 +75,19 @@ func NewLayer(typ string, inShape, outShape []int) *Layer {
 	l.Fwd = NewPrimitive()
 	l.BData = NewPrimitive()
 	return l
+}
+
+func (l *Layer) Release() {
+	for _, p := range []*Primitive{l.Fwd, l.BData, l.BFilter, l.BBias} {
+		if p != nil {
+			p.Release()
+		}
+	}
+	for _, l := range l.layout {
+		if l != nil {
+			l.Release()
+		}
+	}
 }
 
 func (l *Layer) init() {
@@ -90,18 +99,19 @@ func (l *Layer) init() {
 	l.Alloc(C.dnnResourceDiffSrc)
 }
 
-func (l *Layer) initParams() {
+func (l *Layer) initParams(noBias bool) {
 	l.layoutFromPrimitive(l.Fwd, C.dnnResourceFilter)
-	l.layoutFromPrimitive(l.Fwd, C.dnnResourceBias)
 	l.layoutFromPrimitive(l.BFilter, C.dnnResourceDiffFilter)
-	l.layoutFromPrimitive(l.BBias, C.dnnResourceDiffBias)
+	if !noBias {
+		l.layoutFromPrimitive(l.Fwd, C.dnnResourceBias)
+		l.layoutFromPrimitive(l.BBias, C.dnnResourceDiffBias)
+	}
 }
 
 func (l *Layer) layoutFromPrimitive(prim *Primitive, typ C.dnnResourceType_t) {
 	layout := new(Layout)
 	chk(C.dnnLayoutCreateFromPrimitive_F32(&layout.h, prim.h, typ))
 	l.layout[typ] = layout
-	runtime.SetFinalizer(layout, func(obj *Layout) { obj.Release() })
 }
 
 func (l *Layer) Alloc(typ C.dnnResourceType_t) {
@@ -120,62 +130,82 @@ func (l *Layer) FilterShape() []int { return l.filtShape }
 
 func (l *Layer) Type() string { return l.name }
 
-func (l *Layer) HasParams() bool { return l.BFilter != nil }
+func (l *Layer) Worksize() int {
+	if l.layout[C.dnnResourceWorkspace] == nil {
+		return 0
+	}
+	return l.layout[C.dnnResourceWorkspace].Size()
+}
 
 // Setup new convolution layer
-func Convolution(attr *Attr, n, c, h, w, nFeats, filtSize, stride, pad int) *Layer {
-	wOut, wPad := getOutSize(w, filtSize, stride, pad)
-	if wPad != 0 {
-		panic("Convolution: output size invalid, must be even no. of strides")
+func Convolution(attr *Attr, n, c, h, w, nFeats, filtSize, stride int, padding, noBias bool) *Layer {
+	wOut, wPad, err := getOutSize(w, filtSize, stride, padding)
+	if err != nil {
+		panic(err)
 	}
-	hOut, hPad := getOutSize(h, filtSize, stride, pad)
-	if hPad != 0 {
-		panic("Convolution: output size invalid, must be even no. of strides")
+	hOut, hPad, err := getOutSize(h, filtSize, stride, padding)
+	if err != nil {
+		panic(err)
 	}
 	l := NewLayer("conv", []int{w, h, c, n}, []int{wOut, hOut, nFeats, n})
 	l.filtShape = []int{filtSize, filtSize, c, nFeats}
-	l.BFilter = NewPrimitive()
-	l.BBias = NewPrimitive()
 	inSize := sizeDims(l.inShape)
 	outSize := sizeDims(l.outShape)
 	filter := sizeDims(l.filtShape)
 	cstride := sizeDims2(stride)
-	offset := [2]C.int{C.int(-pad), C.int(-pad)}
-	chk(C.dnnConvolutionCreateForwardBias_F32(&l.Fwd.h, attr.h, C.dnnAlgorithmConvolutionDirect,
-		4, &inSize[0], &outSize[0], &filter[0], &cstride[0], &offset[0], C.dnnBorderZeros))
+	btype, offset := getOffset(hPad, wPad)
+	l.BFilter = NewPrimitive()
+	if noBias {
+		chk(C.dnnConvolutionCreateForward_F32(&l.Fwd.h, attr.h, C.dnnAlgorithmConvolutionDirect,
+			4, &inSize[0], &outSize[0], &filter[0], &cstride[0], &offset[0], btype))
+	} else {
+		l.BBias = NewPrimitive()
+		chk(C.dnnConvolutionCreateForwardBias_F32(&l.Fwd.h, attr.h, C.dnnAlgorithmConvolutionDirect,
+			4, &inSize[0], &outSize[0], &filter[0], &cstride[0], &offset[0], btype))
+		chk(C.dnnConvolutionCreateBackwardBias_F32(&l.BBias.h, attr.h, C.dnnAlgorithmConvolutionDirect,
+			4, &outSize[0]))
+	}
 	chk(C.dnnConvolutionCreateBackwardData_F32(&l.BData.h, attr.h, C.dnnAlgorithmConvolutionDirect,
-		4, &inSize[0], &outSize[0], &filter[0], &cstride[0], &offset[0], C.dnnBorderZeros))
+		4, &inSize[0], &outSize[0], &filter[0], &cstride[0], &offset[0], btype))
 	chk(C.dnnConvolutionCreateBackwardFilter_F32(&l.BFilter.h, attr.h, C.dnnAlgorithmConvolutionDirect,
-		4, &inSize[0], &outSize[0], &filter[0], &cstride[0], &offset[0], C.dnnBorderZeros))
-	chk(C.dnnConvolutionCreateBackwardBias_F32(&l.BBias.h, attr.h, C.dnnAlgorithmConvolutionDirect,
-		4, &outSize[0]))
+		4, &inSize[0], &outSize[0], &filter[0], &cstride[0], &offset[0], btype))
 	l.init()
-	l.initParams()
+	l.initParams(noBias)
 	return l
 }
 
-// Setup new max pooling layer
-func MaxPooling(attr *Attr, n, c, h, w, size, stride int) *Layer {
-	wOut, wPad := getOutSize(w, size, stride, 0)
-	hOut, hPad := getOutSize(h, size, stride, 0)
+// Setup new max pooling or average pooling layer
+func Pooling(attr *Attr, n, c, h, w, size, stride int, padding, average bool) *Layer {
+	wOut, wPad, _ := getOutSize(w, size, stride, padding)
+	hOut, hPad, _ := getOutSize(h, size, stride, padding)
 	l := NewLayer("pool", []int{w, h, c, n}, []int{wOut, hOut, c, n})
 	csize := sizeDims2(size)
 	cstride := sizeDims2(stride)
-	offset := [4]C.int{}
-	var btype C.dnnBorder_t = C.dnnBorderZeros
-	if wPad != 0 || hPad != 0 {
-		offset[2] = C.int(wPad)
-		offset[3] = C.int(hPad)
-		btype = C.dnnBorderZerosAsymm
-	}
+	btype, offset := getOffset(hPad, wPad)
 	in := NewLayout(l.inShape)
-	chk(C.dnnPoolingCreateForward_F32(&l.Fwd.h, attr.h, C.dnnAlgorithmPoolingMax,
-		in.h, &csize[0], &cstride[0], &offset[0], btype))
-	chk(C.dnnPoolingCreateBackward_F32(&l.BData.h, attr.h, C.dnnAlgorithmPoolingMax,
-		in.h, &csize[0], &cstride[0], &offset[0], btype))
+	var algo C.dnnAlgorithm_t
+	if average {
+		algo = C.dnnAlgorithmPoolingAvgExcludePadding
+	} else {
+		algo = C.dnnAlgorithmPoolingMax
+	}
+	chk(C.dnnPoolingCreateForward_F32(&l.Fwd.h, attr.h, algo, in.h, &csize[0], &cstride[0], &offset[0], btype))
+	chk(C.dnnPoolingCreateBackward_F32(&l.BData.h, attr.h, algo, in.h, &csize[0], &cstride[0], &offset[0], btype))
 	l.init()
 	l.layoutFromPrimitive(l.Fwd, C.dnnResourceWorkspace)
 	l.Alloc(C.dnnResourceWorkspace)
+	return l
+}
+
+// Setup new batch normalisation layer
+func BatchNorm(attr *Attr, n, c, h, w int, epsilon float64) *Layer {
+	l := NewLayer("batchNorm", []int{w, h, c, n}, []int{w, h, c, n})
+	l.filtShape = []int{1, 1, c, 1}
+	in := NewLayout(l.inShape)
+	eps := C.float(epsilon)
+	chk(C.dnnBatchNormalizationCreateForward_v2_F32(&l.Fwd.h, attr.h, in.h, eps, C.dnnUseScaleShift))
+	chk(C.dnnBatchNormalizationCreateBackward_v2_F32(&l.BData.h, attr.h, in.h, eps, C.dnnUseScaleShift))
+	l.init()
 	return l
 }
 
@@ -219,6 +249,13 @@ func (r Resource) SetParams(W, B, dW, dB unsafe.Pointer) {
 	r.data[C.dnnResourceDiffBias] = dB
 }
 
+func (r Resource) SetStatsData(w, dw, runMean, runVar unsafe.Pointer) {
+	r.data[C.dnnResourceScaleShift] = w
+	r.data[C.dnnResourceDiffScaleShift] = dw
+	r.data[C.dnnResourceMean] = runMean
+	r.data[C.dnnResourceVariance] = runVar
+}
+
 func (r Resource) String() string {
 	s := ""
 	for i, ptr := range r.data {
@@ -241,7 +278,6 @@ func NewLayout(dims []int) *Layout {
 	size := sizeDims(dims)
 	strides := getStrides(dims)
 	chk(C.dnnLayoutCreate_F32(&l.h, ndim, &size[0], &strides[0]))
-	runtime.SetFinalizer(l, func(obj *Layout) { obj.Release() })
 	return l
 }
 
@@ -256,9 +292,38 @@ func (l *Layout) Size() int {
 }
 
 // utilities
-func getOutSize(x, size, stride, pad int) (s, extra int) {
-	ns := x - size + 2*pad
-	return ns/stride + 1, ns % stride
+func getOutSize(in, filter, stride int, padding bool) (out, pad int, err error) {
+	if filter > in {
+		err = fmt.Errorf("filter size %d > input size %d", filter, in)
+		return
+	}
+	var end int
+	if padding {
+		out = in / stride
+		end = filter + (out-1)*stride
+		if end < in {
+			out++
+			end += stride
+		}
+		pad = (end - in) / 2
+		if (end-in)%2 != 0 {
+			pad++
+		}
+	} else {
+		out = 1 + (in-filter)/stride
+		end = filter + (out-1)*stride
+		if end != in {
+			err = fmt.Errorf("filter %d and stride %d does not divide input %d", filter, stride, in)
+		}
+	}
+	return
+}
+
+func getOffset(hPad, wPad int) (btype C.dnnBorder_t, offset [2]C.int) {
+	btype = C.dnnBorderZeros
+	offset[0] = C.int(-wPad)
+	offset[1] = C.int(-hPad)
+	return
 }
 
 func sizeDims2(a int) [2]C.size_t {

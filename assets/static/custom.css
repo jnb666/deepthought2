@@ -116,6 +116,7 @@ body, html {
   padding: 5px;
   border: 1px solid #cbcbcb;
   background-color: #444;
+  vertical-align: top;
 }
 
 .image-table2 {
@@ -197,24 +198,28 @@ body, html {
     width: 100%;
     padding: 0.3em 0;
     margin-bottom: 0.3em;
-    color: #ccc;
+    color: white;
     border-bottom: 1px solid #e5e5e5;
+}
+
+label {
+  font-size: 0.875em;
 }
 
 input {
   color: black;
-  font-size: 0.8em;
+  font-size: 0.75em;
 }
 
 .form-select {
   color: black;
-  font-size: 0.8em;
+  font-size: 0.75em;
 }
 
 .read-only input[readonly] {
   color: black;
   background-color: white;
-  font-size: 0.8em;
+  font-size: 0.75em;
 }
 
 img.input {

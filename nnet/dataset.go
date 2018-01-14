@@ -59,11 +59,10 @@ type Dataset struct {
 
 // Config options for dataset
 type DatasetOptions struct {
-	BatchSize    int
-	MaxSamples   int
-	FlattenInput bool
-	Normalise    bool
-	Distort      bool
+	BatchSize  int
+	MaxSamples int
+	Normalise  bool
+	Distort    bool
 }
 
 // Create a new Dataset struct, allocate array buffers  and set the batch size and maxSamples
@@ -86,11 +85,7 @@ func NewDataset(dev num.Device, data Data, opts DatasetOptions, rng *rand.Rand) 
 	d.xBuffer = make([]float32, nfeat*d.BatchSize)
 	d.yBuffer = make([]int32, d.BatchSize)
 	for i := range d.x {
-		if opts.FlattenInput {
-			d.x[i] = dev.NewArray(num.Float32, nfeat, d.BatchSize)
-		} else {
-			d.x[i] = dev.NewArray(num.Float32, append(data.Shape(), d.BatchSize)...)
-		}
+		d.x[i] = dev.NewArray(num.Float32, append(data.Shape(), d.BatchSize)...)
 		d.y[i] = dev.NewArray(num.Int32, d.BatchSize)
 		d.y1H[i] = dev.NewArray(num.Float32, d.ClassSize(), d.BatchSize)
 	}
@@ -100,6 +95,11 @@ func NewDataset(dev num.Device, data Data, opts DatasetOptions, rng *rand.Rand) 
 	}
 	d.queue = dev.NewQueue()
 	return d
+}
+
+// Enable profiling for the associated queue
+func (d *Dataset) Profiling(on bool, title string) {
+	d.queue.Profiling(on, title)
 }
 
 // Set image transform
@@ -126,6 +126,7 @@ func (d *Dataset) Release() {
 		d.y[i].Release()
 		d.y1H[i].Release()
 	}
+	d.queue.Shutdown()
 }
 
 // kick of load of next batch of data in background

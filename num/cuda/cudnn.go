@@ -7,7 +7,6 @@ import "C"
 
 import (
 	"fmt"
-	"runtime"
 	"unsafe"
 )
 
@@ -73,24 +72,25 @@ type ConvLayer struct {
 }
 
 // Create new convolution layer
-func Convolution(s *Stream, n, c, h, w, nFeats, filtSize, stride, pad int) (*ConvLayer, int) {
+func Convolution(s *Stream, n, c, h, w, nFeats, filtSize, stride int, padding, noBias bool) (*ConvLayer, int) {
 	l := &ConvLayer{}
-	wOut, wPad := getOutSize(w, filtSize, stride, pad)
-	if wPad != 0 {
-		panic("Convolution: output size invalid, must be even no. of strides")
+	wOut, wPad, err := getOutSize(w, filtSize, stride, padding)
+	if err != nil {
+		panic(err)
 	}
-	hOut, hPad := getOutSize(h, filtSize, stride, pad)
-	if hPad != 0 {
-		panic("Convolution: output size invalid, must be even no. of strides")
+	hOut, hPad, err := getOutSize(h, filtSize, stride, padding)
+	if err != nil {
+		panic(err)
 	}
 	l.Src = NewLayout(n, c, h, w)
 	l.Dst = NewLayout(n, nFeats, hOut, wOut)
 	l.Filter = NewFilterLayout(nFeats, c, filtSize, filtSize)
-	l.Bias = NewLayout(1, nFeats, 1, 1)
+	if !noBias {
+		l.Bias = NewLayout(1, nFeats, 1, 1)
+	}
 	chkDnn(C.cudnnCreateConvolutionDescriptor(&l.desc))
-	chkDnn(C.cudnnSetConvolution2dDescriptor(l.desc, C.int(pad), C.int(pad), C.int(stride), C.int(stride),
+	chkDnn(C.cudnnSetConvolution2dDescriptor(l.desc, C.int(hPad), C.int(wPad), C.int(stride), C.int(stride),
 		1, 1, C.CUDNN_CROSS_CORRELATION, C.CUDNN_DATA_FLOAT))
-	runtime.SetFinalizer(l, func(obj *ConvLayer) { obj.Release() })
 	workSize := l.init(s)
 	return l, workSize
 }
@@ -128,6 +128,12 @@ func (l *ConvLayer) Ptr() unsafe.Pointer {
 
 func (l *ConvLayer) Release() {
 	if !l.freed {
+		l.Src.Release()
+		l.Dst.Release()
+		l.Filter.Release()
+		if l.Bias != nil {
+			l.Bias.Release()
+		}
 		C.cudnnDestroyConvolutionDescriptor(l.desc)
 		l.freed = true
 	}
@@ -141,19 +147,22 @@ type PoolLayer struct {
 	freed bool
 }
 
-// Setup new max pooling layer
-func MaxPooling(n, c, h, w, size, stride int) *PoolLayer {
+// Setup new max pooling or average pooling layer
+func Pooling(n, c, h, w, size, stride int, padding, average bool) *PoolLayer {
 	l := &PoolLayer{}
-	wOut, wPad := getOutSize(w, size, stride, 0)
-	hOut, hPad := getOutSize(h, size, stride, 0)
+	wOut, wPad, _ := getOutSize(w, size, stride, padding)
+	hOut, hPad, _ := getOutSize(h, size, stride, padding)
 	l.Src = NewLayout(n, c, h, w)
 	l.Dst = NewLayout(n, c, hOut, wOut)
-
+	var mode C.cudnnPoolingMode_t
+	if average {
+		mode = C.CUDNN_POOLING_AVERAGE_COUNT_EXCLUDE_PADDING
+	} else {
+		mode = C.CUDNN_POOLING_MAX
+	}
 	chkDnn(C.cudnnCreatePoolingDescriptor(&l.desc))
-	chkDnn(C.cudnnSetPooling2dDescriptor(l.desc, C.CUDNN_POOLING_MAX, C.CUDNN_PROPAGATE_NAN,
+	chkDnn(C.cudnnSetPooling2dDescriptor(l.desc, mode, C.CUDNN_PROPAGATE_NAN,
 		C.int(size), C.int(size), C.int(hPad), C.int(wPad), C.int(stride), C.int(stride)))
-
-	runtime.SetFinalizer(l, func(obj *PoolLayer) { obj.Release() })
 	return l
 }
 
@@ -167,6 +176,8 @@ func (l *PoolLayer) Ptr() unsafe.Pointer {
 
 func (l *PoolLayer) Release() {
 	if !l.freed {
+		l.Src.Release()
+		l.Dst.Release()
 		C.cudnnDestroyPoolingDescriptor(l.desc)
 		l.freed = true
 	}
@@ -196,7 +207,6 @@ func Activation(typ string, shape []int) *ActivLayer {
 	}
 	chkDnn(C.cudnnCreateActivationDescriptor(&l.desc))
 	chkDnn(C.cudnnSetActivationDescriptor(l.desc, mode, C.CUDNN_PROPAGATE_NAN, 0.0))
-	runtime.SetFinalizer(l, func(obj *ActivLayer) { obj.Release() })
 	return l
 }
 
@@ -210,6 +220,7 @@ func (l *ActivLayer) Ptr() unsafe.Pointer {
 
 func (l *ActivLayer) Release() {
 	if !l.freed {
+		l.Src.Release()
 		C.cudnnDestroyActivationDescriptor(l.desc)
 		l.freed = true
 	}
@@ -219,7 +230,7 @@ func (l *ActivLayer) Release() {
 type DropoutLayer struct {
 	Src     *Layout
 	Reserve Buffer
-	states  Buffer
+	States  Buffer
 	dims    []int
 	desc    C.cudnnDropoutDescriptor_t
 	freed   bool
@@ -237,15 +248,13 @@ func Dropout(s *Stream, ratio float64, shape []int, seed int64) *DropoutLayer {
 	}
 	var size C.size_t
 	chkDnn(C.cudnnDropoutGetStatesSize(s.cudnn, &size))
-	l.states = NewBuffer(int(size))
+	l.States = NewBuffer(int(size))
 	chkDnn(C.cudnnDropoutGetReserveSpaceSize(l.Src.desc, &size))
 	l.Reserve = NewBuffer(int(size))
 
 	chkDnn(C.cudnnCreateDropoutDescriptor(&l.desc))
 	chkDnn(C.cudnnSetDropoutDescriptor(l.desc, s.cudnn, C.float(ratio),
-		l.states.Ptr, C.size_t(l.states.Size), C.ulonglong(seed)))
-
-	runtime.SetFinalizer(l, func(obj *DropoutLayer) { obj.Release() })
+		l.States.Ptr, C.size_t(l.States.Size), C.ulonglong(seed)))
 	return l
 }
 
@@ -259,7 +268,8 @@ func (l *DropoutLayer) Ptr() unsafe.Pointer {
 
 func (l *DropoutLayer) Release() {
 	if !l.freed {
-		l.states.Free()
+		l.Src.Release()
+		l.States.Free()
 		l.Reserve.Free()
 		C.cudnnDestroyDropoutDescriptor(l.desc)
 		l.freed = true
@@ -270,6 +280,7 @@ func (l *DropoutLayer) Release() {
 type BatchNormLayer struct {
 	Src   *Layout
 	Shape *Layout
+	freed bool
 }
 
 // Create new BatchNorm layer
@@ -284,7 +295,13 @@ func (l *BatchNormLayer) InShape() []int { return l.Src.Dims }
 
 func (l *BatchNormLayer) OutShape() []int { return l.Src.Dims }
 
-func (l *BatchNormLayer) FilterShape() []int { return l.Shape.Dims }
+func (l *BatchNormLayer) Release() {
+	if !l.freed {
+		l.Src.Release()
+		l.Shape.Release()
+		l.freed = true
+	}
+}
 
 // Layout type represents a cuDNN tensor descriptor
 type Layout struct {
@@ -297,7 +314,6 @@ func NewLayout(n, c, h, w int) *Layout {
 	l := &Layout{Dims: []int{w, h, c, n}}
 	chkDnn(C.cudnnCreateTensorDescriptor(&l.desc))
 	chkDnn(C.cudnnSetTensor4dDescriptor(l.desc, C.CUDNN_TENSOR_NCHW, C.CUDNN_DATA_FLOAT, C.int(n), C.int(c), C.int(h), C.int(w)))
-	runtime.SetFinalizer(l, func(obj *Layout) { obj.Release() })
 	return l
 }
 
@@ -323,7 +339,6 @@ func NewFilterLayout(nout, nin, h, w int) *FilterLayout {
 	l := &FilterLayout{Dims: []int{w, h, nin, nout}}
 	chkDnn(C.cudnnCreateFilterDescriptor(&l.desc))
 	chkDnn(C.cudnnSetFilter4dDescriptor(l.desc, C.CUDNN_DATA_FLOAT, C.CUDNN_TENSOR_NCHW, C.int(nout), C.int(nin), C.int(h), C.int(w)))
-	runtime.SetFinalizer(l, func(obj *FilterLayout) { obj.Release() })
 	return l
 }
 
@@ -338,18 +353,41 @@ func (l *FilterLayout) Release() {
 	}
 }
 
-func getOutSize(x, size, stride, pad int) (s, extra int) {
-	ns := x - size + 2*pad
-	return ns/stride + 1, ns % stride
-}
-
-func maxSize(size []C.size_t) (max int) {
-	for _, s := range size {
-		if int(s) > max {
-			max = int(s)
+func getOutSize(in, filter, stride int, padding bool) (out, pad int, err error) {
+	if filter > in {
+		err = fmt.Errorf("filter size %d > input size %d", filter, in)
+		return
+	}
+	var end int
+	if padding {
+		out = in / stride
+		end = filter + (out-1)*stride
+		if end < in {
+			out++
+			end += stride
+		}
+		pad = (end - in) / 2
+		if (end-in)%2 != 0 {
+			pad++
+		}
+	} else {
+		out = 1 + (in-filter)/stride
+		end = filter + (out-1)*stride
+		if end != in {
+			err = fmt.Errorf("filter %d and stride %d does not divide input %d", filter, stride, in)
 		}
 	}
-	return max
+	return
+}
+
+func maxSize(size []C.size_t) int {
+	bytes := 0
+	for _, s := range size {
+		if int(s) > bytes {
+			bytes = int(s)
+		}
+	}
+	return bytes
 }
 
 type DnnStatus C.cudnnStatus_t

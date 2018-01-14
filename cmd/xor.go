@@ -13,14 +13,13 @@ func main() {
 	nnet.CheckErr(err)
 
 	conf := nnet.Config{
-		DataSet:      "xor",
-		Eta:          10,
-		TrainRuns:    1,
-		MaxEpoch:     500,
-		LogEvery:     25,
-		MinLoss:      0.05,
-		FlattenInput: true,
-		WeightInit:   nnet.RandomUniform,
+		DataSet:    "xor",
+		Eta:        10,
+		TrainRuns:  1,
+		MaxEpoch:   500,
+		LogEvery:   25,
+		MinLoss:    0.05,
+		WeightInit: nnet.RandomUniform,
 	}.AddLayers(
 		nnet.Linear{Nout: 2},
 		nnet.Activation{Atype: "sigmoid"},

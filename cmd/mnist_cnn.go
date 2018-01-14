@@ -17,9 +17,9 @@ func main() {
 		UseGPU:     true,
 		WeightInit: nnet.LecunNormal,
 	}.AddLayers(
-		nnet.Conv{Nfeats: 20, Size: 5, Pad: 2},
+		nnet.Conv{Nfeats: 20, Size: 5, Pad: true},
 		nnet.Activation{Atype: "relu"},
-		nnet.MaxPool{Size: 2},
+		nnet.Pool{Size: 2},
 		nnet.Flatten{},
 		nnet.Linear{Nout: 100},
 		nnet.Activation{Atype: "relu"},

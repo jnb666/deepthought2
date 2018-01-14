@@ -7,14 +7,32 @@
   <div class="pure-u-1">
     <table class="image-table">
     <tbody>
-      {{ range .Layers -}}
+      {{ if eq .Page "outputs" -}}
       <tr>
-        <td>
-          <table class="image-table2">
-            <tr><td colspan="{{.Cols}}">{{.Desc}}</td></tr>
+        <td width="40%">
+           {{ $l := .Input -}}
+           <table class="image-table2">
             <tr>
-              {{ $l := . -}}
-              {{ range .Image -}}
+              <td colspan="{{$l.Cols}}">{{$l.Desc}}</td>
+            </tr>
+            <tr>
+              {{ range $l.Image -}}
+              <td width="{{$l.Width}}%">
+                <img class="{{$l.Class}}" src="{{.}}">
+              </td>
+              {{ end -}}
+              <td width="{{$l.PadWidth}}%"></td>
+            </tr>
+          </table>         
+        </td>
+        <td width="60%">
+          {{ $l := .Output -}}
+          <table class="image-table2">
+            <tr>
+              <td colspan="{{$l.Cols}}">{{$l.Desc}}</td>
+            </tr>
+            <tr>
+              {{ range $l.Image -}}
               <td width="{{$l.Width}}%">
                 <img class="{{$l.Class}}" src="{{.}}">
                 {{ if $l.Values -}}
@@ -22,6 +40,27 @@
                     <tr>{{ range $l.Values -}}<td width="{{$l.CellWidth}}%">{{.}}</td>{{ end -}}</tr>
                   </table>
                 {{ end -}}
+              </td>
+              {{ end -}}
+              <td width="{{$l.PadWidth}}%"></td>
+            </tr>
+          </table>
+        </td>       
+      </tr>
+      {{ end -}}
+      {{ $p := . -}}
+      {{ range .Layers -}}
+      <tr>
+        <td colspan="{{$p.Columns}}">
+          {{ $l := . -}}
+          <table class="image-table2">
+            <tr>
+              <td colspan="{{.Cols}}">{{.Desc}}</td>
+            </tr>
+            <tr>
+              {{ range .Image -}}
+              <td width="{{$l.Width}}%">
+                <img class="{{$l.Class}}" src="{{.}}">
               </td>
               {{ end -}}
               <td width="{{.PadWidth}}%"></td>

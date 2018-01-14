@@ -13,7 +13,6 @@ import "C"
 import (
 	"errors"
 	"fmt"
-	"runtime"
 	"unsafe"
 )
 
@@ -46,7 +45,6 @@ func NewStream() *Stream {
 	chkBlas(C.cublasSetStream(s.blas, s.stream))
 	chkDnn(C.cudnnCreate(&s.cudnn))
 	chkDnn(C.cudnnSetStream(s.cudnn, s.stream))
-	runtime.SetFinalizer(s, func(obj *Stream) { obj.Release() })
 	return s
 }
 

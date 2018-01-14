@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	aspectOutput     = 0.1
+	aspectOutput     = 0.2
 	aspectWeights    = 0.2
 	factorMinOutput  = 20
 	factorMinWeights = 20
@@ -210,7 +210,6 @@ func (n *Network) Train(restart bool) error {
 	n.running = true
 	n.stop = false
 	go func() {
-		n.queue.Profiling(n.Profile)
 		acc := n.queue.NewArray(num.Float32)
 		quit := false
 		for n.Run < n.MaxRun && !quit {
@@ -317,10 +316,7 @@ func (n *Network) heading() template.HTML {
 func (n *Network) Export() {
 	n.Stats = n.test.Stats
 	n.Params = []LayerData{}
-	if n.test.Net == nil || n.test.Net.Layers == nil {
-		return
-	}
-	for i, layer := range n.test.Net.Layers {
+	for i, layer := range n.Layers {
 		if l, ok := layer.(nnet.ParamLayer); ok {
 			W, B := l.Params()
 			d := LayerData{
@@ -369,6 +365,8 @@ func (n *Network) Import() {
 			)
 		}
 		n.view.loadWeights(n.Network)
+	} else {
+		log.Println("no weights to import!")
 	}
 }
 
@@ -528,19 +526,15 @@ func newViewData(dev num.Device, dset string, data nnet.Data, trans *img.Transfo
 	v.inShape = data.Shape()
 	v.Network = nnet.New(v.queue, conf, 1, v.inShape, rng)
 	v.inData = make([]float32, num.Prod(v.inShape))
-	if conf.FlattenInput {
-		v.input = dev.NewArray(num.Float32, len(v.inData), 1)
-	} else {
-		v.input = dev.NewArray(num.Float32, append(v.inShape, 1)...)
-	}
+	v.input = dev.NewArray(num.Float32, append(v.inShape, 1)...)
 	for i, layer := range v.Layers {
 		l := viewLayer{ltype: layer.Type()}
 		// filter output layers
-		if l.ltype != "maxPool" && l.ltype != "dropout" && l.ltype != "flatten" && l.ltype != "batchNorm" {
+		if l.ltype != "pool" && l.ltype != "dropout" && l.ltype != "flatten" && l.ltype != "batchNorm" {
 			l.outShape = layer.OutShape()
 			l.outShape = l.outShape[:len(l.outShape)-1]
 		}
-		if layer.IsActiv() {
+		if l.ltype == "activation" {
 			for prev := len(v.layers) - 1; prev >= 0; prev-- {
 				lp := v.layers[prev]
 				if (lp.ltype == "conv" || lp.ltype == "linear") && num.SameShape(lp.outShape, l.outShape) {

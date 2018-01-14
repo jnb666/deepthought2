@@ -10,6 +10,8 @@ import (
 	"strings"
 )
 
+var defaultConfig Config
+
 type OptionList interface {
 	Options() []string
 	String() string
@@ -17,29 +19,29 @@ type OptionList interface {
 
 // Training configuration settings
 type Config struct {
-	DataSet      string
-	Eta          float64
-	Lambda       float64
-	Bias         float64
-	WeightInit   InitType
-	FlattenInput bool
-	Shuffle      bool
-	Normalise    bool
-	Distort      bool
-	TrainRuns    int
-	TrainBatch   int
-	TestBatch    int
-	MaxEpoch     int
-	MaxSamples   int
-	LogEvery     int
-	StopAfter    int
-	ExtraEpochs  int
-	MinLoss      float64
-	RandSeed     int64
-	DebugLevel   int
-	UseGPU       bool
-	Profile      bool
-	Layers       []LayerConfig
+	DataSet     string
+	Eta         float64
+	Lambda      float64
+	Bias        float64
+	WeightInit  InitType
+	Shuffle     bool
+	Normalise   bool
+	Distort     bool
+	TrainRuns   int
+	TrainBatch  int
+	TestBatch   int
+	MaxEpoch    int
+	MaxSamples  int
+	LogEvery    int
+	StopAfter   int
+	ExtraEpochs int
+	MinLoss     float64
+	RandSeed    int64
+	DebugLevel  int
+	UseGPU      bool
+	Profile     bool
+	MemProfile  bool
+	Layers      []LayerConfig
 }
 
 // Load network from json file under DataDir
@@ -58,14 +60,16 @@ func LoadConfig(name string) (c Config, err error) {
 
 func (c Config) DatasetConfig(test bool) DatasetOptions {
 	opts := DatasetOptions{
-		BatchSize:    c.TestBatch,
-		MaxSamples:   c.MaxSamples,
-		FlattenInput: c.FlattenInput,
-		Normalise:    c.Normalise,
+		BatchSize:  c.TrainBatch,
+		MaxSamples: c.MaxSamples,
+		Normalise:  c.Normalise,
+		Distort:    c.Distort,
 	}
-	if !test {
-		opts.BatchSize = c.TrainBatch
-		opts.Distort = c.Distort
+	if test {
+		if c.TestBatch != 0 {
+			opts.BatchSize = c.TestBatch
+		}
+		opts.Distort = false
 	}
 	return opts
 }
@@ -116,7 +120,10 @@ func (c Config) configString() string {
 	fields := c.Fields()
 	str := []string{"== Config =="}
 	for _, key := range fields {
-		str = append(str, fmt.Sprintf("%-14s: %v", key, c.Get(key)))
+		val := c.Get(key)
+		if !reflect.DeepEqual(val, defaultConfig.Get(key)) {
+			str = append(str, fmt.Sprintf("%-14s: %v", key, val))
+		}
 	}
 	return strings.Join(str, "\n")
 }

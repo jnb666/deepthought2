@@ -45,7 +45,7 @@ type Queue interface {
 	// Shutdown the queue and release any resources
 	Shutdown()
 	// Enable profiling
-	Profiling(on bool)
+	Profiling(on bool, title string)
 	Profile() string
 }
 
@@ -107,6 +107,9 @@ func (q *cpuQueue) Finish() {
 
 func (q *cpuQueue) Shutdown() {
 	q.Finish()
+	if q.profile.enabled {
+		fmt.Print(q.Profile())
+	}
 }
 
 // GPU queue corresponds to a Cuda stream
@@ -182,12 +185,16 @@ func (q *gpuQueue) Finish() {
 func (q *gpuQueue) Shutdown() {
 	q.Finish()
 	q.stream.Release()
+	if q.profile.enabled {
+		fmt.Print(q.Profile())
+	}
 }
 
 // profiling functions
 type profile struct {
 	prof    map[string]profileRec
 	enabled bool
+	title   string
 	events  C.struct_events
 }
 
@@ -205,8 +212,9 @@ func newProfile(useGPU bool) *profile {
 	return p
 }
 
-func (p *profile) Profiling(on bool) {
+func (p *profile) Profiling(on bool, title string) {
 	p.enabled = on
+	p.title = title
 }
 
 func (p *profile) add(funcs []Function) {
@@ -230,12 +238,12 @@ func (p *profile) Profile() string {
 	sort.Slice(list, func(i, j int) bool { return list[j].msec < list[i].msec })
 	totalCalls := int64(0)
 	totalMsec := 0.0
-	s := ""
+	s := "== " + p.title + " profile ==\n"
 	for _, r := range list {
 		s += fmt.Sprintf("%-22s %8d calls %10.1f msec\n", r.name, r.calls, r.msec)
 		totalCalls += r.calls
 		totalMsec += r.msec
 	}
-	s += fmt.Sprintf("%-22s %8d calls %10.1f msec", "TOTAL", totalCalls, totalMsec)
+	s += fmt.Sprintf("%-22s %8d calls %10.1f msec\n", "TOTAL", totalCalls, totalMsec)
 	return s
 }

@@ -21,10 +21,11 @@ const (
 	RandomUniform
 	LecunNormal
 	GlorotUniform
+	HeNormal
 )
 
 func (t InitType) Options() []string {
-	return []string{"Zeros", "Ones", "RandomNormal", "RandomUniform", "LecunNormal", "GlorotUniform"}
+	return []string{"Zeros", "Ones", "RandomNormal", "RandomUniform", "LecunNormal", "GlorotUniform", "HeNormal"}
 }
 
 func (t InitType) String() string {
@@ -41,16 +42,30 @@ func (t InitType) WeightFunc(dims []int, rng *rand.Rand) func() float64 {
 		return func() float64 { return rng.NormFloat64() }
 	case RandomUniform:
 		return func() float64 { return rng.Float64() }
-	case LecunNormal:
-		nin, _ := getSize(dims)
-		scale := 1 / math.Sqrt(float64(nin))
-		return func() float64 { return rng.NormFloat64() * scale }
 	case GlorotUniform:
 		nin, nout := getSize(dims)
 		scale := math.Sqrt(6 / float64(nin+nout))
 		return func() float64 { return (2*rng.Float64() - 1) * scale }
+	case LecunNormal:
+		nin, _ := getSize(dims)
+		scale := 1 / math.Sqrt(float64(nin))
+		return truncatedNormal(scale, 1, rng)
+	case HeNormal:
+		nin, _ := getSize(dims)
+		scale := 2 / math.Sqrt(float64(nin))
+		return truncatedNormal(scale, 1, rng)
 	default:
 		panic("invalid InitType")
+	}
+}
+
+func truncatedNormal(scale, clip float64, rng *rand.Rand) func() float64 {
+	return func() float64 {
+		x := 2 * clip
+		for math.Abs(x) > clip {
+			x = rng.NormFloat64() * scale
+		}
+		return x
 	}
 }
 
@@ -77,29 +92,28 @@ type Network struct {
 	batchLoss num.Array
 	inputGrad num.Array
 	inShape   []int
+	workSize  []int
 }
 
 // New function creates a new network with the given layers.
 func New(queue num.Queue, conf Config, batchSize int, inShape []int, rng *rand.Rand) *Network {
 	n := &Network{Config: conf, queue: queue}
 	n.allocArrays(batchSize)
-	if conf.FlattenInput {
-		n.inShape = []int{num.Prod(inShape), batchSize}
-	} else {
-		n.inShape = append(inShape, batchSize)
-	}
+	n.inShape = append(inShape, batchSize)
 	shape := n.inShape
-	wsize := 0
-	for ix, l := range conf.Layers {
+	layerId := 0
+	n.workSize = make([]int, len(conf.Layers))
+	for i, l := range conf.Layers {
 		layer := l.Unmarshal()
-		if size := layer.Init(queue, shape, ix, rng); size > wsize {
-			wsize = size
-		}
+		n.workSize[i] = layer.Init(queue, shape, layerId, rng)
 		n.Layers = append(n.Layers, layer)
 		shape = layer.OutShape()
+		if l.Type != "flatten" {
+			layerId++
+		}
 	}
-	if wsize > 0 {
-		n.WorkSpace = queue.NewArray(num.Float32, wsize)
+	if wsize := max(n.workSize); wsize > 0 {
+		n.WorkSpace = queue.NewArray(num.Float32, wsize/4)
 	}
 	return n
 }
@@ -130,14 +144,10 @@ func (n *Network) InitWeights(rng *rand.Rand) {
 		if l, ok := layer.(ParamLayer); ok {
 			W, _ := l.Params()
 			dims := W.Dims()
-			wInit := n.WeightInit
-			if l.Type() == "batchNorm" {
-				wInit = Ones
-			}
 			if n.DebugLevel >= 1 {
-				fmt.Printf("layer %d: %s %v set weights init=%s bias=%.3g\n", i, l.Type(), dims, wInit, n.Bias)
+				fmt.Printf("layer %d: %s %v set weights init=%s bias=%.3g\n", i, l.Type(), dims, n.WeightInit, n.Bias)
 			}
-			l.InitParams(n.queue, wInit.WeightFunc(dims, rng), float32(n.Bias))
+			l.InitParams(n.queue, n.WeightInit.WeightFunc(dims, rng), float32(n.Bias))
 		}
 	}
 	if n.DebugLevel >= 2 {
@@ -148,13 +158,8 @@ func (n *Network) InitWeights(rng *rand.Rand) {
 // Copy weights and bias arrays to destination net
 func (n *Network) CopyTo(net *Network, sync bool) {
 	for i, layer := range n.Layers {
-		if l, ok := layer.(ParamLayer); ok {
-			W, B := l.Params()
-			net.Layers[i].(ParamLayer).SetParams(n.queue, W, B)
-		}
-		if l, ok := layer.(BatchNormLayer); ok {
-			runMean, runVar := l.Stats()
-			net.Layers[i].(BatchNormLayer).SetStats(n.queue, runMean, runVar)
+		if l, ok := net.Layers[i].(UpdateLayer); ok {
+			l.Copy(n.queue, layer)
 		}
 	}
 	if sync {
@@ -233,6 +238,29 @@ func (n *Network) String() string {
 	return s
 }
 
+// display profile of allocated memory
+func (n *Network) MemoryProfile() string {
+	s := fmt.Sprintf("== memory profile [kb] ==           weights  outputs     temp    total (%d)\n",
+		n.inShape[len(n.inShape)-1])
+	var r, total [4]int
+	for i, layer := range n.Layers {
+		r[0], r[1], r[2] = layer.Memory()
+		r[3] = r[0] + r[1] + r[2]
+		for i, val := range r {
+			total[i] += val
+		}
+		if r[3] > 0 {
+			s += fmt.Sprintf("%2d: %-30s %8d %8d %8d %8d\n", i, layer.ToString(), kb(r[0]), kb(r[1]),
+				kb(r[2]+n.workSize[i]), kb(r[3]+n.workSize[i]))
+		}
+	}
+	totalWork := max(n.workSize)
+	total[2] += totalWork
+	total[3] += totalWork
+	s += fmt.Sprintf("--- TOTAL --- %20s %8d %8d %8d %8d\n", "", kb(total[0]), kb(total[1]), kb(total[2]), kb(total[3]))
+	return s
+}
+
 // Print network weights
 func (n *Network) PrintWeights() {
 	for i, layer := range n.Layers {
@@ -267,4 +295,23 @@ func CheckErr(err error) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func kb(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	return 1 + (n-1)/1024
+}
+
+func max(arr []int) int {
+	m := arr[0]
+	if len(arr) > 1 {
+		for _, val := range arr[1:] {
+			if val > m {
+				m = val
+			}
+		}
+	}
+	return m
 }

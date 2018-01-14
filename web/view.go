@@ -16,11 +16,14 @@ import (
 
 type ViewPage struct {
 	*Templates
-	Page   string
-	Layers []LayerInfo
-	net    *Network
-	index  int
-	errors bool
+	Page    string
+	Input   LayerInfo
+	Output  LayerInfo
+	Layers  []LayerInfo
+	Columns int
+	net     *Network
+	index   int
+	errors  bool
 }
 
 type LayerInfo struct {
@@ -128,6 +131,7 @@ func (p *ViewPage) getLayers(index int) {
 	ts := time.Now().Unix()
 	switch p.Page {
 	case "outputs":
+		p.Columns = 2
 		p.net.view.updateOutputs(index)
 		// input image
 		classes := p.net.view.data.Classes()
@@ -136,7 +140,7 @@ func (p *ViewPage) getLayers(index int) {
 		if p.net.Network.Normalise {
 			norm = "n"
 		}
-		p.addImage(
+		p.Input = info(
 			fmt.Sprintf("input %d %v => %s", index+1, p.net.view.inShape, classes[label]),
 			fmt.Sprintf("/img/%s/%d/%s", p.net.view.dset, index+1, norm),
 			p.net.view.data.Image(index, ""),
@@ -146,13 +150,19 @@ func (p *ViewPage) getLayers(index int) {
 		// outputs at each layer
 		for i, l := range p.net.view.layers {
 			if l.outShape != nil {
-				p.addImage(
+				entry := info(
 					fmt.Sprintf("%d: %s %v", i, l.ltype, l.outShape),
 					fmt.Sprintf("/net/outputs/%d?ts=%d", len(p.Layers), ts),
 					l.outImage, false, factorMinOutput, 100, "weights",
 				)
+				if i == len(p.net.view.layers)-1 {
+					p.Output = entry
+				} else {
+					p.Layers = append(p.Layers, entry)
+				}
 			}
 		}
+		// output classification
 		if l := p.net.view.lastLayer(); l != nil {
 			if len(l.outData) > 1 {
 				imax := arrayMax(l.outData)
@@ -169,38 +179,41 @@ func (p *ViewPage) getLayers(index int) {
 			}
 		}
 	case "weights":
+		p.Columns = 1
 		p.net.view.updateWeights()
 		// display weights and biases
 		for i, l := range p.net.view.layers {
 			if l.wShape != nil {
-				p.addImage(
+				entry := info(
 					fmt.Sprintf("%d: %s %v %v", i, l.ltype, l.wShape, l.bShape),
 					fmt.Sprintf("/net/weights/%d?ts=%d", len(p.Layers), ts),
 					l.wImage, false, factorMinWeights, 100, "weights",
 				)
+				p.Layers = append(p.Layers, entry)
 			}
 		}
 	}
 }
 
 func (p *ViewPage) addOutput(val float32, class string, underline bool, width int) {
-	out := len(p.Layers) - 1
 	col := color.Gray{Y: uint8(255 - 128*(1-val))}
 	tag := fmt.Sprintf(`<span style="color:%s;">%s</span>`, htmlColor(col), class)
 	if underline {
 		tag = "<u>" + tag + "</u>"
 	}
-	p.Layers[out].Class = "outputs"
-	p.Layers[out].Values = append(p.Layers[out].Values, template.HTML(tag))
-	p.Layers[out].CellWidth = width
+	p.Output.Class = "outputs"
+	p.Output.Width = 100
+	p.Output.PadWidth = 0
+	p.Output.Values = append(p.Output.Values, template.HTML(tag))
+	p.Output.CellWidth = width
 }
 
-func (p *ViewPage) addImage(desc, url string, img image.Image, channels bool, factorMin, scaleWidth int, class string) {
+func info(desc, url string, img image.Image, channels bool, factorMin, scaleWidth int, class string) LayerInfo {
 	info := LayerInfo{Desc: desc, Width: 100, Class: class, Image: []string{}}
 	if img != nil {
 		info.Image = []string{url}
 		if class == "input" {
-			info.Width = 7
+			info.Width = 20
 			if channels {
 				for _, suffix := range []string{"r", "g", "b"} {
 					info.Image = append(info.Image, url+suffix)
@@ -217,7 +230,7 @@ func (p *ViewPage) addImage(desc, url string, img image.Image, channels bool, fa
 	}
 	info.PadWidth = 100 - len(info.Image)*info.Width
 	info.Cols = len(info.Image) + 1
-	p.Layers = append(p.Layers, info)
+	return info
 }
 
 // Handler function to generate the image for the output and weight data visualisation
@@ -226,15 +239,13 @@ func (p *ViewPage) Image() func(w http.ResponseWriter, r *http.Request) {
 		p.net.Lock()
 		defer p.net.Unlock()
 		vars := mux.Vars(r)
-		page := vars["page"]
 		layer, _ := strconv.Atoi(vars["layer"])
-		if layer >= len(p.Layers) || p.Layers[layer].ImageData.Len() == 0 {
-			log.Printf("viewImage: not found page=%s layer=%d\n", page, layer)
-			http.NotFound(w, r)
-			return
-		}
 		w.Header().Set("Content-type", "image/png")
-		w.Write(p.Layers[layer].ImageData.Bytes())
+		if layer < len(p.Layers) {
+			w.Write(p.Layers[layer].ImageData.Bytes())
+		} else {
+			w.Write(p.Output.ImageData.Bytes())
+		}
 	}
 }
 
