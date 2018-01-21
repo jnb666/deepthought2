@@ -13,7 +13,8 @@ func predict(q num.Queue, net *nnet.Network, d nnet.Data) {
 	dset := nnet.NewDataset(q.Dev(), d, net.DatasetConfig(false), rng)
 	x, y, _ := dset.NextBatch()
 	classes := q.NewArray(num.Int32, y.Dims()[0])
-	yPred := net.Predict(x, classes)
+	yPred := net.Fprop(x, false)
+	q.Call(num.Unhot(yPred, classes))
 	fmt.Print("predict:", yPred.String(q))
 	fmt.Println("classes:", classes.String(q))
 	fmt.Println("labels: ", y.String(q))
@@ -32,6 +33,8 @@ func main() {
 	// override config settings from command line
 	flag.Float64Var(&conf.Eta, "eta", conf.Eta, "learning rate")
 	flag.Float64Var(&conf.Lambda, "lambda", conf.Lambda, "weight decay parameter")
+	flag.Float64Var(&conf.Momentum, "momentum", conf.Momentum, "momentum")
+	flag.BoolVar(&conf.Nesterov, "nesterov", conf.Nesterov, "nesterov momentum")
 	flag.Int64Var(&conf.RandSeed, "seed", conf.RandSeed, "random number seed")
 	flag.IntVar(&conf.MaxEpoch, "epochs", conf.MaxEpoch, "max epochs")
 	flag.IntVar(&conf.MaxSamples, "samples", conf.MaxSamples, "max samples")
@@ -78,6 +81,9 @@ func main() {
 	if conf.MemProfile {
 		fmt.Printf(trainNet.MemoryProfile())
 		fmt.Printf(tester.MemoryProfile())
+	} else {
+		mem := trainNet.Memory() + tester.Memory()
+		fmt.Printf("memory used: %s\n", nnet.FormatBytes(mem))
 	}
 	trainData.Release()
 	tester.Release()

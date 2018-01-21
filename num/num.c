@@ -189,6 +189,9 @@ void callCPU(Args* a, dnnError_t* error) {
 			array_sum_f(FP(a->p[0]), a->i[1], FP(a->p[1]));
 		}
 		break;
+	case SCALE:
+		cblas_sscal(a->i[0], a->f[0], FP(a->p[0]), 1);
+		break;
 	case AXPY:
 		cblas_saxpy(a->i[0], a->f[0], FP(a->p[0]), 1, FP(a->p[1]), 1);
 		break;

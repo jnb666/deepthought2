@@ -66,7 +66,8 @@ func (p *ImagePage) Base() func(w http.ResponseWriter, r *http.Request) {
 		p.Heading = p.net.heading()
 		template := "blank"
 		if d, ok := p.net.Data[p.Dset]; ok {
-			template = "images"
+			template = "frame"
+			p.Frame = "/grid/" + p.Dset
 			p.Dropdown = []Link{{Name: "all classes", Url: base + "0"}}
 			for i, class := range d.Classes() {
 				p.Dropdown = append(p.Dropdown, Link{Name: class, Url: base + strconv.Itoa(i+1), Selected: i+1 == p.Class})

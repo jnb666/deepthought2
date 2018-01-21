@@ -66,6 +66,7 @@ type Layer struct {
 	inShape        []int
 	outShape       []int
 	filtShape      []int
+	biasShape      []int
 	name           string
 }
 
@@ -128,6 +129,8 @@ func (l *Layer) OutShape() []int { return l.outShape }
 
 func (l *Layer) FilterShape() []int { return l.filtShape }
 
+func (l *Layer) BiasShape() []int { return l.biasShape }
+
 func (l *Layer) Type() string { return l.name }
 
 func (l *Layer) Worksize() int {
@@ -159,6 +162,7 @@ func Convolution(attr *Attr, n, c, h, w, nFeats, filtSize, stride int, padding, 
 		chk(C.dnnConvolutionCreateForward_F32(&l.Fwd.h, attr.h, C.dnnAlgorithmConvolutionDirect,
 			4, &inSize[0], &outSize[0], &filter[0], &cstride[0], &offset[0], btype))
 	} else {
+		l.biasShape = []int{1, 1, c, 1}
 		l.BBias = NewPrimitive()
 		chk(C.dnnConvolutionCreateForwardBias_F32(&l.Fwd.h, attr.h, C.dnnAlgorithmConvolutionDirect,
 			4, &inSize[0], &outSize[0], &filter[0], &cstride[0], &offset[0], btype))
@@ -200,7 +204,7 @@ func Pooling(attr *Attr, n, c, h, w, size, stride int, padding, average bool) *L
 // Setup new batch normalisation layer
 func BatchNorm(attr *Attr, n, c, h, w int, epsilon float64) *Layer {
 	l := NewLayer("batchNorm", []int{w, h, c, n}, []int{w, h, c, n})
-	l.filtShape = []int{1, 1, c, 1}
+	l.filtShape = []int{c, 2}
 	in := NewLayout(l.inShape)
 	eps := C.float(epsilon)
 	chk(C.dnnBatchNormalizationCreateForward_v2_F32(&l.Fwd.h, attr.h, in.h, eps, C.dnnUseScaleShift))

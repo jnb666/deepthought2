@@ -57,10 +57,14 @@ func getInputs(t *testing.T, q num.Queue) (input, W, B num.Array) {
 
 func setupNetwork(q num.Queue, W, B num.Array) (l1, l2 Layer, dW, dB num.Array) {
 	lin := &linear{Linear: Linear{Nout: nOut}}
-	lin.Init(q, []int{nIn, batch}, 0, nil)
-	lin.SetParams(q, W, B)
+	lin.Init(q, []int{nIn, batch}, 0, false, nil)
+	layerW, layerB := lin.Params()
+	q.Call(
+		num.Copy(W, layerW),
+		num.Copy(B, layerB),
+	)
 	relu := &activation{Activation: Activation{Atype: "relu"}}
-	relu.Init(q, []int{nOut, batch}, 1, nil)
+	relu.Init(q, []int{nOut, batch}, 1, false, nil)
 	return lin, relu, lin.dw, lin.db
 }
 

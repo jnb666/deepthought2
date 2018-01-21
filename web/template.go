@@ -22,6 +22,7 @@ type Templates struct {
 	Dropdown []Link
 	Toplevel bool
 	Heading  template.HTML
+	Frame    string
 	Error    string
 }
 
@@ -51,6 +52,15 @@ func (t *Templates) Select(url string) *Templates {
 		t.Menu[i].Selected = key.Url == url
 	}
 	return t
+}
+
+func (t *Templates) MenuSelected(name string) bool {
+	for _, opt := range t.Menu {
+		if opt.Name == name {
+			return opt.Selected
+		}
+	}
+	return false
 }
 
 func (t *Templates) AddMenuItem(url, name string) *Templates {

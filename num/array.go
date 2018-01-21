@@ -241,3 +241,12 @@ func Bytes(arr ...Array) (bytes int) {
 	}
 	return bytes
 }
+
+// Release one or more arrays
+func Release(arr ...Array) {
+	for _, a := range arr {
+		if a != nil {
+			a.Release()
+		}
+	}
+}

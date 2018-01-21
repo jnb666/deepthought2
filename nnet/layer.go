@@ -11,7 +11,7 @@ import (
 
 // Layer interface type represents one layer of the neural net.
 type Layer interface {
-	Init(q num.Queue, inShape []int, layerId int, rng *rand.Rand) int
+	Init(q num.Queue, inShape []int, layerId int, momentum bool, rng *rand.Rand) int
 	InShape() []int
 	OutShape() []int
 	Fprop(q num.Queue, in, work num.Array, trainMode bool) num.Array
@@ -23,25 +23,20 @@ type Layer interface {
 	Release()
 }
 
-// UpdateLayer has a method which is called to update the paramters after each batch
-type UpdateLayer interface {
-	Layer
-	UpdateParams(q num.Queue, learningRate, weightDecay float32)
-	Copy(q num.Queue, layer Layer)
-}
-
 // ParamLayer is a layer with weight and bias parameters
 type ParamLayer interface {
-	UpdateLayer
+	Layer
 	InitParams(q num.Queue, fn func() float64, bias float32)
-	Params() (W, B num.Array)
-	ParamGrads() (dW, dB num.Array)
-	SetParams(q num.Queue, W, B num.Array)
+	Params() (W, B, dW, dB num.Array)
+	ParamVelocity() (vW, vB, wWPrev, vBPrev num.Array)
+	Copy(q num.Queue, layer Layer)
+	FilterShape() []int
+	BiasShape() []int
 }
 
 // BatchNormLayer stores the scale, shift, running mean and variance
 type BatchNormLayer interface {
-	UpdateLayer
+	ParamLayer
 	Stats() (w, b, runMean, runVar num.Array)
 }
 
@@ -255,16 +250,19 @@ func (l *linear) InShape() []int { return l.inShape }
 
 func (l *linear) OutShape() []int { return []int{l.Nout, l.inShape[1]} }
 
-func (l *linear) Init(q num.Queue, inShape []int, layerId int, rng *rand.Rand) int {
+func (l *linear) FilterShape() []int { return []int{l.inShape[0], l.Nout} }
+
+func (l *linear) BiasShape() []int { return []int{l.Nout} }
+
+func (l *linear) Init(q num.Queue, inShape []int, layerId int, momentum bool, rng *rand.Rand) int {
 	if len(inShape) != 2 {
 		panic("Linear: expect 2 dimensional input")
 	}
-	nBatch, nIn := inShape[1], inShape[0]
 	l.layerId = layerId
 	l.inShape = inShape
-	l.paramBase = newParams(q, []int{nIn, l.Nout}, []int{l.Nout}, 1/float32(nBatch))
-	l.dst = q.NewArray(num.Float32, l.Nout, nBatch)
-	l.temp1 = q.NewArray(num.Float32, nBatch, l.Nout)
+	l.paramBase = newParams(q, l.FilterShape(), l.BiasShape(), momentum)
+	l.dst = q.NewArray(num.Float32, l.Nout, inShape[1])
+	l.temp1 = q.NewArray(num.Float32, inShape[1], l.Nout)
 	return 0
 }
 
@@ -274,17 +272,7 @@ func (l *linear) Memory() (weights, outputs, temp int) {
 
 func (l *linear) Release() {
 	l.paramBase.release()
-	l.dst.Release()
-	l.temp1.Release()
-	if l.dsrc != nil {
-		l.dsrc.Release()
-	}
-	if l.temp2 != nil {
-		l.temp2.Release()
-	}
-	if l.ones != nil {
-		l.ones.Release()
-	}
+	num.Release(l.dst, l.dsrc, l.temp1, l.temp2, l.ones)
 }
 
 func (l *linear) Output() num.Array { return l.dst }
@@ -326,25 +314,25 @@ func (l *linear) Bprop(q num.Queue, grad, work num.Array) num.Array {
 type convDNN struct {
 	Conv
 	paramBase
-	num.Layer
+	num.ParamLayer
 }
 
-func (l *convDNN) Init(q num.Queue, inShape []int, layerId int, rng *rand.Rand) int {
+func (l *convDNN) Init(q num.Queue, inShape []int, layerId int, momentum bool, rng *rand.Rand) int {
 	layer, workSize := num.NewConvLayer(q, layerId, inShape, l.Nfeats, l.Size, l.Stride, l.Pad, l.NoBias)
-	l.paramBase = newParams(q, layer.FilterShape(), []int{l.Nfeats}, 1/float32(inShape[3]))
+	l.paramBase = newParams(q, layer.FilterShape(), layer.BiasShape(), momentum)
 	layer.SetParamData(l.w, l.b, l.dw, l.db)
-	l.Layer = layer
+	l.ParamLayer = layer
 	return workSize
 }
 
 func (l *convDNN) Memory() (weights, outputs, temp int) {
-	_, outputs, temp = l.Layer.Memory()
+	_, outputs, temp = l.ParamLayer.Memory()
 	return l.paramBase.memory(), outputs, temp
 }
 
 func (l *convDNN) Release() {
 	l.paramBase.release()
-	l.Layer.Release()
+	l.ParamLayer.Release()
 }
 
 // pool layer implentation
@@ -353,7 +341,7 @@ type poolDNN struct {
 	num.Layer
 }
 
-func (l *poolDNN) Init(q num.Queue, inShape []int, layerId int, rng *rand.Rand) int {
+func (l *poolDNN) Init(q num.Queue, inShape []int, layerId int, momentum bool, rng *rand.Rand) int {
 	l.Layer = num.NewPoolLayer(q, inShape, l.Size, l.Stride, l.Pad, l.Average)
 	return 0
 }
@@ -365,7 +353,7 @@ type activation struct {
 	loss num.Array
 }
 
-func (l *activation) Init(q num.Queue, inShape []int, layerId int, rng *rand.Rand) int {
+func (l *activation) Init(q num.Queue, inShape []int, layerId int, momentum bool, rng *rand.Rand) int {
 	l.Layer = num.NewActivationLayer(q, l.Atype, inShape)
 	return 0
 }
@@ -377,9 +365,7 @@ func (l *activation) Memory() (weights, outputs, temp int) {
 
 func (l *activation) Release() {
 	l.Layer.Release()
-	if l.loss != nil {
-		l.loss.Release()
-	}
+	num.Release(l.loss)
 }
 
 func (l *activation) Loss(q num.Queue, yOneHot, yPred num.Array) num.Array {
@@ -400,7 +386,7 @@ type dropout struct {
 	num.Layer
 }
 
-func (l *dropout) Init(q num.Queue, inShape []int, layerId int, rng *rand.Rand) int {
+func (l *dropout) Init(q num.Queue, inShape []int, layerId int, momentum bool, rng *rand.Rand) int {
 	l.Layer = num.NewDropoutLayer(q, l.Ratio, inShape, rng.Int63())
 	return 0
 }
@@ -408,24 +394,28 @@ func (l *dropout) Init(q num.Queue, inShape []int, layerId int, rng *rand.Rand) 
 // batch normalisation layer implementation
 type batchNorm struct {
 	BatchNorm
+	paramBase
 	num.BatchNormLayer
-	scale float32
 }
 
-func (l *batchNorm) Init(q num.Queue, inShape []int, layerId int, rng *rand.Rand) int {
-	l.scale = 1 / float32(inShape[3])
-	l.BatchNormLayer = num.NewBatchNormLayer(q, l.AvgFactor, l.Epsilon, inShape)
+func (l *batchNorm) Init(q num.Queue, inShape []int, layerId int, momentum bool, rng *rand.Rand) int {
+	layer := num.NewBatchNormLayer(q, l.AvgFactor, l.Epsilon, inShape)
+	l.paramBase = newParams(q, layer.FilterShape(), layer.BiasShape(), momentum)
+	layer.SetParamData(l.w, l.b, l.dw, l.db)
+	l.BatchNormLayer = layer
 	return 0
 }
 
-func (l *batchNorm) UpdateParams(q num.Queue, learningRate, weightDecay float32) {
-	l.UpdateStats(q, -learningRate*l.scale)
+func (l *batchNorm) InitParams(q num.Queue, fn func() float64, bias float32) {
+	l.BatchNormLayer.InitParams(q)
 }
 
 func (l *batchNorm) Copy(q num.Queue, layer Layer) {
 	if src, ok := layer.(*batchNorm); ok {
-		wSrc, bSrc, meanSrc, varSrc := src.Stats()
-		wDst, bDst, meanDst, varDst := l.Stats()
+		wSrc, bSrc, _, _ := src.Params()
+		meanSrc, varSrc := src.Stats()
+		wDst, bDst, _, _ := l.Params()
+		meanDst, varDst := l.Stats()
 		q.Call(
 			num.Copy(meanSrc, meanDst),
 			num.Copy(varSrc, varDst),
@@ -451,7 +441,7 @@ func (l *flatten) InShape() []int { return l.inShape }
 
 func (l *flatten) OutShape() []int { return l.outShape }
 
-func (l *flatten) Init(q num.Queue, inShape []int, layerId int, rng *rand.Rand) int {
+func (l *flatten) Init(q num.Queue, inShape []int, layerId int, momentum bool, rng *rand.Rand) int {
 	l.inShape = inShape
 	l.outShape = []int{num.Prod(l.inShape[:3]), l.inShape[3]}
 	return 0
@@ -479,45 +469,37 @@ func (l *flatten) Bprop(q num.Queue, grad, work num.Array) num.Array {
 
 // weight and bias parameters
 type paramBase struct {
-	w, b   num.Array
-	dw, db num.Array
-	scale  float32
+	w, b     num.Array
+	dw, db   num.Array
+	vw, vb   num.Array
+	vw2, vb2 num.Array
 }
 
-func newParams(q num.Queue, filterShape, biasShape []int, scale float32) paramBase {
-	return paramBase{
-		w:     q.NewArray(num.Float32, filterShape...),
-		b:     q.NewArray(num.Float32, biasShape...),
-		dw:    q.NewArray(num.Float32, filterShape...),
-		db:    q.NewArray(num.Float32, biasShape...),
-		scale: scale,
+func newParams(q num.Queue, filterShape, biasShape []int, momentum bool) paramBase {
+	var p paramBase
+	p.w = q.NewArray(num.Float32, filterShape...)
+	p.dw = q.NewArray(num.Float32, filterShape...)
+	if momentum {
+		p.vw = q.NewArray(num.Float32, filterShape...)
+		p.vw2 = q.NewArray(num.Float32, filterShape...)
 	}
+	if biasShape != nil {
+		p.b = q.NewArray(num.Float32, biasShape...)
+		p.db = q.NewArray(num.Float32, biasShape...)
+		if momentum {
+			p.vb = q.NewArray(num.Float32, biasShape...)
+			p.vb2 = q.NewArray(num.Float32, biasShape...)
+		}
+	}
+	return p
 }
 
-func (p paramBase) memory() int {
-	return num.Bytes(p.w, p.b, p.dw, p.db)
+func (p paramBase) Params() (w, b, dw, db num.Array) {
+	return p.w, p.b, p.dw, p.db
 }
 
-func (p paramBase) release() {
-	p.w.Release()
-	p.b.Release()
-	p.dw.Release()
-	p.db.Release()
-}
-
-func (p paramBase) Params() (W, B num.Array) {
-	return p.w, p.b
-}
-
-func (p paramBase) ParamGrads() (dW, dB num.Array) {
-	return p.dw, p.db
-}
-
-func (p paramBase) SetParams(q num.Queue, W, B num.Array) {
-	q.Call(
-		num.Copy(W, p.w),
-		num.Copy(B, p.b),
-	)
+func (p paramBase) ParamVelocity() (vw, vb, vw2, vb2 num.Array) {
+	return p.vw, p.vb, p.vw2, p.vb2
 }
 
 func (p paramBase) InitParams(q num.Queue, wInit func() float64, bias float32) {
@@ -525,29 +507,36 @@ func (p paramBase) InitParams(q num.Queue, wInit func() float64, bias float32) {
 	for i := range weights {
 		weights[i] = float32(wInit())
 	}
-	q.Call(
-		num.Write(p.w, weights),
-		num.Fill(p.b, bias),
-	)
+	q.Call(num.Write(p.w, weights))
+	if p.vw != nil {
+		q.Call(num.Fill(p.vw, 0))
+	}
+	if p.b != nil {
+		q.Call(num.Fill(p.b, bias))
+		if p.vb != nil {
+			q.Call(num.Fill(p.vb, 0))
+		}
+	}
 }
 
 func (p paramBase) Copy(q num.Queue, layer Layer) {
 	if l, ok := layer.(ParamLayer); ok {
-		W, B := l.Params()
-		p.SetParams(q, W, B)
+		W, B, _, _ := l.Params()
+		q.Call(num.Copy(W, p.w))
+		if B != nil {
+			q.Call(num.Copy(B, p.b))
+		}
 	} else {
 		panic(fmt.Errorf("invalid layer type for copy: %T", layer))
 	}
 }
 
-func (p paramBase) UpdateParams(q num.Queue, learningRate, weightDecay float32) {
-	if weightDecay != 0 {
-		q.Call(num.Axpy(-weightDecay/p.scale, p.w, p.dw))
-	}
-	q.Call(
-		num.Axpy(-learningRate*p.scale, p.dw, p.w),
-		num.Axpy(-learningRate*p.scale, p.db, p.b),
-	)
+func (p paramBase) memory() int {
+	return num.Bytes(p.w, p.b, p.dw, p.db, p.vw, p.vb)
+}
+
+func (p paramBase) release() {
+	num.Release(p.w, p.b, p.dw, p.db, p.vw, p.vb)
 }
 
 func marshal(v interface{}) []byte {

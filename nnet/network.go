@@ -87,9 +87,10 @@ type Network struct {
 	queue     num.Queue
 	classes   num.Array
 	diffs     num.Array
-	total     num.Array
 	batchErr  num.Array
+	totalErr  num.Array
 	batchLoss num.Array
+	totalLoss num.Array
 	inputGrad num.Array
 	inShape   []int
 	workSize  []int
@@ -105,7 +106,7 @@ func New(queue num.Queue, conf Config, batchSize int, inShape []int, rng *rand.R
 	n.workSize = make([]int, len(conf.Layers))
 	for i, l := range conf.Layers {
 		layer := l.Unmarshal()
-		n.workSize[i] = layer.Init(queue, shape, layerId, rng)
+		n.workSize[i] = layer.Init(queue, shape, layerId, conf.Momentum != 0, rng)
 		n.Layers = append(n.Layers, layer)
 		shape = layer.OutShape()
 		if l.Type != "flatten" {
@@ -124,17 +125,7 @@ func (n *Network) Release() {
 	for _, layer := range n.Layers {
 		layer.Release()
 	}
-	n.classes.Release()
-	n.diffs.Release()
-	n.batchLoss.Release()
-	n.batchErr.Release()
-	n.total.Release()
-	if n.WorkSpace != nil {
-		n.WorkSpace.Release()
-	}
-	if n.inputGrad != nil {
-		n.inputGrad.Release()
-	}
+	num.Release(n.classes, n.diffs, n.batchLoss, n.batchErr, n.totalLoss, n.totalErr, n.WorkSpace, n.inputGrad)
 }
 
 // Initialise network weights using a linear or normal distribution.
@@ -142,8 +133,7 @@ func (n *Network) Release() {
 func (n *Network) InitWeights(rng *rand.Rand) {
 	for i, layer := range n.Layers {
 		if l, ok := layer.(ParamLayer); ok {
-			W, _ := l.Params()
-			dims := W.Dims()
+			dims := l.FilterShape()
 			if n.DebugLevel >= 1 {
 				fmt.Printf("layer %d: %s %v set weights init=%s bias=%.3g\n", i, l.Type(), dims, n.WeightInit, n.Bias)
 			}
@@ -158,7 +148,7 @@ func (n *Network) InitWeights(rng *rand.Rand) {
 // Copy weights and bias arrays to destination net
 func (n *Network) CopyTo(net *Network, sync bool) {
 	for i, layer := range n.Layers {
-		if l, ok := net.Layers[i].(UpdateLayer); ok {
+		if l, ok := net.Layers[i].(ParamLayer); ok {
 			l.Copy(n.queue, layer)
 		}
 	}
@@ -184,43 +174,69 @@ func (n *Network) Fprop(input num.Array, trainMode bool) num.Array {
 	return pred
 }
 
-// Predict output given input data
-func (n *Network) Predict(input, classes num.Array) num.Array {
-	yPred := n.Fprop(input, false)
+// get the loss for this batch
+func (n *Network) calcBatchLoss(batch int, yOneHot, yPred num.Array) {
+	q := n.queue
+	losses := n.OutLayer().Loss(q, yOneHot, yPred)
 	if n.DebugLevel >= 2 {
-		fmt.Printf("yPred\n%s", yPred.String(n.queue))
+		fmt.Printf("loss:\n%s", losses.String(q))
 	}
-	n.queue.Call(num.Unhot(yPred, classes))
-	return yPred
+	q.Call(
+		num.Sum(losses, n.batchLoss),
+		num.Axpy(1, n.batchLoss, n.totalLoss),
+	)
+}
+
+// get the error for this batch, if pred is non-null then save predicted values
+func (n *Network) calcBatchError(batch int, dset *Dataset, y, yPred num.Array, pred []int32) {
+	q := n.queue
+	q.Call(
+		num.Unhot(yPred, n.classes),
+		num.Neq(n.classes, y, n.diffs),
+		num.Sum(n.diffs, n.batchErr),
+		num.Axpy(1, n.batchErr, n.totalErr),
+	)
+	if n.DebugLevel >= 1 || (n.DebugLevel >= 1 && batch == 0) {
+		fmt.Printf("batch %d error =%s\n", batch, n.batchErr.String(q))
+		fmt.Println(y.String(q))
+		fmt.Println(n.classes.String(q))
+		fmt.Println(n.diffs.String(q))
+	}
+	if pred != nil {
+		start := batch * dset.BatchSize
+		end := start + dset.BatchSize
+		if end > dset.Samples {
+			end = dset.Samples
+		}
+		q.Call(num.Read(n.classes, pred[start:end]))
+	}
 }
 
 // Calculate the error from the predicted versus actual values
 // if pred slice is not nil then also return the predicted output classes.
 func (n *Network) Error(dset *Dataset, pred []int32) float64 {
-	n.queue.Call(num.Fill(n.total, 0))
+	dset.NextEpoch()
+	n.queue.Call(num.Fill(n.totalErr, 0))
+	var p []int32
+	if pred != nil {
+		p = make([]int32, dset.Samples)
+	}
 	for batch := 0; batch < dset.Batches; batch++ {
 		n.queue.Finish()
 		x, y, _ := dset.NextBatch()
-		n.Predict(x, n.classes)
-		n.queue.Call(
-			num.Neq(n.classes, y, n.diffs),
-			num.Sum(n.diffs, n.batchErr),
-			num.Axpy(1, n.batchErr, n.total),
-		)
-		if pred != nil {
-			start := batch * dset.BatchSize
-			end := start + y.Dims()[0]
-			n.queue.Call(num.Read(n.classes, pred[start:end]))
+		yPred := n.Fprop(x, false)
+		if n.DebugLevel >= 2 {
+			fmt.Printf("yPred\n%s", yPred.String(n.queue))
 		}
-		if n.DebugLevel >= 2 || (n.DebugLevel >= 1 && batch == 0) {
-			fmt.Printf("batch %d error =%s\n", batch, n.batchErr.String(n.queue))
-			fmt.Println(y.String(n.queue))
-			fmt.Println(n.classes.String(n.queue))
-			fmt.Println(n.diffs.String(n.queue))
-		}
+		n.calcBatchError(batch, dset, y, yPred, p)
 	}
 	err := []float32{0}
-	n.queue.Call(num.Read(n.total, err)).Finish()
+	n.queue.Call(num.Read(n.totalErr, err)).Finish()
+	if pred != nil {
+		for i, ix := range dset.indexes {
+			pred[ix] = p[i]
+		}
+	}
 	return float64(err[0]) / float64(dset.Samples)
 }
 
@@ -238,34 +254,49 @@ func (n *Network) String() string {
 	return s
 }
 
-// display profile of allocated memory
+// Get total allocated memory in bytes
+func (n *Network) Memory() int {
+	_, total := n.meminfo()
+	return total[3]
+}
+
+// Print profile of allocated memory
 func (n *Network) MemoryProfile() string {
-	s := fmt.Sprintf("== memory profile [kb] ==           weights  outputs     temp    total (%d)\n",
+	mem, total := n.meminfo()
+	s := fmt.Sprintf("== memory profile ==                weights  outputs     temp    total (%d)\n",
 		n.inShape[len(n.inShape)-1])
-	var r, total [4]int
 	for i, layer := range n.Layers {
+		if mem[i][3] > 0 {
+			s += fmt.Sprintf("%2d: %-30s %8s %8s %8s %8s\n", i, layer.ToString(), FormatBytes(mem[i][0]),
+				FormatBytes(mem[i][1]), FormatBytes(mem[i][2]+n.workSize[i]), FormatBytes(mem[i][3]+n.workSize[i]))
+		}
+	}
+	s += fmt.Sprintf("--- TOTAL --- %20s %8s %8s %8s %8s\n", "", FormatBytes(total[0]), FormatBytes(total[1]),
+		FormatBytes(total[2]), FormatBytes(total[3]))
+	return s
+}
+
+func (n *Network) meminfo() (mem [][4]int, total [4]int) {
+	var r [4]int
+	for _, layer := range n.Layers {
 		r[0], r[1], r[2] = layer.Memory()
 		r[3] = r[0] + r[1] + r[2]
 		for i, val := range r {
 			total[i] += val
 		}
-		if r[3] > 0 {
-			s += fmt.Sprintf("%2d: %-30s %8d %8d %8d %8d\n", i, layer.ToString(), kb(r[0]), kb(r[1]),
-				kb(r[2]+n.workSize[i]), kb(r[3]+n.workSize[i]))
-		}
+		mem = append(mem, r)
 	}
 	totalWork := max(n.workSize)
 	total[2] += totalWork
 	total[3] += totalWork
-	s += fmt.Sprintf("--- TOTAL --- %20s %8d %8d %8d %8d\n", "", kb(total[0]), kb(total[1]), kb(total[2]), kb(total[3]))
-	return s
+	return
 }
 
 // Print network weights
 func (n *Network) PrintWeights() {
 	for i, layer := range n.Layers {
 		if l, ok := layer.(ParamLayer); ok {
-			W, B := l.Params()
+			W, B, _, _ := l.Params()
 			fmt.Printf("== Layer %d weights ==\n%s %s\n", i, W.String(n.queue), B.String(n.queue))
 		}
 	}
@@ -275,8 +306,9 @@ func (n *Network) allocArrays(size int) {
 	n.classes = n.queue.NewArray(num.Int32, size)
 	n.diffs = n.queue.NewArray(num.Int32, size)
 	n.batchLoss = n.queue.NewArray(num.Float32)
+	n.totalLoss = n.queue.NewArray(num.Float32)
 	n.batchErr = n.queue.NewArray(num.Float32)
-	n.total = n.queue.NewArray(num.Float32)
+	n.totalErr = n.queue.NewArray(num.Float32)
 }
 
 // Set random number seed, or random seed if seed <= 0
@@ -297,11 +329,15 @@ func CheckErr(err error) {
 	}
 }
 
-func kb(n int) int {
+// Convert no. of bytes to string
+func FormatBytes(n int) string {
 	if n <= 0 {
-		return 0
+		return ""
 	}
-	return 1 + (n-1)/1024
+	if n < 1024*1024 {
+		return fmt.Sprintf("%dK", 1+(n-1)/1024)
+	}
+	return fmt.Sprintf("%dM", 1+(n-1)/(1024*1024))
 }
 
 func max(arr []int) int {

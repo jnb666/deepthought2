@@ -189,7 +189,7 @@ body, html {
 }
 
 .error-text {
-  color: red;
+  color: yellow;
   font-weight: bold;
 }
 

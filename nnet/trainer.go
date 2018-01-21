@@ -72,17 +72,17 @@ func (s Stats) String(headers []string, done bool) string {
 }
 
 func FormatDuration(d time.Duration) string {
-	format := "%.2fs"
-	if d >= 60*time.Second {
-		format = "%.0fs"
+	if d >= time.Minute {
+		return d.Round(time.Second).String()
 	}
-	return fmt.Sprintf(format, d.Seconds())
+	return fmt.Sprintf("%.2fs", d.Seconds())
 }
 
 // Tester interface to evaluate the performance after each epoch, Test method returns true if training should stop.
 type Tester interface {
-	Test(net *Network, epoch int, loss float64, start time.Time) bool
+	Test(net *Network, epoch int, loss, trainError float64, start time.Time) bool
 	Epilogue() bool
+	Memory() int
 	MemoryProfile() string
 	Release()
 }
@@ -112,6 +112,13 @@ func (t *TestBase) Release() {
 	}
 }
 
+func (t *TestBase) Memory() int {
+	if t.Net == nil {
+		return 0
+	}
+	return t.Net.Memory()
+}
+
 func (t *TestBase) MemoryProfile() string {
 	if t.Net == nil {
 		return ""
@@ -130,25 +137,28 @@ func (t *TestBase) Init(queue num.Queue, conf Config, data map[string]Data, rng 
 		fmt.Printf("init tester: samples=%d batch size=%d\n", opts.MaxSamples, opts.BatchSize)
 	}
 	for key, d := range data {
-		if conf.DebugLevel >= 1 {
-			fmt.Println("dataset =>", key)
+		if key != "train" {
+			if conf.DebugLevel >= 1 {
+				fmt.Println("dataset =>", key)
+			}
+			t.Data[key] = NewDataset(queue.Dev(), d, opts, rng)
+			t.Data[key].Profiling(conf.Profile, "tester:"+key)
 		}
-		t.Data[key] = NewDataset(queue.Dev(), d, opts, rng)
-		t.Data[key].Profiling(conf.Profile, "tester:"+key)
 	}
 	if opts.BatchSize != conf.TrainBatch {
-		t.Net = New(queue, conf, t.Data["train"].BatchSize, t.Data["train"].Shape(), rng)
+		t.Net = New(queue, conf, t.Data["test"].BatchSize, t.Data["test"].Shape(), rng)
 		fmt.Println("allocate test network: input shape ", t.Net.inShape)
 	}
 	return t
 }
 
 // Generate the predicted results when test is next run.
-func (t *TestBase) Predict() *TestBase {
+func (t *TestBase) Predict(train *Dataset) *TestBase {
 	t.Pred = make(map[string][]int32)
 	for key, dset := range t.Data {
 		t.Pred[key] = make([]int32, dset.Samples)
 	}
+	t.Pred["train"] = make([]int32, train.Samples)
 	return t
 }
 
@@ -159,10 +169,10 @@ func (t *TestBase) Reset() {
 }
 
 // Test performance of the network, called from the Train function on completion of each epoch.
-func (t *TestBase) Test(net *Network, epoch int, loss float64, start time.Time) bool {
+func (t *TestBase) Test(net *Network, epoch int, loss, trainError float64, start time.Time) bool {
 	s := Stats{
 		Epoch:     epoch,
-		Values:    []float64{loss},
+		Values:    []float64{loss, trainError},
 		BestSince: -1,
 		TrainTime: time.Since(start),
 	}
@@ -211,12 +221,12 @@ func (t *TestBase) Test(net *Network, epoch int, loss float64, start time.Time) 
 	}
 	t.Stats = append(t.Stats, s)
 	done := false
-	if epoch >= net.MaxEpoch || loss <= net.MinLoss {
+	if epoch >= net.MaxEpoch || loss <= net.MinLoss || (net.MaxSeconds > 0 && int(s.Elapsed.Seconds()) > net.MaxSeconds) {
 		done = true
 	} else if net.StopAfter > 0 && s.BestSince >= net.StopAfter && epoch > 10 {
 		// auto stopping based on performance on validation set
 		if net.ExtraEpochs > 0 {
-			// rewind data and perform additional training on undistorted training samples
+			// perform additional training on undistorted training samples
 			t.epilogue = true
 			net.StopAfter = 0
 			net.MaxEpoch = epoch + net.ExtraEpochs
@@ -240,8 +250,8 @@ func NewTestLogger(queue num.Queue, conf Config, data map[string]Data, rng *rand
 	return testLogger{TestBase: NewTestBase().Init(queue, conf, data, rng)}
 }
 
-func (t testLogger) Test(net *Network, epoch int, loss float64, start time.Time) bool {
-	done := t.TestBase.Test(net, epoch, loss, start)
+func (t testLogger) Test(net *Network, epoch int, loss, trainErr float64, start time.Time) bool {
+	done := t.TestBase.Test(net, epoch, loss, trainErr, start)
 	s := t.Stats[len(t.Stats)-1]
 	if done || net.LogEvery == 0 || epoch%net.LogEvery == 0 {
 		fmt.Println(s.String(t.Headers, done))
@@ -251,7 +261,6 @@ func (t testLogger) Test(net *Network, epoch int, loss float64, start time.Time)
 
 // Train the network on the given training set by updating the weights
 func Train(net *Network, dset *Dataset, test Tester) {
-	acc := net.queue.NewArray(num.Float32)
 	done := false
 	epilogue := false
 	for epoch := 1; epoch <= net.MaxEpoch && !done; epoch++ {
@@ -261,8 +270,8 @@ func Train(net *Network, dset *Dataset, test Tester) {
 			epilogue = true
 		}
 		start := time.Now()
-		loss := TrainEpoch(net, dset, acc)
-		done = test.Test(net, epoch, loss, start)
+		loss, trainError := TrainEpoch(net, dset, epoch, nil)
+		done = test.Test(net, epoch, loss, trainError, start)
 	}
 	if epilogue {
 		dset.SetTrans(net.Normalise, net.Distort)
@@ -270,7 +279,7 @@ func Train(net *Network, dset *Dataset, test Tester) {
 }
 
 // Perform one training epoch on dataset, returns the current loss prior to updating the weights.
-func TrainEpoch(net *Network, dset *Dataset, acc num.Array) float64 {
+func TrainEpoch(net *Network, dset *Dataset, epoch int, pred []int32) (trainLoss, trainError float64) {
 	q := net.queue
 	if net.inputGrad == nil {
 		net.inputGrad = q.NewArray(num.Float32, dset.ClassSize(), dset.BatchSize)
@@ -278,29 +287,37 @@ func TrainEpoch(net *Network, dset *Dataset, acc num.Array) float64 {
 	if net.Shuffle {
 		dset.Shuffle()
 	}
-	weightDecay := float32(net.Eta*net.Lambda) / float32(dset.Samples)
-	q.Call(num.Fill(acc, 0))
+	learningRate, weightDecay := net.OptimiserParams(epoch, dset.Samples)
+	optimiser := SGD{
+		LearningRate: float32(learningRate / float64(dset.BatchSize)),
+		WeightDecay:  float32(weightDecay),
+		Momentum:     float32(net.Momentum),
+		Nesterov:     net.Nesterov,
+	}
+	q.Call(
+		num.Fill(net.totalLoss, 0),
+		num.Fill(net.totalErr, 0),
+	)
+	var p []int32
+	if pred != nil {
+		p = make([]int32, dset.Samples)
+	}
 	dset.NextEpoch()
 	for batch := 0; batch < dset.Batches; batch++ {
 		if net.DebugLevel >= 2 || (net.DebugLevel == 1 && batch == 0) {
 			fmt.Printf("== train batch %d ==\n", batch)
 		}
 		q.Finish()
-		x, _, yOneHot := dset.NextBatch()
+		x, y, yOneHot := dset.NextBatch()
+		// forward propagation
 		yPred := net.Fprop(x, true)
 		if net.DebugLevel >= 2 {
 			fmt.Printf("yOneHot:\n%s", yOneHot.String(q))
 			fmt.Printf("yPred:\n%s", yPred.String(q))
 		}
-		// sum average loss over batches
-		losses := net.OutLayer().Loss(q, yOneHot, yPred)
-		if net.DebugLevel >= 2 {
-			fmt.Printf("loss:\n%s", losses.String(q))
-		}
-		q.Call(
-			num.Sum(losses, net.batchLoss),
-			num.Axpy(1, net.batchLoss, acc),
-		)
+		// sum average loss and error over batches
+		net.calcBatchLoss(batch, yOneHot, yPred)
+		net.calcBatchError(batch, dset, y, yPred, p)
 		// get difference at output
 		q.Call(
 			num.Copy(yPred, net.inputGrad),
@@ -320,17 +337,71 @@ func TrainEpoch(net *Network, dset *Dataset, acc num.Array) float64 {
 		}
 		// update weights
 		for _, layer := range net.Layers {
-			if l, ok := layer.(UpdateLayer); ok {
-				l.UpdateParams(q, float32(net.Eta), weightDecay)
+			if l, ok := layer.(ParamLayer); ok {
+				W, B, dW, dB := l.Params()
+				vW, vB, vWPrev, vBPrev := l.ParamVelocity()
+				optimiser.Update(q, weightDecay != 0, W, dW, vW, vWPrev)
+				if B != nil {
+					optimiser.Update(q, false, B, dB, vB, vBPrev)
+				}
 			}
 		}
 		if net.DebugLevel >= 2 || (batch == dset.Batches-1 && net.DebugLevel >= 1) {
 			net.PrintWeights()
 		}
 	}
-	lossVal := make([]float32, 1)
-	q.Call(num.Read(acc, lossVal)).Finish()
-	return float64(lossVal[0] / float32(dset.Samples))
+	loss := []float32{0}
+	err := []float32{0}
+	q.Call(
+		num.Read(net.totalLoss, loss),
+		num.Read(net.totalErr, err),
+	).Finish()
+	if pred != nil {
+		for i, ix := range dset.indexes {
+			pred[ix] = p[i]
+		}
+	}
+	return float64(loss[0]) / float64(dset.Samples), float64(err[0]) / float64(dset.Samples)
+}
+
+// Optimiser updates the weights
+type Optimiser interface {
+	Update(q num.Queue, decay bool, x, dx, v, vPrev num.Array)
+}
+
+// Vanilla stockastic gradient descent
+type SGD struct {
+	LearningRate float32
+	WeightDecay  float32
+	Momentum     float32
+	Nesterov     bool
+}
+
+func (o SGD) Update(q num.Queue, decay bool, x, dx, v, vPrev num.Array) {
+	q.Call(num.Scale(-o.LearningRate, dx))
+	if decay {
+		q.Call(num.Axpy(-o.WeightDecay, x, dx))
+	}
+	switch {
+	case o.Momentum != 0 && o.Nesterov:
+		// v = dx + mom*v; x += -mom*vPrev + (1 + mom)*v
+		q.Call(
+			num.Copy(v, vPrev),
+			num.Scale(o.Momentum, v),
+			num.Axpy(1, dx, v),
+			num.Axpy(1+o.Momentum, v, x),
+			num.Axpy(-o.Momentum, vPrev, x),
+		)
+	case o.Momentum != 0 && !o.Nesterov:
+		// v = mom*v + dx; x += v
+		q.Call(
+			num.Scale(o.Momentum, v),
+			num.Axpy(1, dx, v),
+			num.Axpy(1, v, x),
+		)
+	default:
+		q.Call(num.Axpy(1, dx, x))
+	}
 }
 
 func min(a, b int) int {

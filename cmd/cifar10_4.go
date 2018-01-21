@@ -10,10 +10,11 @@ func main() {
 		DataSet:    "cifar10",
 		Eta:        0.05,
 		Lambda:     0.5,
-		TrainRuns:  5,
-		MaxEpoch:   50,
+		MaxEpoch:   100,
+		MaxSeconds: 180,
 		TrainBatch: 40,
 		Shuffle:    true,
+		Distort:    true,
 		UseGPU:     true,
 		Normalise:  true,
 		WeightInit: nnet.GlorotUniform,
@@ -39,11 +40,5 @@ func main() {
 	)
 	fmt.Println(conf)
 	err := conf.Save("cifar10_4.conf")
-	nnet.CheckErr(err)
-
-	// with image distortion
-	conf.Distort = true
-	conf.MaxEpoch = 100
-	err = conf.Save("cifar10_4d.conf")
 	nnet.CheckErr(err)
 }

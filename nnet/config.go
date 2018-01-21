@@ -3,6 +3,7 @@ package nnet
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path"
 	"reflect"
@@ -19,29 +20,34 @@ type OptionList interface {
 
 // Training configuration settings
 type Config struct {
-	DataSet     string
-	Eta         float64
-	Lambda      float64
-	Bias        float64
-	WeightInit  InitType
-	Shuffle     bool
-	Normalise   bool
-	Distort     bool
-	TrainRuns   int
-	TrainBatch  int
-	TestBatch   int
-	MaxEpoch    int
-	MaxSamples  int
-	LogEvery    int
-	StopAfter   int
-	ExtraEpochs int
-	MinLoss     float64
-	RandSeed    int64
-	DebugLevel  int
-	UseGPU      bool
-	Profile     bool
-	MemProfile  bool
-	Layers      []LayerConfig
+	DataSet      string
+	Eta          float64
+	EtaDecay     float64
+	EtaDecayStep int
+	Lambda       float64
+	Momentum     float64
+	Nesterov     bool
+	Bias         float64
+	WeightInit   InitType
+	Shuffle      bool
+	Normalise    bool
+	Distort      bool
+	TrainRuns    int
+	TrainBatch   int
+	TestBatch    int
+	MaxEpoch     int
+	MaxSeconds   int
+	MaxSamples   int
+	LogEvery     int
+	StopAfter    int
+	ExtraEpochs  int
+	MinLoss      float64
+	RandSeed     int64
+	DebugLevel   int
+	UseGPU       bool
+	Profile      bool
+	MemProfile   bool
+	Layers       []LayerConfig
 }
 
 // Load network from json file under DataDir
@@ -72,6 +78,18 @@ func (c Config) DatasetConfig(test bool) DatasetOptions {
 		opts.Distort = false
 	}
 	return opts
+}
+
+// Get learning rate and weight decay
+func (c Config) OptimiserParams(epoch, samples int) (learningRate, weightDecay float64) {
+	if c.EtaDecay > 0 && c.EtaDecayStep > 0 {
+		c.Eta *= math.Pow(c.EtaDecay, float64((epoch-1)/c.EtaDecayStep))
+	}
+	decay := c.Eta * c.Lambda / float64(samples)
+	if epoch == 1 || (c.EtaDecay > 0 && c.EtaDecayStep > 0 && (epoch-1)%c.EtaDecayStep == 0) {
+		fmt.Printf("learning rate=%.4g weight decay=%.4g\n", c.Eta, decay)
+	}
+	return c.Eta, decay
 }
 
 func (c Config) Copy() Config {

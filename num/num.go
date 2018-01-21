@@ -27,6 +27,7 @@ var opName = map[C.int]string{
 	C.NEQ:             "neq",
 	C.ONEHOT:          "onehot",
 	C.UNHOT:           "unhot",
+	C.SCALE:           "scale",
 	C.AXPY:            "axpy",
 	C.TRANS:           "trans",
 	C.SUM:             "sum",
@@ -153,6 +154,15 @@ func Unhot(x, y Array) Function {
 		panic("Unhot: invalid array shape")
 	}
 	return args(C.UNHOT, xdim[1], xdim[0], x.Data(), y.Data())
+}
+
+// Scale array elementwise
+func Scale(alpha float32, x Array) Function {
+	if x.Dtype() != Float32 {
+		panic("Axpy: dtype must by Float32")
+	}
+	n := Prod(x.Dims())
+	return args(C.SCALE, n, alpha, x.Data())
 }
 
 // Array addition and scaling: y <- alpha*x + y

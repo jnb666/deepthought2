@@ -8,11 +8,11 @@ import (
 func main() {
 	conf := nnet.Config{
 		DataSet:    "mnist",
-		Eta:        0.16,
+		Eta:        0.03,
 		Lambda:     0.1,
 		TrainRuns:  1,
 		MaxEpoch:   20,
-		TrainBatch: 64,
+		TrainBatch: 10,
 		TestBatch:  100,
 		Shuffle:    true,
 		UseGPU:     true,
@@ -38,8 +38,8 @@ func main() {
 	conf.DataSet = "mnist2"
 	conf.Distort = true
 	conf.MaxEpoch = 40
-	conf.StopAfter = 1
-	conf.ExtraEpochs = 2
+	conf.StopAfter = 2
+	conf.ExtraEpochs = 3
 	fmt.Println(conf)
 	err = conf.Save("mnist_cnn2d.conf")
 	nnet.CheckErr(err)

@@ -32,6 +32,7 @@ func main() {
 
 	t.AddMenuItem("", "view")
 	t.AddMenuItem("/train", "stats")
+	t.AddMenuItem("/history", "history")
 	for _, key := range nnet.DataTypes {
 		t.AddMenuItem("/images/"+key+"/", key+" images")
 	}
@@ -49,10 +50,12 @@ func main() {
 	r.PathPrefix("/static/").Handler(http.FileServer(http.Dir(web.AssetDir)))
 
 	trainPage := web.NewTrainPage(t.Clone(), net)
-	r.HandleFunc("/train", trainPage.Base())
+	r.HandleFunc("/train", trainPage.Base("/train", "/stats"))
+	r.HandleFunc("/history", trainPage.Base("/history", "/stats/history"))
 	r.HandleFunc("/train/{cmd:[a-z]+}", trainPage.Command())
 	r.HandleFunc("/train/set/{opt:[a-z]+}", trainPage.Setopt())
-	r.HandleFunc("/stats", trainPage.Stats())
+	r.HandleFunc("/stats", trainPage.Stats(false))
+	r.HandleFunc("/stats/history", trainPage.Stats(true))
 	r.HandleFunc("/stats/update", trainPage.Filter()).Methods("POST")
 	r.HandleFunc("/ws", trainPage.Websocket())
 

@@ -135,6 +135,25 @@ func TestTranspose(t *testing.T) {
 	}
 }
 
+func TestScale(t *testing.T) {
+	for _, dev := range devices {
+		q := dev.NewQueue()
+		x := dev.NewArray(Float32, 2, 3)
+		res := make([]float32, 6)
+		q.Call(
+			Write(x, []float32{1, 2, 3, 4, 5, 6}),
+			Scale(5, x),
+			Read(x, res),
+		).Finish()
+		t.Logf("scale x=\n%s", x.String(q))
+		expect := []float32{5, 10, 15, 20, 25, 30}
+		if !reflect.DeepEqual(res, expect) {
+			t.Error("got", res, "expect", expect)
+		}
+		q.Shutdown()
+	}
+}
+
 func TestAxpy(t *testing.T) {
 	for _, dev := range devices {
 		q := dev.NewQueue()

@@ -62,7 +62,8 @@ func (p *ViewPage) Base() func(w http.ResponseWriter, r *http.Request) {
 			p.SelectOptions([]string{"all"})
 		}
 		p.Heading = p.net.heading()
-		p.Exec(w, "view", p, true)
+		p.Frame = "/net/" + p.Page
+		p.Exec(w, "frame", p, true)
 	}
 }
 

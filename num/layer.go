@@ -27,15 +27,16 @@ type Layer interface {
 // Param layer also has weights and biases
 type ParamLayer interface {
 	Layer
+	BiasShape() []int
 	FilterShape() []int
 	SetParamData(W, B, dW, dB Array)
 }
 
 // BatchNorm layer has extra parameters
 type BatchNormLayer interface {
-	Layer
-	Stats() (w, b, runMean, runVar Array)
-	UpdateStats(q Queue, learningRate float32)
+	ParamLayer
+	InitParams(q Queue)
+	Stats() (runMean, runVar Array)
 }
 
 // Create new convolution layer, input shape is nBatch x depth x h x w
@@ -74,7 +75,10 @@ func (l *convCuda) Release() {
 }
 
 func (l *convCuda) SetParamData(W, B, dW, dB Array) {
-	l.w, l.b, l.dw, l.db = W.Data(), B.Data(), dW.Data(), dB.Data()
+	l.w, l.dw = W.Data(), dW.Data()
+	if l.BiasShape() != nil {
+		l.b, l.db = B.Data(), dB.Data()
+	}
 }
 
 func (l *convCuda) Fprop(que Queue, in, work Array, trainMode bool) Array {
@@ -375,25 +379,13 @@ func NewBatchNormLayer(q Queue, avgFactor, epsilon float64, shape []int) BatchNo
 		runMean:   q.NewArray(Float32, c),
 		runVar:    q.NewArray(Float32, c),
 	}
-	q.Call(Fill(p.runVar, 1))
-
 	switch d := q.Dev().(type) {
 	case cpuDevice:
-		p.w = d.NewArray(Float32, c, 2)
-		p.dw = d.NewArray(Float32, c, 2)
-		q.Call(WriteCol(p.w, 0, ones(c)))
-		l := &batchNormMkl{
+		return &batchNormMkl{
 			batchNorm: p,
 			layerMKL:  newLayerMKL(mkl.BatchNorm(d.attr, n, c, h, w, epsilon), true),
 		}
-		l.SetStatsData(l.w.Data(), l.dw.Data(), p.mean.Data(), p.variance.Data())
-		return l
 	case gpuDevice:
-		p.w = d.NewArray(Float32, c)
-		p.b = d.NewArray(Float32, c)
-		p.dw = d.NewArray(Float32, c)
-		p.db = d.NewArray(Float32, c)
-		q.Call(Fill(p.w, 1))
 		return &batchNormCuda{
 			batchNorm:      p,
 			BatchNormLayer: cuda.BatchNorm(n, c, h, w),
@@ -415,27 +407,35 @@ type batchNorm struct {
 	runVar    Array
 }
 
-func (l batchNorm) Stats() (w, b, runMean, runVar Array) {
-	return l.w, l.b, l.runMean, l.runVar
+func (l batchNorm) Stats() (runMean, runVar Array) {
+	return l.runMean, l.runVar
 }
 
-func (l batchNorm) memory() (weights, temp int) {
-	return Bytes(l.w, l.b, l.dw, l.db), Bytes(l.mean, l.variance, l.runMean, l.runVar)
+func (l batchNorm) memory() int {
+	return Bytes(l.mean, l.variance, l.runMean, l.runVar)
 }
 
 func (l batchNorm) release() {
-	for _, obj := range []Array{l.w, l.b, l.dw, l.db, l.mean, l.variance, l.runMean, l.runVar} {
-		if obj != nil {
-			obj.Release()
-			obj = nil
-		}
-	}
+	Release(l.mean, l.variance, l.runMean, l.runVar)
 }
 
 type batchNormCuda struct {
 	batchNorm
 	*cuda.BatchNormLayer
 	*layerBase
+}
+
+func (l *batchNormCuda) SetParamData(W, B, dW, dB Array) {
+	l.w, l.b, l.dw, l.db = W, B, dW, dB
+}
+
+func (l *batchNormCuda) InitParams(q Queue) {
+	q.Call(
+		Fill(l.w, 1),
+		Fill(l.b, 0),
+		Fill(l.runMean, 0),
+		Fill(l.runVar, 1),
+	)
 }
 
 func (l *batchNormCuda) Release() {
@@ -445,11 +445,8 @@ func (l *batchNormCuda) Release() {
 }
 
 func (l *batchNormCuda) Memory() (weights, output, temp int) {
-	weights, temp = l.memory()
-	return weights, Bytes(l.dst, l.dSrc), temp
+	return 0, Bytes(l.dst, l.dSrc), l.memory()
 }
-
-func (l *batchNormCuda) Output() Array { return l.dst }
 
 func (l *batchNormCuda) Fprop(q Queue, in, work Array, trainMode bool) Array {
 	f := C.CUDNN_EXECUTE + cuda.BnormFpropInfer
@@ -475,16 +472,23 @@ func (l *batchNormCuda) Bprop(q Queue, grad, work Array) Array {
 	return l.dSrc
 }
 
-func (l *batchNormCuda) UpdateStats(q Queue, scale float32) {
-	q.Call(
-		Axpy(scale, l.dw, l.w),
-		Axpy(scale, l.db, l.b),
-	)
-}
-
 type batchNormMkl struct {
 	batchNorm
 	layerMKL
+}
+
+func (l *batchNormMkl) SetParamData(W, B, dW, dB Array) {
+	l.w, l.dw = W, dW
+	l.SetStatsData(l.w.Data(), l.dw.Data(), l.mean.Data(), l.variance.Data())
+}
+
+func (l *batchNormMkl) InitParams(q Queue) {
+	q.Call(
+		Fill(l.w, 0),
+		WriteCol(l.w, 0, ones(l.w.Dims()[0])),
+		Fill(l.runMean, 0),
+		Fill(l.runVar, 1),
+	)
 }
 
 func (l *batchNormMkl) Release() {
@@ -493,18 +497,18 @@ func (l *batchNormMkl) Release() {
 }
 
 func (l *batchNormMkl) Memory() (weights, output, temp int) {
-	weights, temp = l.memory()
-	return weights, Bytes(l.dst, l.dSrc), temp
+	return 0, Bytes(l.dst, l.dSrc), l.memory()
 }
 
-func (l *batchNormMkl) UpdateStats(q Queue, scale float32) {
+func (l *batchNormMkl) Bprop(q Queue, grad, work Array) Array {
+	l.layerMKL.Bprop(q, grad, work)
 	q.Call(
-		Axpy(scale, l.dw, l.w),
 		Axpy(1-l.avgFactor, l.runMean, l.runMean),
 		Axpy(l.avgFactor, l.mean, l.runMean),
 		Axpy(1-l.avgFactor, l.runVar, l.runVar),
 		Axpy(l.avgFactor, l.variance, l.runVar),
 	)
+	return l.dSrc
 }
 
 // layer which wraps Intel MKL DNN layer
@@ -529,7 +533,11 @@ func (l layerMKL) Memory() (weights, output, temp int) {
 }
 
 func (l layerMKL) SetParamData(W, B, dW, dB Array) {
-	l.Layer.SetParams(W.Data(), B.Data(), dW.Data(), dB.Data())
+	if l.BiasShape() != nil {
+		l.Layer.SetParams(W.Data(), B.Data(), dW.Data(), dB.Data())
+	} else {
+		l.Layer.SetParams(W.Data(), nil, dW.Data(), nil)
+	}
 }
 
 func (l layerMKL) Output() Array { return l.dst }
@@ -591,19 +599,14 @@ func (l *layerBase) allocBprop(q Queue) {
 	}
 }
 
-func (l *layerBase) Output() Array {
-	return l.dst
-}
+func (l *layerBase) Output() Array { return l.dst }
 
 func (l *layerBase) Memory() (weights, output, temp int) {
 	return 0, Bytes(l.dst, l.dSrc), 0
 }
 
 func (l *layerBase) Release() {
-	l.dst.Release()
-	if l.dSrc != nil {
-		l.dSrc.Release()
-	}
+	Release(l.dst, l.dSrc)
 }
 
 func ones(n int) []float32 {

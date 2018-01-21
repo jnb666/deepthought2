@@ -122,6 +122,13 @@ func (l *ConvLayer) OutShape() []int { return l.Dst.Dims }
 
 func (l *ConvLayer) FilterShape() []int { return l.Filter.Dims }
 
+func (l *ConvLayer) BiasShape() []int {
+	if l.Bias != nil {
+		return l.Bias.Dims
+	}
+	return nil
+}
+
 func (l *ConvLayer) Ptr() unsafe.Pointer {
 	return unsafe.Pointer(l.desc)
 }
@@ -294,6 +301,10 @@ func BatchNorm(n, c, h, w int) *BatchNormLayer {
 func (l *BatchNormLayer) InShape() []int { return l.Src.Dims }
 
 func (l *BatchNormLayer) OutShape() []int { return l.Src.Dims }
+
+func (l *BatchNormLayer) FilterShape() []int { return l.Shape.Dims }
+
+func (l *BatchNormLayer) BiasShape() []int { return l.Shape.Dims }
 
 func (l *BatchNormLayer) Release() {
 	if !l.freed {

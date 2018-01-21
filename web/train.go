@@ -6,7 +6,6 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"github.com/jnb666/deepthought2/nnet"
-	"github.com/jnb666/deepthought2/stats"
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/palette"
 	"gonum.org/v1/plot/palette/moreland"
@@ -48,7 +47,7 @@ type HistoryRow struct {
 	Id      int
 	Params  template.HTML
 	Runs    int
-	Stats   []template.HTML
+	Stats   []string
 	Color   string
 	Enabled bool
 }
@@ -56,20 +55,21 @@ type HistoryRow struct {
 // Base data for handler functions to perform network training and display the stats
 func NewTrainPage(t *Templates, net *Network) *TrainPage {
 	p := &TrainPage{net: net, Templates: t, disabled: map[string]bool{}, PlotWidth: plotWidth + 32, PlotHeight: plotHeight}
-	for _, opt := range []string{"loss", "errors", "matrix", "history", "tune", "purge", "clear"} {
-		p.AddOption(Link{Name: opt, Url: "/train/set/" + opt, Selected: opt == "errors"})
+	for _, opt := range []string{"loss", "errors", "matrix", "tune", "purge", "clear"} {
+		p.AddOption(Link{Name: opt, Url: "/train/set/" + opt, Selected: opt == "loss" || opt == "errors"})
 	}
 	return p
 }
 
 // Handler function for the train base template
-func (p *TrainPage) Base() func(w http.ResponseWriter, r *http.Request) {
+func (p *TrainPage) Base(url, frame string) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p.net.Lock()
 		defer p.net.Unlock()
-		p.Select("/train")
+		p.Select(url)
 		p.Heading = p.net.heading()
-		p.Exec(w, "train", p, true)
+		p.Frame = frame
+		p.Exec(w, "frame", p, true)
 	}
 }
 
@@ -102,7 +102,11 @@ func (p *TrainPage) Setopt() func(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		http.Redirect(w, r, "/train", http.StatusFound)
+		url := "/train"
+		if p.MenuSelected("history") {
+			url = "/train/history"
+		}
+		http.Redirect(w, r, url, http.StatusFound)
 	}
 }
 
@@ -146,25 +150,27 @@ func (p *TrainPage) Command() func(w http.ResponseWriter, r *http.Request) {
 }
 
 // Handler function for the stats frame
-func (p *TrainPage) Stats() func(w http.ResponseWriter, r *http.Request) {
+func (p *TrainPage) Stats(history bool) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p.net.Lock()
 		defer p.net.Unlock()
-		p.getHistory()
 		p.Plots = []template.HTML{}
-		if p.OptionSelected("loss") {
-			p.Plots = append(p.Plots, p.lossPlot())
-		}
-		if p.OptionSelected("errors") {
-			p.Plots = append(p.Plots, p.errorPlot())
-		}
-		if p.OptionSelected("matrix") {
-			p.Plots = append(p.Plots, p.matrixPlot())
-		}
-		if p.OptionSelected("history") {
+		if history {
+			p.getHistory()
 			p.Plots = append(p.Plots, p.historyPlot())
+			p.Exec(w, "history", p, false)
+		} else {
+			if p.OptionSelected("loss") {
+				p.Plots = append(p.Plots, p.lossPlot())
+			}
+			if p.OptionSelected("errors") {
+				p.Plots = append(p.Plots, p.errorPlot())
+			}
+			if p.OptionSelected("matrix") {
+				p.Plots = append(p.Plots, p.matrixPlot())
+			}
+			p.Exec(w, "stats", p, false)
 		}
-		p.Exec(w, "stats", p, false)
 	}
 }
 
@@ -196,14 +202,11 @@ func (p *TrainPage) StatsHeaders() []string {
 	return nnet.StatsHeaders(p.net.Data)
 }
 
-func (p *TrainPage) LatestStats(n int) []nnet.Stats {
+func (p *TrainPage) LatestStats() []nnet.Stats {
 	nstats := len(p.net.test.Stats)
 	logEvery := p.net.LogEvery
 	if logEvery == 0 {
 		logEvery = 1
-	}
-	if nstats > logEvery*n {
-		logEvery = 1 + nstats/n
 	}
 	res := []nnet.Stats{}
 	if nstats > 0 {
@@ -246,18 +249,6 @@ func (p *TrainPage) History() []HistoryRow {
 	table := []HistoryRow{}
 	setId := 0
 	for i, params := range p.keys {
-		stats := new(statsTable)
-		for _, i := range p.groups[params] {
-			h := p.net.History[i]
-			stats.add(float64(h.Stats.Epoch))
-			for j, val := range h.Stats.Values {
-				if strings.HasSuffix(statsHead[j], " error") {
-					stats.add(100 * val)
-				}
-			}
-			stats.add(h.Stats.Elapsed.Seconds())
-			stats.next()
-		}
 		r := HistoryRow{
 			Id:      i,
 			Runs:    len(p.groups[params]),
@@ -268,10 +259,18 @@ func (p *TrainPage) History() []HistoryRow {
 			r.Color = htmlColor(plotutil.Color(setId))
 			setId++
 		}
-		for _, s := range stats.avg {
-			r.Stats = append(r.Stats, s.HTML())
+		for _, i := range p.groups[params] {
+			h := p.net.History[i]
+			r.Stats = append(r.Stats, fmt.Sprint(h.Stats.Epoch))
+			for j := range h.Stats.Values {
+				if strings.HasSuffix(statsHead[j], " error") {
+					r.Stats = append(r.Stats, h.Stats.FormatItem(j))
+				}
+			}
+			r.Stats = append(r.Stats, h.Stats.FormatElapsed())
+			table = append(table, r)
+			r = HistoryRow{}
 		}
-		table = append(table, r)
 	}
 	return table
 }
@@ -285,7 +284,7 @@ func (p *TrainPage) lossPlot() template.HTML {
 	line.Color = plotutil.Color(0)
 	plt.Add(line)
 	plt.Legend.Add("training loss ", line)
-	return writePlot(plt)
+	return writePlot(plt, plotWidth, plotHeight)
 }
 
 func (p *TrainPage) errorPlot() template.HTML {
@@ -299,7 +298,7 @@ func (p *TrainPage) errorPlot() template.HTML {
 		plt.Add(line)
 		plt.Legend.Add(name, line)
 	}
-	return writePlot(plt)
+	return writePlot(plt, plotWidth, plotHeight)
 }
 
 func (p *TrainPage) matrixPlot() template.HTML {
@@ -324,7 +323,7 @@ func (p *TrainPage) matrixPlot() template.HTML {
 	plt.Add(hmap)
 	style := draw.TextStyle{Font: newFont(10), Color: color.Gray{0xc0}}
 	plt.Add(hmap.labels(style, 0.5))
-	return writePlot(plt)
+	return writePlot(plt, plotWidth, plotHeight)
 }
 
 func (p *TrainPage) historyPlot() template.HTML {
@@ -360,7 +359,7 @@ func (p *TrainPage) historyPlot() template.HTML {
 		plt.Add(s)
 		setId++
 	}
-	return writePlot(plt)
+	return writePlot(plt, plotWidth, plotWidth)
 }
 
 func newPlot() *plot.Plot {
@@ -386,9 +385,9 @@ func newPlot() *plot.Plot {
 	return p
 }
 
-func writePlot(p *plot.Plot) template.HTML {
+func writePlot(p *plot.Plot, w, h int) template.HTML {
 	var buf bytes.Buffer
-	writer, err := p.WriterTo(vg.Inch*vg.Length(plotWidth)/vgsvg.DPI, vg.Inch*vg.Length(plotHeight)/vgsvg.DPI, "svg")
+	writer, err := p.WriterTo(vg.Inch*vg.Length(w)/vgsvg.DPI, vg.Inch*vg.Length(h)/vgsvg.DPI, "svg")
 	if err != nil {
 		log.Fatal("Error writing plot: ", err)
 	}
@@ -432,25 +431,6 @@ type linePlot struct {
 
 func (l linePlot) DataRange() (xmin, xmax, ymin, ymax float64) {
 	return l.xmin, l.xmax, l.ymin, l.ymax
-}
-
-type statsTable struct {
-	avg []*stats.Average
-	col int
-	row int
-}
-
-func (s *statsTable) add(x float64) {
-	if s.row == 0 {
-		s.avg = append(s.avg, new(stats.Average))
-	}
-	s.avg[s.col].Add(x)
-	s.col++
-}
-
-func (s *statsTable) next() {
-	s.row++
-	s.col = 0
 }
 
 type heatMap struct {

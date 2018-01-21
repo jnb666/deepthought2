@@ -39,19 +39,22 @@ func output() []nnet.ConfigLayer {
 
 func main() {
 	conf := nnet.Config{
-		DataSet:     "cifar10",
-		Eta:         0.05,
-		Lambda:      5,
-		TrainRuns:   5,
-		MaxEpoch:    100,
-		TrainBatch:  100,
-		Shuffle:     true,
-		UseGPU:      true,
-		Normalise:   true,
-		Distort:     true,
-		WeightInit:  nnet.GlorotUniform,
-		StopAfter:   2,
-		ExtraEpochs: 4,
+		DataSet:      "cifar10_2",
+		Eta:          0.01,
+		EtaDecay:     0.2,
+		EtaDecayStep: 40,
+		Lambda:       5,
+		Momentum:     0.9,
+		Nesterov:     true,
+		MaxEpoch:     200,
+		StopAfter:    2,
+		ExtraEpochs:  4,
+		TrainBatch:   125,
+		Shuffle:      true,
+		UseGPU:       true,
+		Normalise:    true,
+		Distort:      true,
+		WeightInit:   nnet.GlorotUniform,
 	}
 	c := conf.AddLayers(block(32, 0.2)...)
 	c = c.AddLayers(block(64, 0.3)...)

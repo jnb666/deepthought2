@@ -43,10 +43,16 @@ func main() {
 	err = nnet.SaveDataFile(train, "cifar10_train")
 	nnet.CheckErr(err)
 
-	err = nnet.SaveDataFile(test.Slice(0, testSplit), "cifar10_test")
+	err = nnet.SaveDataFile(test, "cifar10_test")
 	nnet.CheckErr(err)
 
-	err = nnet.SaveDataFile(test.Slice(testSplit, test.Len()), "cifar10_valid")
+	err = nnet.SaveDataFile(train, "cifar10_2_train")
+	nnet.CheckErr(err)
+
+	err = nnet.SaveDataFile(test.Slice(0, testSplit), "cifar10_2_test")
+	nnet.CheckErr(err)
+
+	err = nnet.SaveDataFile(test.Slice(testSplit, test.Len()), "cifar10_2_valid")
 	nnet.CheckErr(err)
 }
 

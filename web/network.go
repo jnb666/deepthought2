@@ -134,12 +134,12 @@ func (n *Network) Init(conf nnet.Config) error {
 	if n.DebugLevel >= 1 {
 		fmt.Println(n.Network)
 	}
-	n.test.Init(n.queue, conf, n.Data, n.testRng).Predict()
+	n.test.Init(n.queue, conf, n.Data, n.testRng).Predict(n.trainData)
 	n.Labels = make(map[string][]int32)
 	for key, dset := range n.test.Data {
-		n.Labels[key] = make([]int32, dset.Samples)
-		dset.Label(seq(dset.Samples), n.Labels[key])
+		n.initLabels(key, dset)
 	}
+	n.initLabels("train", n.trainData)
 	if d, ok := n.Data["test"]; ok {
 		n.view = newViewData(n.queue.Dev(), "test", d, n.trans["test"], conf, n.testRng)
 	} else if d, ok = n.Data["train"]; ok {
@@ -148,6 +148,11 @@ func (n *Network) Init(conf nnet.Config) error {
 		err = fmt.Errorf("Network init: no test or train data")
 	}
 	return err
+}
+
+func (n *Network) initLabels(key string, dset *nnet.Dataset) {
+	n.Labels[key] = make([]int32, dset.Samples)
+	dset.Label(seq(dset.Samples), n.Labels[key])
 }
 
 // release allocated buffers
@@ -210,7 +215,6 @@ func (n *Network) Train(restart bool) error {
 	n.running = true
 	n.stop = false
 	go func() {
-		acc := n.queue.NewArray(num.Float32)
 		quit := false
 		for n.Run < n.MaxRun && !quit {
 			if n.Run > 0 {
@@ -233,8 +237,8 @@ func (n *Network) Train(restart bool) error {
 					epilogue = true
 				}
 				start := time.Now()
-				loss := nnet.TrainEpoch(net, n.trainData, acc)
-				done = n.test.Test(net, epoch, loss, start)
+				loss, trainErr := nnet.TrainEpoch(net, n.trainData, epoch, n.test.Pred["train"])
+				done = n.test.Test(net, epoch, loss, trainErr, start)
 				if net.LogEvery == 0 || epoch%net.LogEvery == 0 || done {
 					quit = n.nextEpoch(epoch, done)
 				}
@@ -318,16 +322,13 @@ func (n *Network) Export() {
 	n.Params = []LayerData{}
 	for i, layer := range n.Layers {
 		if l, ok := layer.(nnet.ParamLayer); ok {
-			W, B := l.Params()
-			d := LayerData{
-				Layer:   i,
-				WeightV: make([]uint32, num.Prod(W.Dims())),
-				BiasV:   make([]uint32, num.Prod(B.Dims())),
+			W, B, _, _ := l.Params()
+			d := LayerData{Layer: i, WeightV: make([]uint32, num.Prod(W.Dims()))}
+			if B != nil {
+				d.BiasV = make([]uint32, num.Prod(B.Dims()))
+				n.queue.Call(num.Read(B, d.BiasV))
 			}
-			n.queue.Call(
-				num.Read(W, d.WeightV),
-				num.Read(B, d.BiasV),
-			).Finish()
+			n.queue.Call(num.Read(W, d.WeightV)).Finish()
 			n.Params = append(n.Params, d)
 		}
 	}
@@ -352,17 +353,21 @@ func (n *Network) Import() {
 				log.Printf("layer %d import error: not a ParamLayer", p.Layer)
 				return
 			}
-			W, B := layer.Params()
-			wsize, bsize := num.Prod(W.Dims()), num.Prod(B.Dims())
-			if wsize != len(p.WeightV) || bsize != len(p.BiasV) {
-				log.Printf("layer %d import error: size mismatch - have %d %d - expect %d %d",
-					p.Layer, len(p.WeightV), len(p.BiasV), wsize, bsize)
+			W, B, _, _ := layer.Params()
+			if B != nil {
+				if size := num.Prod(B.Dims()); size != len(p.BiasV) {
+					log.Printf("layer %d import error: bias size mismatch - have %d - expect %d",
+						p.Layer, len(p.BiasV), size)
+					return
+				}
+				n.queue.Call(num.Write(B, p.BiasV))
+			}
+			if size := num.Prod(W.Dims()); size != len(p.WeightV) {
+				log.Printf("layer %d import error: weight size mismatch - have %d - expect %d",
+					p.Layer, len(p.WeightV), size)
 				return
 			}
-			n.queue.Call(
-				num.Write(W, p.WeightV),
-				num.Write(B, p.BiasV),
-			)
+			n.queue.Call(num.Write(W, p.WeightV))
 		}
 		n.view.loadWeights(n.Network)
 	} else {
@@ -482,7 +487,7 @@ func logConfig(c nnet.Config) {
 func tuneParams(h HistoryData) string {
 	plist := make([]string, len(tuneOpts))
 	for i, p := range tuneOpts {
-		plist[i] = fmt.Sprintf("%s=%v", tuneOptHtml[i], h.Conf.Get(p))
+		plist[i] = fmt.Sprintf("%s=%v<br>", tuneOptHtml[i], h.Conf.Get(p))
 	}
 	return strings.Join(plist, " ")
 }
@@ -530,41 +535,39 @@ func newViewData(dev num.Device, dset string, data nnet.Data, trans *img.Transfo
 	for i, layer := range v.Layers {
 		l := viewLayer{ltype: layer.Type()}
 		// filter output layers
-		if l.ltype != "pool" && l.ltype != "dropout" && l.ltype != "flatten" && l.ltype != "batchNorm" {
-			l.outShape = layer.OutShape()
-			l.outShape = l.outShape[:len(l.outShape)-1]
+		if l.ltype == "linear" || l.ltype == "conv" || l.ltype == "activation" {
+			shape := layer.OutShape()
+			l.outShape = shape[:len(shape)-1]
 		}
 		if l.ltype == "activation" {
 			for prev := len(v.layers) - 1; prev >= 0; prev-- {
 				lp := v.layers[prev]
 				if (lp.ltype == "conv" || lp.ltype == "linear") && num.SameShape(lp.outShape, l.outShape) {
-					l.ltype = lp.ltype + " " + l.ltype
+					l.ltype = lp.ltype + " " + layer.ToString()
 					v.layers[prev].outShape = nil
+					break
 				}
 			}
 		}
 		// allocate buffers and images for weights and biases
 		if pLayer, ok := layer.(nnet.ParamLayer); ok {
-			W, B := pLayer.Params()
-			l.wShape, l.bShape = W.Dims(), B.Dims()
-			scale := 1.0
-			if layer.Type() == "batchNorm" {
-				size := W.Dims()[2]
-				l.wox, l.woy = size, 2
-				l.wData = make([]float32, size)
-				l.bData = make([]float32, size)
-				l.wImage = image.NewNRGBA(image.Rect(0, 0, size, 2))
+			W, B, _, _ := pLayer.Params()
+			// conv followed by batchnorm?
+			var W2 num.Array
+			if next := v.Layers[i+1]; l.ltype == "conv" && next.Type() == "batchNorm" && B == nil {
+				W2, B, _, _ = next.(nnet.ParamLayer).Params()
 				l.batchNorm = true
-			} else {
-				l.addWeightImage(i, W.Dims(), B.Dims())
-				scale = 2 / math.Sqrt(float64(num.Prod(layer.InShape())))
 			}
-			l.cmapW = moreland.SmoothGreenRed()
-			l.cmapW.SetMin(-scale)
-			l.cmapW.SetMax(scale)
-			l.cmapB = moreland.SmoothGreenRed()
-			l.cmapB.SetMin(-1)
-			l.cmapB.SetMax(1)
+			if l.ltype == "linear" || l.ltype == "conv" {
+				l.addWeightImage(i, W, B, W2)
+				scale := 2 / math.Sqrt(float64(num.Prod(layer.InShape())))
+				l.cmapW = moreland.SmoothGreenRed()
+				l.cmapW.SetMin(-scale)
+				l.cmapW.SetMax(scale)
+				l.cmapB = moreland.SmoothGreenRed()
+				l.cmapB.SetMin(-1)
+				l.cmapB.SetMax(1)
+			}
 		}
 		v.layers = append(v.layers, l)
 	}
@@ -631,42 +634,50 @@ func (v *viewData) updateWeights() {
 		if l.wImage == nil {
 			continue
 		}
-		W, B := v.Layers[iLayer].(nnet.ParamLayer).Params()
-		v.queue.Call(
-			num.Read(W, l.wData),
-			num.Read(B, l.bData),
-		).Finish()
-		if l.batchNorm {
-			for j := 0; j < l.wox; j++ {
-				l.wImage.Set(j, 0, mapColor(l.bData[j], l.cmapB))
-				l.wImage.Set(j, 1, mapColor(l.wData[j], l.cmapW))
-			}
-			continue
+		var W2 num.Array
+		W, B, _, _ := v.Layers[iLayer].(nnet.ParamLayer).Params()
+		if B != nil {
+			v.queue.Call(num.Read(B, l.bData))
+		} else if l.batchNorm {
+			W2, B, _, _ = v.Layers[iLayer+1].(nnet.ParamLayer).Params()
+			v.queue.Call(
+				num.Read(W2, l.bData),
+				num.Read(B, l.bData[W2.Size():]),
+			)
 		}
+		v.queue.Call(num.Read(W, l.wData)).Finish()
 		for out := 0; out < l.wox*l.woy; out++ {
 			xb := (l.wix + l.wborder) * (out % l.wox)
 			yb := (l.wiy + l.wborder) * (out / l.wox)
-			// draw bias
-			biasCol := mapColor(l.bData[out], l.cmapB)
-			for j := 0; j < l.wix; j++ {
-				l.wImage.Set(xb+j, yb, biasCol)
-			}
-			for j := 0; j < l.wiy; j++ {
-				l.wImage.Set(xb, yb+j, biasCol)
+			offset := 0
+			if l.bData != nil {
+				// draw bias
+				biasCol1 := mapColor(l.bData[out], l.cmapB)
+				biasCol2 := mapColor(l.bData[out], l.cmapB)
+				if l.batchNorm {
+					biasCol2 = mapColor(l.bData[W2.Size()+out], l.cmapB)
+				}
+				for j := 0; j < l.wix; j++ {
+					l.wImage.Set(xb+j, yb, biasCol1)
+				}
+				for j := 0; j < l.wiy; j++ {
+					l.wImage.Set(xb, yb+j, biasCol2)
+				}
+				offset = 1
 			}
 			// draw weights
 			switch len(l.wShape) {
 			case 2:
 				nin := l.wShape[0]
 				for j, val := range l.wData[out*nin : (out+1)*nin] {
-					l.wImage.Set(xb+j/l.wiy+1, yb+j%l.wiy+1, mapColor(val, l.cmapW))
+					l.wImage.Set(xb+j/l.wiy+offset, yb+j%l.wiy+offset, mapColor(val, l.cmapW))
 				}
 			case 4:
 				w, h, nin := l.wShape[0], l.wShape[1], l.wShape[2]
 				base := out * nin * w * h
 				for in := 0; in < nin; in++ {
-					xb2 := xb + w*(in%l.wix2) + 1
-					yb2 := yb + h*(in/l.wix2) + 1
+					xb2 := xb + w*(in%l.wix2) + offset
+					yb2 := yb + h*(in/l.wix2) + offset
 					for j, val := range l.wData[base+in*w*h : base+(in+1)*w*h] {
 						l.wImage.Set(xb2+j/h, yb2+j%h, mapColor(val, l.cmapW))
 					}
@@ -701,29 +712,37 @@ func (l *viewLayer) addOutputImage(layer int, dims []int) {
 	l.outImage = image.NewNRGBA(image.Rect(0, 0, width, height))
 }
 
-func (l *viewLayer) addWeightImage(layer int, wDims, bDims []int) {
-	if len(bDims) != 1 || len(wDims) < 1 || bDims[0] != wDims[len(wDims)-1] {
-		log.Printf("viewLayer %d: weight shape not supported %v %v", layer, wDims, bDims)
+func (l *viewLayer) addWeightImage(layer int, W, B, W2 num.Array) {
+	l.wShape = W.Dims()
+	if len(l.wShape) < 1 || (B != nil && B.Size() != l.wShape[len(l.wShape)-1]) {
+		log.Printf("viewLayer %d: weight shape not supported %v %v", layer, l.wShape, l.bShape)
 		return
 	}
-	switch len(wDims) {
+	l.wData = make([]float32, num.Prod(l.wShape))
+	l.wborder = 1
+	if B != nil {
+		if W2 != nil {
+			l.bShape = []int{B.Size() + W2.Size()}
+		} else {
+			l.bShape = []int{B.Size()}
+		}
+		l.bData = make([]float32, num.Prod(l.bShape))
+		l.wborder++
+	}
+	switch len(l.wShape) {
 	case 2:
-		// fully connected layer: wDims = [nIn, nOut]
-		l.wiy, l.wix = factorise(wDims[0], 0, 1)
-		l.woy, l.wox = factorise(wDims[1], factorMinWeights, aspectWeights)
-		l.wborder = 1
+		// fully connected layer: l.wShape = [nIn, nOut]
+		l.wiy, l.wix = factorise(l.wShape[0], 0, 1)
+		l.woy, l.wox = factorise(l.wShape[1], factorMinWeights, aspectWeights)
 	case 4:
-		// convolutional layer: wDims = [w, h, nIn, nOut]
-		l.woy, l.wox = factorise(wDims[3], factorMinWeights, aspectWeights)
-		l.wiy2, l.wix2 = factorise(wDims[2], 0, 1)
-		l.wix, l.wiy = l.wix2*wDims[0], l.wiy2*wDims[1]
-		l.wborder = 2
+		// convolutional layer: l.wShape = [w, h, nIn, nOut]
+		l.woy, l.wox = factorise(l.wShape[3], factorMinWeights, aspectWeights)
+		l.wiy2, l.wix2 = factorise(l.wShape[2], 0, 1)
+		l.wix, l.wiy = l.wix2*l.wShape[0], l.wiy2*l.wShape[1]
 	default:
-		log.Printf("viewLayer %d: weight shape not supported %v %v", layer, wDims, bDims)
+		log.Printf("viewLayer %d: weight shape not supported %v %v", layer, l.wShape, l.bShape)
 		return
 	}
-	l.wData = make([]float32, num.Prod(wDims))
-	l.bData = make([]float32, num.Prod(bDims))
 	l.wImage = image.NewNRGBA(image.Rect(0, 0, (l.wix+l.wborder)*l.wox, (l.wiy+l.wborder)*l.woy))
 }
 

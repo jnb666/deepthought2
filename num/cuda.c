@@ -43,6 +43,9 @@ void callGPU(Args* a, Stream* s, cublasStatus_t* blasStatus, cudnnStatus_t* dnnS
 			cuda_sum_f(s->stream, FP(a->p[0]), FP(a->p[1]), a->i[1]);
 		}
 		break;
+	case SCALE:
+		*blasStatus = cublasSscal(s->blas, a->i[0], &(a->f[0]), FP(a->p[0]), 1);
+ 		break;
 	case AXPY:
 		*blasStatus = cublasSaxpy(s->blas, a->i[0], &(a->f[0]), FP(a->p[0]), 1, FP(a->p[1]), 1); 
 		break;
