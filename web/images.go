@@ -254,7 +254,7 @@ func (p *ImagePage) transform(src *img.Image, dset string, id int, norm, distort
 	t.Trans = src.TransformType(norm, distort)
 	dst, err := t.Transform(src, 0)
 	if err != nil {
-		log.Println(err)
+		log.Println("ERROR: transform error:", err)
 	}
 	return dst
 }

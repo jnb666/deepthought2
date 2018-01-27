@@ -3,6 +3,7 @@ package nnet
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"path"
@@ -58,7 +59,7 @@ func LoadConfig(name string) (c Config, err error) {
 		return
 	}
 	defer f.Close()
-	fmt.Println("loading network config from", name)
+	log.Println("loading network config from", name)
 	dec := json.NewDecoder(f)
 	err = dec.Decode(&c)
 	return
@@ -87,7 +88,7 @@ func (c Config) OptimiserParams(epoch, samples int) (learningRate, weightDecay f
 	}
 	decay := c.Eta * c.Lambda / float64(samples)
 	if epoch == 1 || (c.EtaDecay > 0 && c.EtaDecayStep > 0 && (epoch-1)%c.EtaDecayStep == 0) {
-		fmt.Printf("learning rate=%.4g weight decay=%.4g\n", c.Eta, decay)
+		log.Printf("learning rate=%.4g weight decay=%.4g\n", c.Eta, decay)
 	}
 	return c.Eta, decay
 }
@@ -114,7 +115,7 @@ func (c Config) Save(name string) error {
 		return err
 	}
 	defer f.Close()
-	fmt.Println("saving network config to", name)
+	log.Println("saving network config to", name)
 	enc := json.NewEncoder(f)
 	enc.SetIndent("", "  ")
 	return enc.Encode(c)

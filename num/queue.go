@@ -185,9 +185,6 @@ func (q *gpuQueue) Finish() {
 func (q *gpuQueue) Shutdown() {
 	q.Finish()
 	q.stream.Release()
-	if q.profile.enabled {
-		fmt.Print(q.Profile())
-	}
 }
 
 // profiling functions

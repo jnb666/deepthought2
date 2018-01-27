@@ -4,11 +4,10 @@ import (
 	"fmt"
 	"github.com/jnb666/deepthought2/num"
 	"github.com/jnb666/deepthought2/stats"
+	"log"
 	"math/rand"
 	"time"
 )
-
-const statsBufferSize = 10
 
 // Training statistics
 type Stats struct {
@@ -60,13 +59,10 @@ func (s Stats) FormatElapsed() string {
 	return FormatDuration(s.Elapsed)
 }
 
-func (s Stats) String(headers []string, done bool) string {
+func (s Stats) String(headers []string) string {
 	msg := fmt.Sprintf("epoch %3d:", s.Epoch)
 	for i, val := range s.Format() {
 		msg += fmt.Sprintf("  %s =%s", headers[i], val)
-	}
-	if done {
-		msg += fmt.Sprintf("\ntrain time:%s  total:%s", FormatDuration(s.TrainTime), FormatDuration(s.Elapsed))
 	}
 	return msg
 }
@@ -106,10 +102,12 @@ func NewTestBase() *TestBase {
 func (t *TestBase) Release() {
 	if t.Net != nil {
 		t.Net.Release()
+		t.Net = nil
 	}
 	for _, dset := range t.Data {
 		dset.Release()
 	}
+	t.Data = nil
 }
 
 func (t *TestBase) Memory() int {
@@ -127,27 +125,27 @@ func (t *TestBase) MemoryProfile() string {
 }
 
 // Initialise the test dataset, network and other configuration.
-func (t *TestBase) Init(queue num.Queue, conf Config, data map[string]Data, rng *rand.Rand) *TestBase {
+func (t *TestBase) Init(dev num.Device, conf Config, data map[string]Data, rng *rand.Rand) *TestBase {
 	opts := conf.DatasetConfig(true)
 	t.Data = make(map[string]*Dataset)
 	t.Headers = StatsHeaders(data)
 	t.Pred = nil
 	t.epilogue = false
 	if conf.DebugLevel >= 1 {
-		fmt.Printf("init tester: samples=%d batch size=%d\n", opts.MaxSamples, opts.BatchSize)
+		log.Printf("init tester: samples=%d batch size=%d\n", opts.MaxSamples, opts.BatchSize)
 	}
 	for key, d := range data {
 		if key != "train" {
 			if conf.DebugLevel >= 1 {
-				fmt.Println("dataset =>", key)
+				log.Println("dataset =>", key)
 			}
-			t.Data[key] = NewDataset(queue.Dev(), d, opts, rng)
+			t.Data[key] = NewDataset(dev, d, opts, rng)
 			t.Data[key].Profiling(conf.Profile, "tester:"+key)
 		}
 	}
 	if opts.BatchSize != conf.TrainBatch {
-		t.Net = New(queue, conf, t.Data["test"].BatchSize, t.Data["test"].Shape(), rng)
-		fmt.Println("allocate test network: input shape ", t.Net.inShape)
+		t.Net = New(dev.NewQueue(), conf, t.Data["test"].BatchSize, t.Data["test"].Shape(), rng)
+		log.Println("allocate test network: input shape ", t.Net.inShape)
 	}
 	return t
 }
@@ -178,11 +176,11 @@ func (t *TestBase) Test(net *Network, epoch int, loss, trainError float64, start
 	}
 	if t.Net != nil {
 		// copy the weights to net with different input shape
-		net.CopyTo(t.Net, false)
+		net.CopyTo(t.Net, true)
 		net = t.Net
 	}
 	if net.DebugLevel >= 1 {
-		fmt.Printf("== TEST EPOCH %d ==\n", epoch)
+		log.Printf("== TEST EPOCH %d ==\n", epoch)
 	}
 	for ix, key := range DataTypes {
 		if dset, ok := t.Data[key]; ok {
@@ -246,15 +244,18 @@ type testLogger struct {
 }
 
 // Create a new tester which logs stats to stdout.
-func NewTestLogger(queue num.Queue, conf Config, data map[string]Data, rng *rand.Rand) Tester {
-	return testLogger{TestBase: NewTestBase().Init(queue, conf, data, rng)}
+func NewTestLogger(dev num.Device, conf Config, data map[string]Data, rng *rand.Rand) Tester {
+	return testLogger{TestBase: NewTestBase().Init(dev, conf, data, rng)}
 }
 
 func (t testLogger) Test(net *Network, epoch int, loss, trainErr float64, start time.Time) bool {
 	done := t.TestBase.Test(net, epoch, loss, trainErr, start)
 	s := t.Stats[len(t.Stats)-1]
 	if done || net.LogEvery == 0 || epoch%net.LogEvery == 0 {
-		fmt.Println(s.String(t.Headers, done))
+		log.Println(s.String(t.Headers))
+		if done {
+			log.Printf("train time:%s  total:%s", FormatDuration(s.TrainTime), FormatDuration(s.Elapsed))
+		}
 	}
 	return done
 }
@@ -265,7 +266,7 @@ func Train(net *Network, dset *Dataset, test Tester) {
 	epilogue := false
 	for epoch := 1; epoch <= net.MaxEpoch && !done; epoch++ {
 		if test.Epilogue() && !epilogue {
-			fmt.Printf("training for %d extra epochs\n", net.ExtraEpochs)
+			log.Printf("training for %d extra epochs\n", net.ExtraEpochs)
 			dset.SetTrans(net.Normalise, false)
 			epilogue = true
 		}
@@ -305,47 +306,21 @@ func TrainEpoch(net *Network, dset *Dataset, epoch int, pred []int32) (trainLoss
 	dset.NextEpoch()
 	for batch := 0; batch < dset.Batches; batch++ {
 		if net.DebugLevel >= 2 || (net.DebugLevel == 1 && batch == 0) {
-			fmt.Printf("== train batch %d ==\n", batch)
+			log.Printf("== train batch %d ==\n", batch)
 		}
 		q.Finish()
 		x, y, yOneHot := dset.NextBatch()
 		// forward propagation
 		yPred := net.Fprop(x, true)
 		if net.DebugLevel >= 2 {
-			fmt.Printf("yOneHot:\n%s", yOneHot.String(q))
-			fmt.Printf("yPred:\n%s", yPred.String(q))
+			log.Printf("yOneHot:\n%s", yOneHot.String(q))
+			log.Printf("yPred:\n%s", yPred.String(q))
 		}
 		// sum average loss and error over batches
 		net.calcBatchLoss(batch, yOneHot, yPred)
 		net.calcBatchError(batch, dset, y, yPred, p)
-		// get difference at output
-		q.Call(
-			num.Copy(yPred, net.inputGrad),
-			num.Axpy(-1, yOneHot, net.inputGrad),
-		)
-		if net.DebugLevel >= 2 || (net.DebugLevel == 1 && batch == 0) {
-			fmt.Printf("input grad:\n%s", net.inputGrad.String(q))
-		}
-		grad := net.inputGrad
-		// back propagate gradient
-		for i := len(net.Layers) - 1; i >= 0; i-- {
-			layer := net.Layers[i]
-			grad = layer.Bprop(q, grad, net.WorkSpace)
-			if net.DebugLevel >= 3 && grad != nil {
-				fmt.Printf("layer %d bprop output:\n%s", i, grad.String(q))
-			}
-		}
-		// update weights
-		for _, layer := range net.Layers {
-			if l, ok := layer.(ParamLayer); ok {
-				W, B, dW, dB := l.Params()
-				vW, vB, vWPrev, vBPrev := l.ParamVelocity()
-				optimiser.Update(q, weightDecay != 0, W, dW, vW, vWPrev)
-				if B != nil {
-					optimiser.Update(q, false, B, dB, vB, vBPrev)
-				}
-			}
-		}
+		// get difference at output, back propagate gradient and update weights
+		net.Bprop(batch, yPred, yOneHot, optimiser)
 		if net.DebugLevel >= 2 || (batch == dset.Batches-1 && net.DebugLevel >= 1) {
 			net.PrintWeights()
 		}
@@ -379,7 +354,7 @@ type SGD struct {
 
 func (o SGD) Update(q num.Queue, decay bool, x, dx, v, vPrev num.Array) {
 	q.Call(num.Scale(-o.LearningRate, dx))
-	if decay {
+	if decay && o.WeightDecay != 0 {
 		q.Call(num.Axpy(-o.WeightDecay, x, dx))
 	}
 	switch {

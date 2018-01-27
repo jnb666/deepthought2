@@ -4,10 +4,10 @@ package nnet
 import (
 	"fmt"
 	"github.com/jnb666/deepthought2/num"
+	"log"
 	"math"
 	"math/rand"
 	"os"
-	"strings"
 	"time"
 )
 
@@ -135,7 +135,7 @@ func (n *Network) InitWeights(rng *rand.Rand) {
 		if l, ok := layer.(ParamLayer); ok {
 			dims := l.FilterShape()
 			if n.DebugLevel >= 1 {
-				fmt.Printf("layer %d: %s %v set weights init=%s bias=%.3g\n", i, l.Type(), dims, n.WeightInit, n.Bias)
+				log.Printf("layer %d: %s %v set weights init=%s bias=%.3g\n", i, l.Type(), dims, n.WeightInit, n.Bias)
 			}
 			l.InitParams(n.queue, n.WeightInit.WeightFunc(dims, rng), float32(n.Bias))
 		}
@@ -167,11 +167,40 @@ func (n *Network) Fprop(input num.Array, trainMode bool) num.Array {
 	pred := input
 	for i, layer := range n.Layers {
 		if n.DebugLevel >= 2 && pred != nil {
-			fmt.Printf("layer %d input\n%s", i, pred.String(n.queue))
+			log.Printf("layer %d input\n%s", i, pred.String(n.queue))
 		}
 		pred = layer.Fprop(n.queue, pred, n.WorkSpace, trainMode)
 	}
 	return pred
+}
+
+// Get difference at output, back propagate gradient and update weights
+func (n *Network) Bprop(batch int, yPred, yOneHot num.Array, opt Optimiser) {
+	q := n.queue
+	q.Call(
+		num.Copy(yPred, n.inputGrad),
+		num.Axpy(-1, yOneHot, n.inputGrad),
+	)
+	if n.DebugLevel >= 2 || (n.DebugLevel == 1 && batch == 0) {
+		log.Printf("input grad:\n%s", n.inputGrad.String(q))
+	}
+	grad := n.inputGrad
+	for i := len(n.Layers) - 1; i >= 0; i-- {
+		grad = n.Layers[i].Bprop(q, grad, n.WorkSpace)
+		if n.DebugLevel >= 3 && grad != nil {
+			log.Printf("layer %d bprop output:\n%s", i, grad.String(q))
+		}
+	}
+	for _, layer := range n.Layers {
+		if l, ok := layer.(ParamLayer); ok {
+			W, B, dW, dB := l.Params()
+			vW, vB, vWPrev, vBPrev := l.ParamVelocity()
+			opt.Update(q, true, W, dW, vW, vWPrev)
+			if B != nil {
+				opt.Update(q, false, B, dB, vB, vBPrev)
+			}
+		}
+	}
 }
 
 // get the loss for this batch
@@ -179,7 +208,7 @@ func (n *Network) calcBatchLoss(batch int, yOneHot, yPred num.Array) {
 	q := n.queue
 	losses := n.OutLayer().Loss(q, yOneHot, yPred)
 	if n.DebugLevel >= 2 {
-		fmt.Printf("loss:\n%s", losses.String(q))
+		log.Printf("loss:\n%s", losses.String(q))
 	}
 	q.Call(
 		num.Sum(losses, n.batchLoss),
@@ -197,10 +226,10 @@ func (n *Network) calcBatchError(batch int, dset *Dataset, y, yPred num.Array, p
 		num.Axpy(1, n.batchErr, n.totalErr),
 	)
 	if n.DebugLevel >= 1 || (n.DebugLevel >= 1 && batch == 0) {
-		fmt.Printf("batch %d error =%s\n", batch, n.batchErr.String(q))
-		fmt.Println(y.String(q))
-		fmt.Println(n.classes.String(q))
-		fmt.Println(n.diffs.String(q))
+		log.Printf("batch %d error =%s\n", batch, n.batchErr.String(q))
+		log.Println(y.String(q))
+		log.Println(n.classes.String(q))
+		log.Println(n.diffs.String(q))
 	}
 	if pred != nil {
 		start := batch * dset.BatchSize
@@ -226,7 +255,7 @@ func (n *Network) Error(dset *Dataset, pred []int32) float64 {
 		x, y, _ := dset.NextBatch()
 		yPred := n.Fprop(x, false)
 		if n.DebugLevel >= 2 {
-			fmt.Printf("yPred\n%s", yPred.String(n.queue))
+			log.Printf("yPred\n%s", yPred.String(n.queue))
 		}
 		n.calcBatchError(batch, dset, y, yPred, p)
 	}
@@ -244,12 +273,19 @@ func (n *Network) Error(dset *Dataset, pred []int32) float64 {
 func (n *Network) String() string {
 	s := n.configString()
 	if n.Layers != nil {
-		str := []string{"\n== Network ==    input " + fmt.Sprint(n.inShape[:len(n.inShape)-1])}
+		s += fmt.Sprintf("\n== Network ==\n    %-12s input", fmt.Sprint(n.inShape[:len(n.inShape)-1]))
 		for i, layer := range n.Layers {
 			dims := layer.OutShape()
-			str = append(str, fmt.Sprintf("%2d: %-12s %s", i, fmt.Sprint(dims[:len(dims)-1]), layer.ToString()))
+			weights := ""
+			if l, ok := layer.(ParamLayer); ok {
+				n := num.Prod(l.FilterShape())
+				if l.BiasShape() != nil {
+					n += num.Prod(l.BiasShape())
+				}
+				weights = fmt.Sprint(n)
+			}
+			s += fmt.Sprintf("\n%2d: %-12s %s %s", i, fmt.Sprint(dims[:len(dims)-1]), layer.ToString(), weights)
 		}
-		s += strings.Join(str, "\n")
 	}
 	return s
 }
@@ -297,7 +333,7 @@ func (n *Network) PrintWeights() {
 	for i, layer := range n.Layers {
 		if l, ok := layer.(ParamLayer); ok {
 			W, B, _, _ := l.Params()
-			fmt.Printf("== Layer %d weights ==\n%s %s\n", i, W.String(n.queue), B.String(n.queue))
+			log.Printf("== Layer %d weights ==\n%s %s\n", i, W.String(n.queue), B.String(n.queue))
 		}
 	}
 }
@@ -316,7 +352,7 @@ func SetSeed(seed int64) *rand.Rand {
 	if seed <= 0 {
 		seed = time.Now().UTC().UnixNano()
 	}
-	fmt.Println("random seed =", seed)
+	log.Println("random seed =", seed)
 	source := rand.NewSource(seed)
 	return rand.New(source)
 }

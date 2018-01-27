@@ -193,7 +193,7 @@ func (p *TrainPage) Websocket() func(w http.ResponseWriter, r *http.Request) {
 		var err error
 		p.net.conn, err = upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			log.Println("websocket connection error:", err)
+			log.Println("ERROR: websocket connection error:", err)
 		}
 	}
 }
@@ -365,7 +365,7 @@ func (p *TrainPage) historyPlot() template.HTML {
 func newPlot() *plot.Plot {
 	p, err := plot.New()
 	if err != nil {
-		log.Fatal("Plot error: ", err)
+		log.Fatalln("ERROR: error creating plot", err)
 	}
 	bgColor := color.Gray{Y: 0x20}
 	fontSmall := newFont(10)
@@ -389,7 +389,7 @@ func writePlot(p *plot.Plot, w, h int) template.HTML {
 	var buf bytes.Buffer
 	writer, err := p.WriterTo(vg.Inch*vg.Length(w)/vgsvg.DPI, vg.Inch*vg.Length(h)/vgsvg.DPI, "svg")
 	if err != nil {
-		log.Fatal("Error writing plot: ", err)
+		log.Fatalln("ERROR: error writing plot", err)
 	}
 	writer.WriteTo(&buf)
 	return template.HTML(buf.String())
@@ -398,7 +398,7 @@ func writePlot(p *plot.Plot, w, h int) template.HTML {
 func newFont(size vg.Length) vg.Font {
 	font, err := vg.MakeFont("Helvetica", size)
 	if err != nil {
-		log.Fatal("Plot: failed loading font", err)
+		log.Fatalln("ERROR: error loading font", err)
 	}
 	return font
 }

@@ -82,6 +82,12 @@ func (p *ConfigPage) Load() func(w http.ResponseWriter, r *http.Request) {
 			p.logError(w, http.StatusBadRequest, err)
 			return
 		}
+		if model != p.net.Model {
+			if err = nnet.InitLogger(model, 0); err != nil {
+				p.logError(w, http.StatusBadRequest, err)
+				return
+			}
+		}
 		if err = p.init(data); err != nil {
 			p.logError(w, http.StatusInternalServerError, err)
 			return
@@ -210,8 +216,7 @@ func (p *ConfigPage) Tune() func(w http.ResponseWriter, r *http.Request) {
 func (p *ConfigPage) getHeading() template.HTML {
 	files, err := ioutil.ReadDir(nnet.DataDir)
 	if err != nil {
-		log.Println("Error reading DataDir:", err)
-		return ""
+		log.Fatalln("ERROR: Error reading DataDir:", err)
 	}
 	models := make(map[string]bool)
 	for _, file := range files {

@@ -162,7 +162,7 @@ func Convolution(attr *Attr, n, c, h, w, nFeats, filtSize, stride int, padding, 
 		chk(C.dnnConvolutionCreateForward_F32(&l.Fwd.h, attr.h, C.dnnAlgorithmConvolutionDirect,
 			4, &inSize[0], &outSize[0], &filter[0], &cstride[0], &offset[0], btype))
 	} else {
-		l.biasShape = []int{1, 1, c, 1}
+		l.biasShape = []int{1, 1, nFeats, 1}
 		l.BBias = NewPrimitive()
 		chk(C.dnnConvolutionCreateForwardBias_F32(&l.Fwd.h, attr.h, C.dnnAlgorithmConvolutionDirect,
 			4, &inSize[0], &outSize[0], &filter[0], &cstride[0], &offset[0], btype))

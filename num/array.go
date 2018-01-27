@@ -166,7 +166,6 @@ func format(dims []int, data interface{}, at, stride int, indent string, dots bo
 		}
 		s += "]"
 	case 2:
-		//fmt.Printf("format2 %v %d %d %v\n", dims, at, stride, dots)
 		var pre, post string
 		for i := 0; i < dims[0]; i++ {
 			if i == 0 {
@@ -186,7 +185,6 @@ func format(dims []int, data interface{}, at, stride int, indent string, dots bo
 			}
 		}
 	default:
-		//fmt.Printf("formatn %v %d %d %v\n", dims, at, stride, dots)
 		d := len(dims) - 1
 		bsize := Prod(dims[:d])
 		s = indent + "[\n"

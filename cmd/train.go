@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/jnb666/deepthought2/nnet"
 	"github.com/jnb666/deepthought2/num"
+	"log"
 	"os"
 )
 
@@ -15,18 +16,20 @@ func predict(q num.Queue, net *nnet.Network, d nnet.Data) {
 	classes := q.NewArray(num.Int32, y.Dims()[0])
 	yPred := net.Fprop(x, false)
 	q.Call(num.Unhot(yPred, classes))
-	fmt.Print("predict:", yPred.String(q))
-	fmt.Println("classes:", classes.String(q))
-	fmt.Println("labels: ", y.String(q))
+	log.Print("predict:", yPred.String(q))
+	log.Println("classes:", classes.String(q))
+	log.Println("labels: ", y.String(q))
 }
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: train [opts] <model>")
+		fmt.Fprintln(os.Stderr, "Usage: train [opts] <model>")
 		os.Exit(1)
 	}
 	model := os.Args[len(os.Args)-1]
-	fmt.Println("load model:", model)
+	err := nnet.InitLogger(model, 0)
+	nnet.CheckErr(err)
+	log.Println("load model:", model)
 	conf, err := nnet.LoadConfig(model + ".conf")
 	nnet.CheckErr(err)
 
@@ -61,29 +64,31 @@ func main() {
 
 	// create network and initialise weights
 	trainNet := nnet.New(q, conf, trainData.BatchSize, trainData.Shape(), rng)
-	fmt.Println(trainNet)
+	log.Println(trainNet)
 	trainNet.InitWeights(rng)
 	if conf.DebugLevel >= 1 {
-		fmt.Println("== Before ==")
+		log.Println("== Before ==")
 		predict(q, trainNet, data["train"])
 	}
 
 	// train the network
 	rng2 := nnet.SetSeed(conf.RandSeed)
-	tester := nnet.NewTestLogger(q, conf, data, rng2)
+	tester := nnet.NewTestLogger(dev, conf, data, rng2)
 	nnet.Train(trainNet, trainData, tester)
 
 	// exit
 	if conf.DebugLevel >= 1 {
-		fmt.Println("== After ==")
+		log.Println("== After ==")
 		predict(q, trainNet, data["train"])
 	}
 	if conf.MemProfile {
-		fmt.Printf(trainNet.MemoryProfile())
-		fmt.Printf(tester.MemoryProfile())
+		log.Printf(trainNet.MemoryProfile())
+		log.Printf(tester.MemoryProfile())
 	} else {
-		mem := trainNet.Memory() + tester.Memory()
-		fmt.Printf("memory used: %s\n", nnet.FormatBytes(mem))
+		log.Printf("memory used: %s\n", nnet.FormatBytes(trainNet.Memory()+tester.Memory()))
+	}
+	if conf.Profile {
+		log.Print(q.Profile())
 	}
 	trainData.Release()
 	tester.Release()

@@ -225,7 +225,7 @@ func info(desc, url string, img image.Image, channels bool, factorMin, scaleWidt
 				info.Width /= 2
 			}
 			if err := png.Encode(&info.ImageData, img); err != nil {
-				log.Println(err)
+				log.Println("ERROR: error encoding image", err)
 			}
 		}
 	}

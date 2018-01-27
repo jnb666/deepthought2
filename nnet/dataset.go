@@ -6,23 +6,52 @@ import (
 	"github.com/jnb666/deepthought2/img"
 	"github.com/jnb666/deepthought2/num"
 	"io"
+	"log"
 	"math/rand"
 	"os"
 	"path"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const headerBytes = 16
 
 var (
 	DataDir   = os.Getenv("GOPATH") + "/src/github.com/jnb666/deepthought2/data"
+	LogDir    = os.Getenv("GOPATH") + "/src/github.com/jnb666/deepthought2/log"
 	DataTypes = []string{"train", "test", "valid"}
 )
 
+var logFile io.WriteCloser
+
 func init() {
 	gob.Register(&data{})
+}
+
+// Init logger to write to file
+func InitLogger(model string, flags int) error {
+	base := path.Join(LogDir, model)
+	if _, err := os.Stat(base); os.IsNotExist(err) {
+		if err = os.Mkdir(base, 0755); err != nil {
+			return err
+		}
+	}
+	timestamp := time.Now().Format("20060102_150405")
+	name := path.Join(base, timestamp+".log")
+	fmt.Println("writing log to", name)
+	if f, err := os.Create(name); err == nil {
+		if logFile != nil {
+			logFile.Close()
+		}
+		logFile = f
+		log.SetOutput(io.MultiWriter(os.Stdout, f))
+		log.SetFlags(flags)
+		return nil
+	} else {
+		return err
+	}
 }
 
 // Data interface type represents the raw data for a training or test set
@@ -209,11 +238,10 @@ func LoadDataFile(name string) (Data, error) {
 	default:
 		return nil, fmt.Errorf("Error reading file %s.dat: invalid type header %s", name, dtype)
 	}
-	fmt.Printf("loading data from %s.dat\t", name)
 	if err = d.Decode(f); err != nil {
 		return nil, fmt.Errorf("Error decoding file %s.dat: %s", name, err)
 	}
-	fmt.Println(append(d.Shape(), d.Len()))
+	log.Printf("load data from %s.dat: %v\n", name, append(d.Shape(), d.Len()))
 	return d, nil
 }
 
@@ -225,7 +253,7 @@ func SaveDataFile(d Data, name string) error {
 		return err
 	}
 	defer f.Close()
-	fmt.Printf("saving data to %s.dat\n", name)
+	log.Printf("saving data to %s.dat\n", name)
 	fmt.Fprintf(f, "%-"+strconv.Itoa(headerBytes)+"T", d)
 	return d.Encode(f)
 }

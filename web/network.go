@@ -89,7 +89,6 @@ type TuneParams struct {
 // Create a new network and load config from data given model name
 func NewNetwork(model string) (*Network, error) {
 	n := &Network{test: nnet.NewTestBase()}
-	log.Println("load model:", model)
 	var err error
 	n.NetworkData, err = LoadNetwork(model, false)
 	if err != nil {
@@ -105,12 +104,14 @@ func NewNetwork(model string) (*Network, error) {
 // Initialise the network
 func (n *Network) Init(conf nnet.Config) error {
 	var err error
-	log.Printf("init network: dataSet=%s useGPU=%v\n", conf.DataSet, conf.UseGPU)
+	log.Printf("init network: model=%s dataSet=%s useGPU=%v\n", n.Model, conf.DataSet, conf.UseGPU)
 	if n.view != nil {
+		log.Println("sync queue")
 		n.view.queue.Finish()
 		n.queue.Finish()
 	}
-	if n.Network == nil || conf.UseGPU != n.Network.UseGPU {
+	if n.queue == nil || n.Network == nil || conf.UseGPU != n.Network.UseGPU {
+		log.Println("new queue")
 		n.queue = num.NewDevice(conf.UseGPU).NewQueue()
 	}
 	if n.Network == nil || conf.RandSeed != n.Network.RandSeed {
@@ -129,11 +130,9 @@ func (n *Network) Init(conf nnet.Config) error {
 		}
 	}
 	n.release()
-	n.trainData = nnet.NewDataset(n.queue.Dev(), n.Data["train"], conf.DatasetConfig(false), n.rng)
+	dev := n.queue.Dev()
+	n.trainData = nnet.NewDataset(dev, n.Data["train"], conf.DatasetConfig(false), n.rng)
 	n.Network = nnet.New(n.queue, conf, n.trainData.BatchSize, n.trainData.Shape(), n.rng)
-	if n.DebugLevel >= 1 {
-		fmt.Println(n.Network)
-	}
 	n.test.Init(n.queue, conf, n.Data, n.testRng).Predict(n.trainData)
 	n.Labels = make(map[string][]int32)
 	for key, dset := range n.test.Data {
@@ -141,9 +140,9 @@ func (n *Network) Init(conf nnet.Config) error {
 	}
 	n.initLabels("train", n.trainData)
 	if d, ok := n.Data["test"]; ok {
-		n.view = newViewData(n.queue.Dev(), "test", d, n.trans["test"], conf, n.testRng)
+		n.view = newViewData(dev, "test", d, n.trans["test"], conf, n.testRng)
 	} else if d, ok = n.Data["train"]; ok {
-		n.view = newViewData(n.queue.Dev(), "train", d, nil, conf, n.testRng)
+		n.view = newViewData(dev, "train", d, nil, conf, n.testRng)
 	} else {
 		err = fmt.Errorf("Network init: no test or train data")
 	}
@@ -159,17 +158,24 @@ func (n *Network) initLabels(key string, dset *nnet.Dataset) {
 func (n *Network) release() {
 	if n.Network != nil {
 		n.Network.Release()
+		n.Network = nil
 	}
 	if n.test != nil {
 		n.test.Release()
 	}
 	if n.trainData != nil {
 		n.trainData.Release()
+		n.trainData = nil
 	}
 	if n.view != nil {
 		n.view.Release()
 		n.view.input.Release()
+		n.view = nil
 	}
+}
+
+func (n *Network) Queue() num.Queue {
+	return n.queue
 }
 
 // Initialise for new training run
@@ -182,7 +188,8 @@ func (n *Network) Start(conf nnet.Config, lock bool) error {
 		return err
 	}
 	n.test.Reset()
-	log.Println("init weights")
+	log.Println(n.Network)
+	log.Println("start: init weights")
 	n.InitWeights(n.rng)
 	n.view.loadWeights(n.Network)
 	n.Epoch = 0
@@ -251,10 +258,18 @@ func (n *Network) Train(restart bool) error {
 		n.Lock()
 		n.running = false
 		n.stop = false
+		log.Printf("memory used: %s\n", nnet.FormatBytes(n.Memory()+n.test.Memory()+n.view.Memory()))
+
+		// save state to disk
+		n.Export()
+		err := SaveNetwork(n.NetworkData, false)
 		n.Unlock()
+		if err != nil {
+			log.Println("ERROR: error saving network:", err)
+		}
 		log.Println("train: end - quit =", quit)
 		if n.Profile {
-			fmt.Printf("== Profile ==\n%s\n", n.queue.Profile())
+			log.Printf("== Profile ==\n%s\n", n.queue.Profile())
 		}
 	}()
 	return nil
@@ -270,8 +285,10 @@ func (n *Network) nextEpoch(epoch int, done bool) bool {
 		n.running = false
 		quit = true
 	}
+	s := n.test.Stats[epoch-1]
+	log.Println(s.String(n.test.Headers))
 	if done || quit {
-		log.Println(n.test.Stats[epoch-1].String(n.test.Headers, true))
+		log.Printf("train time:%s  total:%s", nnet.FormatDuration(s.TrainTime), nnet.FormatDuration(s.Elapsed))
 	}
 	// update predictions for each image
 	for key, pred := range n.test.Pred {
@@ -295,18 +312,10 @@ func (n *Network) nextEpoch(epoch int, done bool) bool {
 		msg := []byte(strconv.Itoa(n.Run+1) + ":" + strconv.Itoa(epoch))
 		err := n.conn.WriteMessage(websocket.TextMessage, msg)
 		if err != nil {
-			log.Println("nextEpoch: error writing to websocket", err)
+			log.Println("ERROR: error writing to websocket", err)
 		}
 	} else {
-		log.Println("nextEpoch: websocket is not initialised")
-	}
-	// save state to disk
-	n.Lock()
-	n.Export()
-	err := SaveNetwork(n.NetworkData, false)
-	n.Unlock()
-	if err != nil {
-		log.Println("nextEpoch: error saving network:", err)
+		log.Println("ERROR: websocket is not initialised")
 	}
 	return quit
 }
@@ -338,40 +347,36 @@ func (n *Network) Export() {
 func (n *Network) Import() {
 	n.test.Stats = n.Stats
 	if n.Epoch == 0 {
-		log.Println("init weights")
+		log.Println("import: init weights")
 		n.InitWeights(n.rng)
 	} else if n.Params != nil && len(n.Params) > 0 {
 		log.Println("import weights")
 		nlayers := len(n.Network.Layers)
 		for _, p := range n.Params {
 			if p.Layer >= nlayers {
-				log.Printf("layer %d import error: network has %d layers total", p.Layer, nlayers)
-				return
+				log.Fatalf("ERROR: layer %d import error: network has %d layers total", p.Layer, nlayers)
 			}
 			layer, ok := n.Network.Layers[p.Layer].(nnet.ParamLayer)
 			if !ok {
-				log.Printf("layer %d import error: not a ParamLayer", p.Layer)
-				return
+				log.Fatalf("ERROR: layer %d import error: not a ParamLayer", p.Layer)
 			}
 			W, B, _, _ := layer.Params()
 			if B != nil {
 				if size := num.Prod(B.Dims()); size != len(p.BiasV) {
-					log.Printf("layer %d import error: bias size mismatch - have %d - expect %d",
+					log.Fatalf("ERROR: layer %d import error: bias size mismatch - have %d - expect %d",
 						p.Layer, len(p.BiasV), size)
-					return
 				}
 				n.queue.Call(num.Write(B, p.BiasV))
 			}
 			if size := num.Prod(W.Dims()); size != len(p.WeightV) {
-				log.Printf("layer %d import error: weight size mismatch - have %d - expect %d",
+				log.Fatalf("ERROR: layer %d import error: weight size mismatch - have %d - expect %d",
 					p.Layer, len(p.WeightV), size)
-				return
 			}
 			n.queue.Call(num.Write(W, p.WeightV))
 		}
 		n.view.loadWeights(n.Network)
 	} else {
-		log.Println("no weights to import!")
+		log.Fatalln("ERROR: no weights to import!")
 	}
 }
 
@@ -390,6 +395,7 @@ func SaveNetwork(data *NetworkData, reset bool) error {
 		return err
 	} else {
 		defer f.Close()
+		log.Println("saving network config to", model+".net")
 		return gob.NewEncoder(f).Encode(*data)
 	}
 }
@@ -551,6 +557,7 @@ func newViewData(dev num.Device, dset string, data nnet.Data, trans *img.Transfo
 		}
 		// allocate buffers and images for weights and biases
 		if pLayer, ok := layer.(nnet.ParamLayer); ok {
+			//log.Printf("param layer %d: %v %v\n", i, pLayer.FilterShape(), pLayer.BiasShape())
 			W, B, _, _ := pLayer.Params()
 			// conv followed by batchnorm?
 			var W2 num.Array
@@ -706,7 +713,7 @@ func (l *viewLayer) addOutputImage(layer int, dims []int) {
 		height = (dims[1] + 1) * l.oy
 		width = (dims[0] + 1) * l.ox
 	default:
-		log.Printf("viewLayer: output shape not supported %v", dims)
+		log.Fatalf("ERROR: viewLayer - output shape not supported %v", dims)
 	}
 	l.outData = make([]float32, num.Prod(dims))
 	l.outImage = image.NewNRGBA(image.Rect(0, 0, width, height))
@@ -715,8 +722,7 @@ func (l *viewLayer) addOutputImage(layer int, dims []int) {
 func (l *viewLayer) addWeightImage(layer int, W, B, W2 num.Array) {
 	l.wShape = W.Dims()
 	if len(l.wShape) < 1 || (B != nil && B.Size() != l.wShape[len(l.wShape)-1]) {
-		log.Printf("viewLayer %d: weight shape not supported %v %v", layer, l.wShape, l.bShape)
-		return
+		log.Fatalf("ERROR: viewLayer %d: weight shape not supported %v %v", layer, l.wShape, l.bShape)
 	}
 	l.wData = make([]float32, num.Prod(l.wShape))
 	l.wborder = 1
@@ -740,8 +746,7 @@ func (l *viewLayer) addWeightImage(layer int, W, B, W2 num.Array) {
 		l.wiy2, l.wix2 = factorise(l.wShape[2], 0, 1)
 		l.wix, l.wiy = l.wix2*l.wShape[0], l.wiy2*l.wShape[1]
 	default:
-		log.Printf("viewLayer %d: weight shape not supported %v %v", layer, l.wShape, l.bShape)
-		return
+		log.Fatalf("ERROR: viewLayer %d: weight shape not supported %v %v", layer, l.wShape, l.bShape)
 	}
 	l.wImage = image.NewNRGBA(image.Rect(0, 0, (l.wix+l.wborder)*l.wox, (l.wiy+l.wborder)*l.woy))
 }
@@ -772,7 +777,7 @@ func mapColor(val float32, cmap palette.ColorMap) color.Color {
 	}
 	col, err := cmap.At(v)
 	if err != nil {
-		log.Fatalf("error in colormap lookup: %s\n", err)
+		log.Fatalf("ERROR: error in colormap lookup for %s\n", err)
 	}
 	return col
 }

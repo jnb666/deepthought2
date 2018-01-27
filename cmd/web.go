@@ -5,7 +5,6 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/jnb666/deepthought2/nnet"
 	"github.com/jnb666/deepthought2/web"
-	"log"
 	"net/http"
 	"os"
 )
@@ -18,12 +17,13 @@ const (
 )
 
 func main() {
-	log.SetFlags(0)
 	if len(os.Args) < 2 {
 		fmt.Println("usage: web [opts] <model>")
 		os.Exit(1)
 	}
 	model := os.Args[len(os.Args)-1]
+	err := nnet.InitLogger(model, 0)
+	nnet.CheckErr(err)
 	net, err := web.NewNetwork(model)
 	nnet.CheckErr(err)
 
