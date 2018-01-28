@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"github.com/jnb666/deepthought2/num/cuda"
 	"github.com/jnb666/deepthought2/num/mkl"
-	"runtime"
+	"reflect"
 	"unsafe"
 )
 
@@ -14,98 +14,75 @@ var (
 	PrintEdgeitems = 4
 )
 
-// Array interface is a general n dimensional tensor similar to a numpy ndarray
-// data is stored internally in column major order
-type Array interface {
-	// Dims returns the shape of the array in rows, cols, ... order
-	Dims() []int
-	// Size is total number of elements
-	Size() int
-	// Dtype returns the data type of the elements in the array
-	Dtype() DataType
-	// Reshape returns a new array of the same size with a view on the same data but with a different shape
-	Reshape(dims ...int) Array
-	// Reference to the raw data
+// Buffer interface type represents the underlying data for an array
+type Buffer interface {
+	// pointer to data
 	Data() unsafe.Pointer
-	// Formatted output
-	String(q Queue) string
-	// Release any allocated memory
+	// size of buffer in 32 bit words
+	Size() int
+	// release frees the memory
 	Release()
 }
 
-// array resident in main memory
-type arrayCPU struct {
-	arrayBase
-	data unsafe.Pointer
+type subBuffer struct {
+	buf  Buffer
+	off  int
+	size int
 }
 
-func (d cpuDevice) NewArray(dtype DataType, dims ...int) Array {
-	return newArrayCPU(dtype, dims, mkl.NewBuffer(Prod(dims)))
+func (s subBuffer) Data() unsafe.Pointer {
+	return unsafe.Pointer(uintptr(s.buf.Data()) + uintptr(s.off*4))
 }
 
-func (d cpuDevice) NewArrayLike(a Array) Array {
-	return newArrayCPU(a.Dtype(), a.Dims(), mkl.NewBuffer(Prod(a.Dims())))
+func (s subBuffer) Size() int { return s.size }
+
+func (s subBuffer) Release() {}
+
+// Memory pool can be used to allocate temporary arrays
+type Pool struct {
+	Buffer
+	used int
 }
 
-func newArrayCPU(dtype DataType, dims []int, data unsafe.Pointer) *arrayCPU {
-	return &arrayCPU{arrayBase: arrayBase{size: Prod(dims), dims: dims, dtype: dtype}, data: data}
+// Clear space used in the pool
+func (p *Pool) Clear() {
+	p.used = 0
 }
 
-func (a *arrayCPU) Data() unsafe.Pointer { return a.data }
-
-func (a *arrayCPU) Release() {}
-
-func (a *arrayCPU) Reshape(dims ...int) Array {
-	return &arrayCPU{arrayBase: a.reshape(dims), data: a.data}
+// Allocate a new array in the pool
+func (p *Pool) NewArray(dtype DataType, dims ...int) *Array {
+	size := Prod(dims)
+	if p.Size()-p.used < size {
+		panic("NewArray: not enough space in pool!")
+	}
+	arr := &Array{
+		Buffer: subBuffer{buf: p.Buffer, off: p.used, size: size},
+		Dtype:  dtype,
+		Dims:   dims,
+	}
+	p.used += size
+	return arr
 }
 
-func (a *arrayCPU) String(q Queue) string { return toString(a, q) }
-
-// array resident on GPU
-type arrayGPU struct {
-	arrayBase
-	data cuda.Buffer
+func (d cpuDevice) NewPool(size int) *Pool {
+	return &Pool{Buffer: mkl.NewBuffer(size)}
 }
 
-func (d gpuDevice) NewArray(dtype DataType, dims ...int) Array {
-	return newArrayGPU(dtype, dims, cuda.NewBuffer(Prod(dims)*4).Clear())
+func (d gpuDevice) NewPool(size int) *Pool {
+	return &Pool{Buffer: cuda.NewBuffer(size)}
 }
 
-func (d gpuDevice) NewArrayLike(a Array) Array {
-	return newArrayGPU(a.Dtype(), a.Dims(), cuda.NewBuffer(Prod(a.Dims())*4).Clear())
+// Array struct is a general n dimensional tensor similar to a numpy ndarray
+// data is stored internally in column major order, may be either on CPU or on GPU depending on buffer type
+type Array struct {
+	Buffer
+	Dtype DataType
+	Dims  []int
 }
 
-func newArrayGPU(dtype DataType, dims []int, data cuda.Buffer) *arrayGPU {
-	a := &arrayGPU{arrayBase: arrayBase{size: Prod(dims), dims: dims, dtype: dtype}, data: data}
-	runtime.SetFinalizer(a, func(obj *arrayGPU) { a.data.Free() })
-	return a
-}
-
-func (a *arrayGPU) Data() unsafe.Pointer { return a.data.Ptr }
-
-func (a *arrayGPU) Release() { a.data.Free() }
-
-func (a *arrayGPU) Reshape(dims ...int) Array {
-	return &arrayGPU{arrayBase: a.reshape(dims), data: a.data}
-}
-
-func (a *arrayGPU) String(q Queue) string { return toString(a, q) }
-
-// common array functions
-type arrayBase struct {
-	size  int
-	dims  []int
-	dtype DataType
-}
-
-func (a arrayBase) Size() int { return a.size }
-
-func (a arrayBase) Dims() []int { return a.dims }
-
-func (a arrayBase) Dtype() DataType { return a.dtype }
-
-func (a arrayBase) reshape(dims []int) arrayBase {
-	n := a.size
+// Reshape returns a new array of the same size with a view on the same data but with a different shape
+func (a *Array) Reshape(dims ...int) *Array {
+	n := a.Size()
 	for i := range dims {
 		if dims[i] == -1 {
 			other := 1
@@ -123,18 +100,45 @@ func (a arrayBase) reshape(dims []int) arrayBase {
 	if Prod(dims) != n {
 		panic("reshape must be to array of same size")
 	}
-	return arrayBase{size: n, dims: dims, dtype: a.dtype}
+	return &Array{Buffer: a.Buffer, Dtype: a.Dtype, Dims: dims}
 }
 
-func toString(a Array, q Queue) string {
+// String returns pretty printed output
+func (a *Array) String(q Queue) string {
 	var data interface{}
-	if a.Dtype() == Int32 {
+	if a.Dtype == Int32 {
 		data = make([]int32, a.Size())
 	} else {
 		data = make([]float32, a.Size())
 	}
 	q.Call(Read(a, data)).Finish()
-	return format(a.Dims(), data, 0, 1, "", false)
+	return format(a.Dims, data, 0, 1, "", false)
+}
+
+// array resident in main memory
+func (d cpuDevice) NewArray(dtype DataType, dims ...int) *Array {
+	return &Array{
+		Buffer: mkl.NewBuffer(Prod(dims)),
+		Dtype:  dtype,
+		Dims:   dims,
+	}
+}
+
+func (d cpuDevice) NewArrayLike(a *Array) *Array {
+	return d.NewArray(a.Dtype, a.Dims...)
+}
+
+// array resident on GPU
+func (d gpuDevice) NewArray(dtype DataType, dims ...int) *Array {
+	return &Array{
+		Buffer: cuda.NewBuffer(Prod(dims)),
+		Dtype:  dtype,
+		Dims:   dims,
+	}
+}
+
+func (d gpuDevice) NewArrayLike(a *Array) *Array {
+	return d.NewArray(a.Dtype, a.Dims...)
 }
 
 func format(dims []int, data interface{}, at, stride int, indent string, dots bool) string {
@@ -231,7 +235,7 @@ func SameShape(xd, yd []int) bool {
 }
 
 // Total size of one of more arrays in bytes
-func Bytes(arr ...Array) (bytes int) {
+func Bytes(arr ...*Array) (bytes int) {
 	for _, a := range arr {
 		if a != nil {
 			bytes += 4 * a.Size()
@@ -241,9 +245,9 @@ func Bytes(arr ...Array) (bytes int) {
 }
 
 // Release one or more arrays
-func Release(arr ...Array) {
+func Release(arr ...Buffer) {
 	for _, a := range arr {
-		if a != nil {
+		if a != nil && !reflect.ValueOf(a).IsNil() {
 			a.Release()
 		}
 	}

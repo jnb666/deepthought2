@@ -72,7 +72,7 @@ type ConvLayer struct {
 }
 
 // Create new convolution layer
-func Convolution(s *Stream, n, c, h, w, nFeats, filtSize, stride int, padding, noBias bool) (*ConvLayer, int) {
+func Convolution(n, c, h, w, nFeats, filtSize, stride int, padding, noBias bool) *ConvLayer {
 	l := &ConvLayer{}
 	wOut, wPad, err := getOutSize(w, filtSize, stride, padding)
 	if err != nil {
@@ -91,29 +91,35 @@ func Convolution(s *Stream, n, c, h, w, nFeats, filtSize, stride int, padding, n
 	chkDnn(C.cudnnCreateConvolutionDescriptor(&l.desc))
 	chkDnn(C.cudnnSetConvolution2dDescriptor(l.desc, C.int(hPad), C.int(wPad), C.int(stride), C.int(stride),
 		1, 1, C.CUDNN_CROSS_CORRELATION, C.CUDNN_DATA_FLOAT))
-	workSize := l.init(s)
-	return l, workSize
+	return l
 }
 
 // Initialise the layer, returns work space size needed
-func (l *ConvLayer) init(s *Stream) int {
-	var size [3]C.size_t
+func (l *ConvLayer) Init(s *Stream, bpropWeights, bpropData bool) int {
+	size := []C.size_t{0}
 	var fwdAlgo C.cudnnConvolutionFwdAlgo_t
 	chkDnn(C.cudnnGetConvolutionForwardAlgorithm(s.cudnn, l.Src.desc, l.Filter.desc, l.desc, l.Dst.desc,
 		C.CUDNN_CONVOLUTION_FWD_PREFER_FASTEST, 0, &fwdAlgo))
 	chkDnn(C.cudnnGetConvolutionForwardWorkspaceSize(s.cudnn, l.Src.desc, l.Filter.desc, l.desc, l.Dst.desc, fwdAlgo, &size[0]))
 	l.Algo[FwdAlgo] = int(fwdAlgo)
-	var bFiltAlgo C.cudnnConvolutionBwdFilterAlgo_t
-	chkDnn(C.cudnnGetConvolutionBackwardFilterAlgorithm(s.cudnn, l.Src.desc, l.Dst.desc, l.desc, l.Filter.desc,
-		C.CUDNN_CONVOLUTION_BWD_FILTER_PREFER_FASTEST, 0, &bFiltAlgo))
-	chkDnn(C.cudnnGetConvolutionBackwardFilterWorkspaceSize(s.cudnn, l.Src.desc, l.Dst.desc, l.desc, l.Filter.desc, bFiltAlgo, &size[1]))
-	l.Algo[BwdFilterAlgo] = int(BwdFilterAlgo)
-	var bDataAlgo C.cudnnConvolutionBwdDataAlgo_t
-	chkDnn(C.cudnnGetConvolutionBackwardDataAlgorithm(s.cudnn, l.Filter.desc, l.Dst.desc, l.desc, l.Src.desc,
-		C.CUDNN_CONVOLUTION_BWD_DATA_PREFER_FASTEST, 0, &bDataAlgo))
-	chkDnn(C.cudnnGetConvolutionBackwardDataWorkspaceSize(s.cudnn, l.Filter.desc, l.Dst.desc, l.desc, l.Src.desc, bDataAlgo, &size[2]))
-	l.Algo[BwdDataAlgo] = int(bDataAlgo)
-	return maxSize(size[:])
+	var sz C.size_t
+	if bpropWeights {
+		var bFiltAlgo C.cudnnConvolutionBwdFilterAlgo_t
+		chkDnn(C.cudnnGetConvolutionBackwardFilterAlgorithm(s.cudnn, l.Src.desc, l.Dst.desc, l.desc, l.Filter.desc,
+			C.CUDNN_CONVOLUTION_BWD_FILTER_PREFER_FASTEST, 0, &bFiltAlgo))
+		chkDnn(C.cudnnGetConvolutionBackwardFilterWorkspaceSize(s.cudnn, l.Src.desc, l.Dst.desc, l.desc, l.Filter.desc, bFiltAlgo, &sz))
+		l.Algo[BwdFilterAlgo] = int(BwdFilterAlgo)
+		size = append(size, sz)
+	}
+	if bpropData {
+		var bDataAlgo C.cudnnConvolutionBwdDataAlgo_t
+		chkDnn(C.cudnnGetConvolutionBackwardDataAlgorithm(s.cudnn, l.Filter.desc, l.Dst.desc, l.desc, l.Src.desc,
+			C.CUDNN_CONVOLUTION_BWD_DATA_PREFER_FASTEST, 0, &bDataAlgo))
+		chkDnn(C.cudnnGetConvolutionBackwardDataWorkspaceSize(s.cudnn, l.Filter.desc, l.Dst.desc, l.desc, l.Src.desc, bDataAlgo, &sz))
+		l.Algo[BwdDataAlgo] = int(bDataAlgo)
+		size = append(size, sz)
+	}
+	return maxWords(size[:])
 }
 
 func (l *ConvLayer) InShape() []int { return l.Src.Dims }
@@ -255,13 +261,13 @@ func Dropout(s *Stream, ratio float64, shape []int, seed int64) *DropoutLayer {
 	}
 	var size C.size_t
 	chkDnn(C.cudnnDropoutGetStatesSize(s.cudnn, &size))
-	l.States = NewBuffer(int(size))
+	l.States = NewBuffer(words(size))
 	chkDnn(C.cudnnDropoutGetReserveSpaceSize(l.Src.desc, &size))
-	l.Reserve = NewBuffer(int(size))
+	l.Reserve = NewBuffer(words(size))
 
 	chkDnn(C.cudnnCreateDropoutDescriptor(&l.desc))
 	chkDnn(C.cudnnSetDropoutDescriptor(l.desc, s.cudnn, C.float(ratio),
-		l.States.Ptr, C.size_t(l.States.Size), C.ulonglong(seed)))
+		l.States.Data(), C.size_t(l.States.Size()*4), C.ulonglong(seed)))
 	return l
 }
 
@@ -276,8 +282,8 @@ func (l *DropoutLayer) Ptr() unsafe.Pointer {
 func (l *DropoutLayer) Release() {
 	if !l.freed {
 		l.Src.Release()
-		l.States.Free()
-		l.Reserve.Free()
+		l.States.Release()
+		l.Reserve.Release()
 		C.cudnnDestroyDropoutDescriptor(l.desc)
 		l.freed = true
 	}
@@ -389,16 +395,6 @@ func getOutSize(in, filter, stride int, padding bool) (out, pad int, err error) 
 		}
 	}
 	return
-}
-
-func maxSize(size []C.size_t) int {
-	bytes := 0
-	for _, s := range size {
-		if int(s) > bytes {
-			bytes = int(s)
-		}
-	}
-	return bytes
 }
 
 type DnnStatus C.cudnnStatus_t

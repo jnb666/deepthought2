@@ -76,7 +76,7 @@ type Dataset struct {
 	queue     num.Queue
 	xBuffer   []float32
 	yBuffer   []int32
-	x, y, y1H [2]num.Array
+	x, y, y1H [2]*num.Array
 	indexes   []int
 	buf       int
 	epoch     int
@@ -180,7 +180,7 @@ func (d *Dataset) loadBatch() {
 }
 
 // Get next batch of data
-func (d *Dataset) NextBatch() (x, y, yOneHot num.Array) {
+func (d *Dataset) NextBatch() (x, y, yOneHot *num.Array) {
 	d.Wait()
 	x, y, yOneHot = d.x[d.buf], d.y[d.buf], d.y1H[d.buf]
 	d.batch = (d.batch + 1) % d.Batches

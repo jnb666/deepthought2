@@ -132,7 +132,7 @@ func (n *Network) Init(conf nnet.Config) error {
 	n.release()
 	dev := n.queue.Dev()
 	n.trainData = nnet.NewDataset(dev, n.Data["train"], conf.DatasetConfig(false), n.rng)
-	n.Network = nnet.New(n.queue, conf, n.trainData.BatchSize, n.trainData.Shape(), n.rng)
+	n.Network = nnet.New(n.queue, conf, n.trainData.BatchSize, n.trainData.Shape(), true, n.rng)
 	n.test.Init(n.queue, conf, n.Data, n.testRng).Predict(n.trainData)
 	n.Labels = make(map[string][]int32)
 	for key, dset := range n.test.Data {
@@ -188,7 +188,6 @@ func (n *Network) Start(conf nnet.Config, lock bool) error {
 		return err
 	}
 	n.test.Reset()
-	log.Println(n.Network)
 	log.Println("start: init weights")
 	n.InitWeights(n.rng)
 	n.view.loadWeights(n.Network)
@@ -219,6 +218,7 @@ func (n *Network) Train(restart bool) error {
 	if n.Epoch == 0 || n.Epoch > n.MaxEpoch {
 		return nil
 	}
+	log.Println(n.Network)
 	n.running = true
 	n.stop = false
 	go func() {
@@ -331,10 +331,10 @@ func (n *Network) Export() {
 	n.Params = []LayerData{}
 	for i, layer := range n.Layers {
 		if l, ok := layer.(nnet.ParamLayer); ok {
-			W, B, _, _ := l.Params()
-			d := LayerData{Layer: i, WeightV: make([]uint32, num.Prod(W.Dims()))}
+			W, B := l.Params()
+			d := LayerData{Layer: i, WeightV: make([]uint32, num.Prod(W.Dims))}
 			if B != nil {
-				d.BiasV = make([]uint32, num.Prod(B.Dims()))
+				d.BiasV = make([]uint32, num.Prod(B.Dims))
 				n.queue.Call(num.Read(B, d.BiasV))
 			}
 			n.queue.Call(num.Read(W, d.WeightV)).Finish()
@@ -360,15 +360,15 @@ func (n *Network) Import() {
 			if !ok {
 				log.Fatalf("ERROR: layer %d import error: not a ParamLayer", p.Layer)
 			}
-			W, B, _, _ := layer.Params()
+			W, B := layer.Params()
 			if B != nil {
-				if size := num.Prod(B.Dims()); size != len(p.BiasV) {
+				if size := num.Prod(B.Dims); size != len(p.BiasV) {
 					log.Fatalf("ERROR: layer %d import error: bias size mismatch - have %d - expect %d",
 						p.Layer, len(p.BiasV), size)
 				}
 				n.queue.Call(num.Write(B, p.BiasV))
 			}
-			if size := num.Prod(W.Dims()); size != len(p.WeightV) {
+			if size := num.Prod(W.Dims); size != len(p.WeightV) {
 				log.Fatalf("ERROR: layer %d import error: weight size mismatch - have %d - expect %d",
 					p.Layer, len(p.WeightV), size)
 			}
@@ -506,7 +506,7 @@ type viewData struct {
 	dset    string
 	data    nnet.Data
 	trans   *img.Transformer
-	input   num.Array
+	input   *num.Array
 	inShape []int
 	inData  []float32
 	cmapOut palette.ColorMap
@@ -535,7 +535,7 @@ type viewLayer struct {
 func newViewData(dev num.Device, dset string, data nnet.Data, trans *img.Transformer, conf nnet.Config, rng *rand.Rand) *viewData {
 	v := &viewData{queue: dev.NewQueue(), dset: dset, data: data, trans: trans}
 	v.inShape = data.Shape()
-	v.Network = nnet.New(v.queue, conf, 1, v.inShape, rng)
+	v.Network = nnet.New(v.queue, conf, 1, v.inShape, false, rng)
 	v.inData = make([]float32, num.Prod(v.inShape))
 	v.input = dev.NewArray(num.Float32, append(v.inShape, 1)...)
 	for i, layer := range v.Layers {
@@ -558,11 +558,11 @@ func newViewData(dev num.Device, dset string, data nnet.Data, trans *img.Transfo
 		// allocate buffers and images for weights and biases
 		if pLayer, ok := layer.(nnet.ParamLayer); ok {
 			//log.Printf("param layer %d: %v %v\n", i, pLayer.FilterShape(), pLayer.BiasShape())
-			W, B, _, _ := pLayer.Params()
+			W, B := pLayer.Params()
 			// conv followed by batchnorm?
-			var W2 num.Array
+			var W2 *num.Array
 			if next := v.Layers[i+1]; l.ltype == "conv" && next.Type() == "batchNorm" && B == nil {
-				W2, B, _, _ = next.(nnet.ParamLayer).Params()
+				W2, B = next.(nnet.ParamLayer).Params()
 				l.batchNorm = true
 			}
 			if l.ltype == "linear" || l.ltype == "conv" {
@@ -641,12 +641,12 @@ func (v *viewData) updateWeights() {
 		if l.wImage == nil {
 			continue
 		}
-		var W2 num.Array
-		W, B, _, _ := v.Layers[iLayer].(nnet.ParamLayer).Params()
+		var W2 *num.Array
+		W, B := v.Layers[iLayer].(nnet.ParamLayer).Params()
 		if B != nil {
 			v.queue.Call(num.Read(B, l.bData))
 		} else if l.batchNorm {
-			W2, B, _, _ = v.Layers[iLayer+1].(nnet.ParamLayer).Params()
+			W2, B = v.Layers[iLayer+1].(nnet.ParamLayer).Params()
 			v.queue.Call(
 				num.Read(W2, l.bData),
 				num.Read(B, l.bData[W2.Size():]),
@@ -719,8 +719,8 @@ func (l *viewLayer) addOutputImage(layer int, dims []int) {
 	l.outImage = image.NewNRGBA(image.Rect(0, 0, width, height))
 }
 
-func (l *viewLayer) addWeightImage(layer int, W, B, W2 num.Array) {
-	l.wShape = W.Dims()
+func (l *viewLayer) addWeightImage(layer int, W, B, W2 *num.Array) {
+	l.wShape = W.Dims
 	if len(l.wShape) < 1 || (B != nil && B.Size() != l.wShape[len(l.wShape)-1]) {
 		log.Fatalf("ERROR: viewLayer %d: weight shape not supported %v %v", layer, l.wShape, l.bShape)
 	}

@@ -70,18 +70,18 @@ const (
 )
 
 // Read data from array into a slice.
-func Read(a Array, data interface{}) Function {
-	return args(C.COPY_TO_HOST, Prod(a.Dims()), a.Data(), ptr(data))
+func Read(a *Array, data interface{}) Function {
+	return args(C.COPY_TO_HOST, Prod(a.Dims), a.Data(), ptr(data))
 }
 
 // Write data from a slice into the given array.
-func Write(a Array, data interface{}) Function {
-	return args(C.COPY_TO_DEVICE, Prod(a.Dims()), ptr(data), a.Data())
+func Write(a *Array, data interface{}) Function {
+	return args(C.COPY_TO_DEVICE, Prod(a.Dims), ptr(data), a.Data())
 }
 
 // Write to one column in the array
-func WriteCol(a Array, col int, data interface{}) Function {
-	dims := a.Dims()
+func WriteCol(a *Array, col int, data interface{}) Function {
+	dims := a.Dims
 	var rows, cols int
 	if len(dims) == 1 {
 		rows, cols = 1, dims[0]
@@ -97,16 +97,16 @@ func WriteCol(a Array, col int, data interface{}) Function {
 }
 
 // Fill array with a scalar value
-func Fill(a Array, scalar float32) Function {
-	return args(C.FILL, int(a.Dtype()), Prod(a.Dims()), scalar, a.Data())
+func Fill(a *Array, scalar float32) Function {
+	return args(C.FILL, int(a.Dtype), Prod(a.Dims), scalar, a.Data())
 }
 
 // Copy from src to dst, broadcast vector to matrix if needed, vector is tiled row wise
-func Copy(src, dst Array) Function {
-	if src.Dtype() != dst.Dtype() {
+func Copy(src, dst *Array) Function {
+	if src.Dtype != dst.Dtype {
 		panic("Copy: arguments must be same type")
 	}
-	ddim, sdim := dst.Dims(), src.Dims()
+	ddim, sdim := dst.Dims, src.Dims
 	if SameShape(ddim, sdim) {
 		return args(C.COPY, Prod(ddim), src.Data(), dst.Data())
 	} else if len(sdim) == 1 && len(ddim) == 2 && sdim[0] == ddim[1] {
@@ -121,23 +121,23 @@ func Copy(src, dst Array) Function {
 }
 
 // Element wise != comparison
-func Neq(x, y, res Array) Function {
-	if x.Dtype() != Int32 || y.Dtype() != Int32 || res.Dtype() != Int32 {
+func Neq(x, y, res *Array) Function {
+	if x.Dtype != Int32 || y.Dtype != Int32 || res.Dtype != Int32 {
 		panic("Neq: incorrect datatype")
 	}
-	if !SameShape(x.Dims(), res.Dims()) || !SameShape(y.Dims(), res.Dims()) {
+	if !SameShape(x.Dims, res.Dims) || !SameShape(y.Dims, res.Dims) {
 		panic("Neq: arrays must be same shape")
 	}
-	n := Prod(x.Dims())
+	n := Prod(x.Dims)
 	return args(C.NEQ, n, x.Data(), y.Data(), res.Data())
 }
 
 // Convert to one hot representation
-func Onehot(x, y Array, classes int) Function {
-	if x.Dtype() != Int32 || y.Dtype() != Float32 {
+func Onehot(x, y *Array, classes int) Function {
+	if x.Dtype != Int32 || y.Dtype != Float32 {
 		panic("Onehot: incorrect datatype")
 	}
-	xdim, ydim := x.Dims(), y.Dims()
+	xdim, ydim := x.Dims, y.Dims
 	if len(xdim) != 1 || len(ydim) != 2 || xdim[0] != ydim[1] || ydim[0] != classes {
 		panic("Onehot: invalid array shape")
 	}
@@ -145,11 +145,11 @@ func Onehot(x, y Array, classes int) Function {
 }
 
 // Convert from OneHot format back to labels
-func Unhot(x, y Array) Function {
-	if x.Dtype() != Float32 || y.Dtype() != Int32 {
+func Unhot(x, y *Array) Function {
+	if x.Dtype != Float32 || y.Dtype != Int32 {
 		panic("Unhot: incorrect datatype")
 	}
-	xdim, ydim := x.Dims(), y.Dims()
+	xdim, ydim := x.Dims, y.Dims
 	if len(xdim) != 2 || len(ydim) != 1 || xdim[1] != ydim[0] {
 		panic("Unhot: invalid array shape")
 	}
@@ -157,29 +157,29 @@ func Unhot(x, y Array) Function {
 }
 
 // Scale array elementwise
-func Scale(alpha float32, x Array) Function {
-	if x.Dtype() != Float32 {
+func Scale(alpha float32, x *Array) Function {
+	if x.Dtype != Float32 {
 		panic("Axpy: dtype must by Float32")
 	}
-	n := Prod(x.Dims())
+	n := Prod(x.Dims)
 	return args(C.SCALE, n, alpha, x.Data())
 }
 
 // Array addition and scaling: y <- alpha*x + y
-func Axpy(alpha float32, x, y Array) Function {
-	if x.Dtype() != Float32 || y.Dtype() != Float32 {
+func Axpy(alpha float32, x, y *Array) Function {
+	if x.Dtype != Float32 || y.Dtype != Float32 {
 		panic("Axpy: dtype must by Float32")
 	}
-	if !SameShape(x.Dims(), y.Dims()) {
+	if !SameShape(x.Dims, y.Dims) {
 		panic("Axpy: arrays must be same shape")
 	}
-	n := Prod(x.Dims())
+	n := Prod(x.Dims)
 	return args(C.AXPY, n, alpha, x.Data(), y.Data())
 }
 
 // Transpose sets mB to a copy of mA with the data transposed.
-func Transpose(mA, mB Array) Function {
-	adim, bdim := mA.Dims(), mB.Dims()
+func Transpose(mA, mB *Array) Function {
+	adim, bdim := mA.Dims, mB.Dims
 	if len(adim) != 2 || len(bdim) != 2 {
 		panic("Transpose: arrays must be 2D")
 	}
@@ -190,16 +190,16 @@ func Transpose(mA, mB Array) Function {
 }
 
 // Calculate the scalar sum of the values in the array.
-func Sum(a, total Array) Function {
-	if len(total.Dims()) != 0 || total.Dtype() != Float32 {
+func Sum(a, total *Array) Function {
+	if len(total.Dims) != 0 || total.Dtype != Float32 {
 		panic("Sum: result type should be float32 scalar")
 	}
-	return args(C.SUM, int(a.Dtype()), Prod(a.Dims()), a.Data(), total.Data())
+	return args(C.SUM, int(a.Dtype), Prod(a.Dims), a.Data(), total.Data())
 }
 
 // Element wise array multiplication: c = a*b
-func Mul(a, b, c Array) Function {
-	asize, bsize, csize := Prod(a.Dims()), Prod(b.Dims()), Prod(c.Dims())
+func Mul(a, b, c *Array) Function {
+	asize, bsize, csize := Prod(a.Dims), Prod(b.Dims), Prod(c.Dims)
 	if asize != csize || bsize != csize {
 		panic("Mul: arrays must be same size")
 	}
@@ -207,11 +207,11 @@ func Mul(a, b, c Array) Function {
 }
 
 // Matrix vector multiplication: y <- dot(mA,x)
-func Gemv(mA, x, y Array, aTrans TransType) Function {
-	if mA.Dtype() != Float32 || x.Dtype() != Float32 || y.Dtype() != Float32 {
+func Gemv(mA, x, y *Array, aTrans TransType) Function {
+	if mA.Dtype != Float32 || x.Dtype != Float32 || y.Dtype != Float32 {
 		panic("Gemv: dtype must by Float32")
 	}
-	adim, xdim, ydim := mA.Dims(), x.Dims(), y.Dims()
+	adim, xdim, ydim := mA.Dims, x.Dims, y.Dims
 	if len(adim) != 2 || len(xdim) != 1 || len(ydim) != 1 {
 		panic("Gemv: must have matrix and vector inputs")
 	}
@@ -229,11 +229,11 @@ func Gemv(mA, x, y Array, aTrans TransType) Function {
 }
 
 // Matrix matrix multiplication: mC <- dot(mA, mB) or mC <- dot(mA, mB) + mC if incr = true
-func Gemm(mA, mB, mC Array, aTrans, bTrans TransType, incr bool) Function {
-	if mA.Dtype() != Float32 || mB.Dtype() != Float32 || mC.Dtype() != Float32 {
+func Gemm(mA, mB, mC *Array, aTrans, bTrans TransType, incr bool) Function {
+	if mA.Dtype != Float32 || mB.Dtype != Float32 || mC.Dtype != Float32 {
 		panic("Gemm: dtype must by Float32")
 	}
-	adim, bdim, cdim := mA.Dims(), mB.Dims(), mC.Dims()
+	adim, bdim, cdim := mA.Dims, mB.Dims, mC.Dims
 	if len(adim) != 2 || len(bdim) != 2 || len(cdim) != 2 {
 		panic("Gemm: must have 2 dimensional arrays")
 	}
@@ -260,22 +260,22 @@ func Gemm(mA, mB, mC Array, aTrans, bTrans TransType, incr bool) Function {
 }
 
 // Quadratic loss function: (x-y)**2
-func QuadraticLoss(x, y, res Array) Function {
-	if x.Dtype() != Float32 || y.Dtype() != Float32 || res.Dtype() != Float32 {
+func QuadraticLoss(x, y, res *Array) Function {
+	if x.Dtype != Float32 || y.Dtype != Float32 || res.Dtype != Float32 {
 		panic("QuadraticLoss: dtype must by Float32")
 	}
-	if !SameShape(x.Dims(), res.Dims()) || !SameShape(y.Dims(), res.Dims()) {
+	if !SameShape(x.Dims, res.Dims) || !SameShape(y.Dims, res.Dims) {
 		panic("QuadraticLoss: arrays must be same shape")
 	}
-	return args(C.QUAD_LOSS, Prod(x.Dims()), x.Data(), y.Data(), res.Data())
+	return args(C.QUAD_LOSS, Prod(x.Dims), x.Data(), y.Data(), res.Data())
 }
 
 // Softmax activation function
-func Softmax(x, res Array) Function {
-	if x.Dtype() != Float32 || res.Dtype() != Float32 {
+func Softmax(x, res *Array) Function {
+	if x.Dtype != Float32 || res.Dtype != Float32 {
 		panic("Softmax: dtype must by Float32")
 	}
-	xdim, rdim := x.Dims(), res.Dims()
+	xdim, rdim := x.Dims, res.Dims
 	if len(xdim) != 2 || !SameShape(xdim, rdim) {
 		panic("Softmax: arrays must be 2d and same shape")
 	}
@@ -283,11 +283,11 @@ func Softmax(x, res Array) Function {
 }
 
 // Softmax loss function
-func SoftmaxLoss(x, y, res Array) Function {
-	if x.Dtype() != Float32 || y.Dtype() != Float32 || res.Dtype() != Float32 {
+func SoftmaxLoss(x, y, res *Array) Function {
+	if x.Dtype != Float32 || y.Dtype != Float32 || res.Dtype != Float32 {
 		panic("Softmax: dtype must by Float32")
 	}
-	xdim, ydim, rdim := x.Dims(), y.Dims(), res.Dims()
+	xdim, ydim, rdim := x.Dims, y.Dims, res.Dims
 	if len(xdim) != 2 || !SameShape(xdim, ydim) || !SameShape(xdim, rdim) {
 		panic("Softmax: arrays must be 2d and same shape")
 	}
@@ -336,7 +336,7 @@ func (f Function) String() string {
 	return s
 }
 
-func (f Function) setData(arr ...Array) Function {
+func (f Function) setData(arr ...*Array) Function {
 	for i, a := range arr {
 		f.args.p[i] = a.Data()
 	}

@@ -37,7 +37,7 @@ func randArray(size int, min, max float32) []float32 {
 	return v
 }
 
-func getInputs(t *testing.T, q num.Queue) (input, W, B num.Array) {
+func getInputs(t *testing.T, q num.Queue) (input, W, B *num.Array) {
 	rand.Seed(42)
 	input = q.NewArray(num.Float32, nIn, batch)
 	W = q.NewArray(num.Float32, nIn, nOut)
@@ -55,22 +55,23 @@ func getInputs(t *testing.T, q num.Queue) (input, W, B num.Array) {
 	return
 }
 
-func setupNetwork(q num.Queue, W, B num.Array) (l1, l2 Layer, dW, dB num.Array) {
+func setupNetwork(q num.Queue, W, B *num.Array, opts num.LayerOpts) (l1, l2 Layer, dW, dB *num.Array, w *num.Pool) {
 	lin := &linear{Linear: Linear{Nout: nOut}}
-	lin.Init(q, []int{nIn, batch}, 0, false, nil)
+	work1 := lin.Init(q, []int{nIn, batch}, opts, nil)
 	layerW, layerB, _, _ := lin.Params()
 	q.Call(
 		num.Copy(W, layerW),
 		num.Copy(B, layerB),
 	)
 	relu := &activation{Activation: Activation{Atype: "relu"}}
-	relu.Init(q, []int{nOut, batch}, 1, false, nil)
-	return lin, relu, lin.dw, lin.db
+	work2 := relu.Init(q, []int{nOut, batch}, opts, nil)
+	work := q.NewPool(max(work1, work2))
+	return lin, relu, lin.dw, lin.db, work
 }
 
-func compareArray(t *testing.T, q num.Queue, title string, A num.Array, expect []float32) {
+func compareArray(t *testing.T, q num.Queue, title string, A *num.Array, expect []float32) {
 	t.Logf("== %s DNN ==\n%s", title, A.String(q))
-	arr := make([]float32, num.Prod(A.Dims()))
+	arr := make([]float32, num.Prod(A.Dims))
 	q.Call(num.Read(A, arr)).Finish()
 	if len(arr) != len(expect) {
 		t.Fatal(title, "length mismatch!")
@@ -87,10 +88,10 @@ func TestFprop(t *testing.T) {
 	for _, dev := range devices {
 		q := dev.NewQueue()
 		input, W, B := getInputs(t, q)
-		lin, relu, _, _ := setupNetwork(q, W, B)
+		lin, relu, _, _, work := setupNetwork(q, W, B, num.FpropOnly)
 
-		temp := lin.Fprop(q, input, nil, true)
-		output := relu.Fprop(q, temp, nil, true)
+		temp := lin.Fprop(q, input, work, true)
+		output := relu.Fprop(q, temp, work, true)
 
 		expect := []float32{
 			0, 0.21253887, 0.49112207, 0,
@@ -104,7 +105,7 @@ func TestFprop(t *testing.T) {
 	}
 }
 
-func getOutput(q num.Queue) num.Array {
+func getOutput(q num.Queue) *num.Array {
 	data := make([]float32, nOut*batch)
 	for row := 0; row < batch; row++ {
 		data[row+rand.Intn(nOut)*batch] = 1
@@ -114,7 +115,7 @@ func getOutput(q num.Queue) num.Array {
 	return yOneHot
 }
 
-func inputGrad(t *testing.T, q num.Queue, output, yOneHot num.Array) num.Array {
+func inputGrad(t *testing.T, q num.Queue, output, yOneHot *num.Array) *num.Array {
 	inGrad := q.NewArrayLike(output)
 	q.Call(
 		num.Copy(output, inGrad),
@@ -128,15 +129,16 @@ func TestDNNBprop(t *testing.T) {
 	for _, dev := range devices {
 		q := dev.NewQueue()
 		input, W, B := getInputs(t, q)
-		lin, relu, dW, dB := setupNetwork(q, W, B)
+		lin, relu, dW, dB, work := setupNetwork(q, W, B, num.BpropWeights+num.BpropData)
 		yOneHot := getOutput(q)
 
-		temp := lin.Fprop(q, input, nil, true)
-		output := relu.Fprop(q, temp, nil, true)
+		temp := lin.Fprop(q, input, work, true)
+		output := relu.Fprop(q, temp, work, true)
 
-		inGrad := inputGrad(t, q, output, yOneHot)
-		temp2 := relu.Bprop(q, inGrad, nil)
-		lin.Bprop(q, temp2, nil)
+		grad := inputGrad(t, q, output, yOneHot)
+		dsrc := q.NewArray(num.Float32, relu.InShape()...)
+		grad = relu.Bprop(q, grad, dsrc, work)
+		lin.Bprop(q, grad, nil, work)
 
 		expect := []float32{
 			0, 0, 0, 0, 0, 0,

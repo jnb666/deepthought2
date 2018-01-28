@@ -13,13 +13,32 @@ import (
 	"unsafe"
 )
 
+type LayerOpts int
+
+const (
+	FpropOnly      LayerOpts = 0
+	BpropData      LayerOpts = 1
+	BpropWeights   LayerOpts = 2
+	MomentumUpdate LayerOpts = 4
+)
+
+func (l LayerOpts) String() string {
+	s := "Fprop"
+	for i, name := range []string{"BpropData", "BpropWeights", "Momentum"} {
+		if l&(1<<uint(i)) != 0 {
+			s += "|" + name
+		}
+	}
+	return s
+}
+
 // Layer interface type represents an Activation or MaxPool layer
 type Layer interface {
 	InShape() []int
 	OutShape() []int
-	Fprop(q Queue, in, work Array, trainMode bool) Array
-	Bprop(q Queue, grad, work Array) Array
-	Output() Array
+	Fprop(q Queue, in *Array, work *Pool, trainMode bool) *Array
+	Bprop(q Queue, grad, dsrc *Array, work *Pool) *Array
+	Output() *Array
 	Memory() (weights, outputs, temp int)
 	Release()
 }
@@ -29,31 +48,33 @@ type ParamLayer interface {
 	Layer
 	BiasShape() []int
 	FilterShape() []int
-	SetParamData(W, B, dW, dB Array)
+	SetParamData(W, B, dW, dB *Array)
 }
 
 // BatchNorm layer has extra parameters
 type BatchNormLayer interface {
 	ParamLayer
 	InitParams(q Queue)
-	Stats() (runMean, runVar Array)
+	Stats() (runMean, runVar *Array)
 }
 
-// Create new convolution layer, input shape is nBatch x depth x h x w
-func NewConvLayer(q Queue, ix int, inShape []int, nFeats, size, stride int, pad, noBias bool) (ParamLayer, int) {
+// Create new convolution layer, input shape is nBatch x depth x h x w, returns workspace needed in 32 bit words
+func NewConvLayer(q Queue, opts LayerOpts, inShape []int, nFeats, size, stride int, pad, noBias bool) (ParamLayer, int) {
 	if len(inShape) != 4 {
 		panic("ConvLayer: expect 4 dimensional input")
 	}
 	n, c, h, w := inShape[3], inShape[2], inShape[1], inShape[0]
 	switch d := q.Dev().(type) {
 	case cpuDevice:
-		return newLayerMKL(mkl.Convolution(d.attr, n, c, h, w, nFeats, size, stride, pad, noBias), ix != 0), 0
+		layer := mkl.Convolution(d.attr, n, c, h, w, nFeats, size, stride, pad, noBias)
+		return newLayerMKL(layer), 0
 	case gpuDevice:
-		layer, workSize := cuda.Convolution(q.(*gpuQueue).stream, n, c, h, w, nFeats, size, stride, pad, noBias)
+		layer := cuda.Convolution(n, c, h, w, nFeats, size, stride, pad, noBias)
+		workSize := layer.Init(q.(*gpuQueue).stream, opts&BpropWeights != 0, opts&BpropData != 0)
 		l := &convCuda{
 			ConvLayer: layer,
 			layerBase: newLayerBase(d, layer.InShape(), layer.OutShape()),
-			layerId:   ix,
+			opts:      opts,
 		}
 		return l, workSize
 	default:
@@ -64,9 +85,9 @@ func NewConvLayer(q Queue, ix int, inShape []int, nFeats, size, stride int, pad,
 type convCuda struct {
 	*cuda.ConvLayer
 	*layerBase
-	w, b    unsafe.Pointer
-	dw, db  unsafe.Pointer
-	layerId int
+	w, b   unsafe.Pointer
+	dw, db unsafe.Pointer
+	opts   LayerOpts
 }
 
 func (l *convCuda) Release() {
@@ -74,16 +95,16 @@ func (l *convCuda) Release() {
 	l.layerBase.Release()
 }
 
-func (l *convCuda) SetParamData(W, B, dW, dB Array) {
+func (l *convCuda) SetParamData(W, B, dW, dB *Array) {
 	l.w, l.dw = W.Data(), dW.Data()
 	if l.BiasShape() != nil {
 		l.b, l.db = B.Data(), dB.Data()
 	}
 }
 
-func (l *convCuda) Fprop(que Queue, in, work Array, trainMode bool) Array {
-	if !SameShape(in.Dims(), l.InShape()) {
-		panic(fmt.Errorf("fprop conv: invalid input shape: have %v, expect %v", in.Dims(), l.InShape()))
+func (l *convCuda) Fprop(que Queue, in *Array, work *Pool, trainMode bool) *Array {
+	if !SameShape(in.Dims, l.InShape()) {
+		panic(fmt.Errorf("fprop conv: invalid input shape: have %v, expect %v", in.Dims, l.InShape()))
 	}
 	l.src = in
 	q := que.(*gpuQueue)
@@ -99,9 +120,9 @@ func (l *convCuda) Fprop(que Queue, in, work Array, trainMode bool) Array {
 	return l.dst
 }
 
-func (l *convCuda) Bprop(que Queue, grad, work Array) Array {
-	if !SameShape(grad.Dims(), l.OutShape()) {
-		panic(fmt.Errorf("bprop conv: invalid input shape: have %v, expect %v", grad.Dims(), l.OutShape()))
+func (l *convCuda) Bprop(que Queue, grad, dsrc *Array, work *Pool) *Array {
+	if !SameShape(grad.Dims, l.OutShape()) {
+		panic(fmt.Errorf("bprop conv: invalid input shape: have %v, expect %v", grad.Dims, l.OutShape()))
 	}
 	q := que.(*gpuQueue)
 	if l.Bias != nil {
@@ -113,25 +134,25 @@ func (l *convCuda) Bprop(que Queue, grad, work Array) Array {
 		args(C.CUDNN_EXECUTE+cuda.ConvBpropFilter, l.Algo[cuda.BwdFilterAlgo], work.Size()*4, l.Ptr(), work.Data(),
 			l.Src.Ptr(), l.Dst.Ptr(), l.Filter.Ptr(), l.src.Data(), grad.Data(), l.dw),
 	)
-	if l.layerId > 0 {
-		l.allocBprop(que)
+	if dsrc != nil {
 		q.Call(
 			args(C.CUDNN_EXECUTE+cuda.ConvBpropData, l.Algo[cuda.BwdDataAlgo], work.Size()*4, l.Ptr(), work.Data(),
-				l.Filter.Ptr(), l.Dst.Ptr(), l.Src.Ptr(), l.w, grad.Data(), l.dSrc.Data()),
+				l.Filter.Ptr(), l.Dst.Ptr(), l.Src.Ptr(), l.w, grad.Data(), dsrc.Data()),
 		)
 	}
-	return l.dSrc
+	return dsrc
 }
 
 // Create new max pooling layer, prev layer should be a ConvLayer
-func NewPoolLayer(q Queue, inShape []int, size, stride int, pad, average bool) Layer {
+func NewPoolLayer(q Queue, opts LayerOpts, inShape []int, size, stride int, pad, average bool) Layer {
 	if len(inShape) != 4 {
 		panic("PoolLayer: expect 4 dimensional input")
 	}
 	n, c, h, w := inShape[3], inShape[2], inShape[1], inShape[0]
 	switch d := q.Dev().(type) {
 	case cpuDevice:
-		return newLayerMKL(mkl.Pooling(d.attr, n, c, h, w, size, stride, pad, average), true)
+		layer := mkl.Pooling(d.attr, n, c, h, w, size, stride, pad, average)
+		return newLayerMKL(layer)
 	case gpuDevice:
 		layer := cuda.Pooling(n, c, h, w, size, stride, pad, average)
 		return &poolCuda{
@@ -153,9 +174,9 @@ func (l *poolCuda) Release() {
 	l.layerBase.Release()
 }
 
-func (l *poolCuda) Fprop(q Queue, in, work Array, trainMode bool) Array {
-	if !SameShape(in.Dims(), l.InShape()) {
-		panic(fmt.Errorf("fprop pool: invalid input shape: have %v, expect %v", in.Dims(), l.InShape()))
+func (l *poolCuda) Fprop(q Queue, in *Array, work *Pool, trainMode bool) *Array {
+	if !SameShape(in.Dims, l.InShape()) {
+		panic(fmt.Errorf("fprop pool: invalid input shape: have %v, expect %v", in.Dims, l.InShape()))
 	}
 	l.src = in
 	q.Call(
@@ -164,15 +185,14 @@ func (l *poolCuda) Fprop(q Queue, in, work Array, trainMode bool) Array {
 	return l.dst
 }
 
-func (l *poolCuda) Bprop(q Queue, grad, work Array) Array {
-	if !SameShape(grad.Dims(), l.OutShape()) {
-		panic(fmt.Errorf("bprop pool: invalid input shape: have %v, expect %v", grad.Dims(), l.OutShape()))
+func (l *poolCuda) Bprop(q Queue, grad, dsrc *Array, work *Pool) *Array {
+	if !SameShape(grad.Dims, l.OutShape()) {
+		panic(fmt.Errorf("bprop pool: invalid input shape: have %v, expect %v", grad.Dims, l.OutShape()))
 	}
-	l.allocBprop(q)
 	q.Call(
-		args(C.CUDNN_EXECUTE+cuda.PoolBprop, l.Ptr(), l.Src.Ptr(), l.Dst.Ptr(), l.dst.Data(), grad.Data(), l.src.Data(), l.dSrc.Data()),
+		args(C.CUDNN_EXECUTE+cuda.PoolBprop, l.Ptr(), l.Src.Ptr(), l.Dst.Ptr(), l.dst.Data(), grad.Data(), l.src.Data(), dsrc.Data()),
 	)
-	return l.dSrc
+	return dsrc
 }
 
 // Create new activation layer, typ may be sigmoid, tanh or relu
@@ -212,7 +232,7 @@ func (l *activationCuda) Release() {
 	l.layerBase.Release()
 }
 
-func (l *activationCuda) Fprop(q Queue, in, work Array, trainMode bool) Array {
+func (l *activationCuda) Fprop(q Queue, in *Array, work *Pool, trainMode bool) *Array {
 	l.src = in
 	q.Call(
 		args(C.CUDNN_EXECUTE+cuda.ActivFprop, l.Ptr(), l.Src.Ptr(), in.Data(), l.dst.Data()),
@@ -220,12 +240,11 @@ func (l *activationCuda) Fprop(q Queue, in, work Array, trainMode bool) Array {
 	return l.dst
 }
 
-func (l *activationCuda) Bprop(q Queue, grad, work Array) Array {
-	l.allocBprop(q)
+func (l *activationCuda) Bprop(q Queue, grad, dsrc *Array, work *Pool) *Array {
 	q.Call(
-		args(C.CUDNN_EXECUTE+cuda.ActivBprop, l.Ptr(), l.Src.Ptr(), l.dst.Data(), grad.Data(), l.src.Data(), l.dSrc.Data()),
+		args(C.CUDNN_EXECUTE+cuda.ActivBprop, l.Ptr(), l.Src.Ptr(), l.dst.Data(), grad.Data(), l.src.Data(), dsrc.Data()),
 	)
-	return l.dSrc
+	return dsrc
 }
 
 type activation struct {
@@ -246,11 +265,11 @@ func newActivation(dev Device, fwd, bwd int, shape []int) *activation {
 	return a
 }
 
-func (a *activation) InShape() []int { return a.dst.Dims() }
+func (a *activation) InShape() []int { return a.dst.Dims }
 
-func (a *activation) OutShape() []int { return a.dst.Dims() }
+func (a *activation) OutShape() []int { return a.dst.Dims }
 
-func (a *activation) Fprop(q Queue, in, work Array, trainMode bool) Array {
+func (a *activation) Fprop(q Queue, in *Array, work *Pool, trainMode bool) *Array {
 	a.src = in
 	if a.softmax {
 		q.Call(Softmax(a.src, a.dst))
@@ -260,14 +279,13 @@ func (a *activation) Fprop(q Queue, in, work Array, trainMode bool) Array {
 	return a.dst
 }
 
-func (a *activation) Bprop(q Queue, grad, work Array) Array {
-	a.allocBprop(q)
+func (a *activation) Bprop(q Queue, grad, dsrc *Array, work *Pool) *Array {
 	if a.softmax {
-		q.Call(Copy(grad, a.dSrc))
+		q.Call(Copy(grad, dsrc))
 	} else {
-		q.Call(a.bwd.setData(a.src, grad, a.dSrc))
+		q.Call(a.bwd.setData(a.src, grad, dsrc))
 	}
-	return a.dSrc
+	return dsrc
 }
 
 // Create new dropout layer.
@@ -297,7 +315,7 @@ type dropoutCuda struct {
 }
 
 func (l *dropoutCuda) Memory() (weights, output, temp int) {
-	return 0, Bytes(l.dst, l.dSrc), l.Reserve.Size + l.States.Size
+	return 0, Bytes(l.dst), l.Reserve.Size()*4 + l.States.Size()*4
 }
 
 func (l *dropoutCuda) Release() {
@@ -305,41 +323,41 @@ func (l *dropoutCuda) Release() {
 	l.DropoutLayer.Release()
 }
 
-func (l *dropoutCuda) Fprop(q Queue, in, work Array, trainMode bool) Array {
+func (l *dropoutCuda) Fprop(q Queue, in *Array, work *Pool, trainMode bool) *Array {
 	if !trainMode {
 		return in
 	}
+	l.src = in
 	q.Call(
-		args(C.CUDNN_EXECUTE+cuda.DropoutFprop, l.Ptr(), l.Src.Ptr(), in.Data(), l.dst.Data(), l.Reserve.Ptr, l.Reserve.Size),
+		args(C.CUDNN_EXECUTE+cuda.DropoutFprop, l.Ptr(), l.Src.Ptr(), in.Data(), l.dst.Data(), l.Reserve.Data(), l.Reserve.Size()*4),
 	)
 	return l.dst
 }
 
-func (l *dropoutCuda) Bprop(q Queue, grad, work Array) Array {
-	l.allocBprop(q)
+func (l *dropoutCuda) Bprop(q Queue, grad, dsrc *Array, work *Pool) *Array {
 	q.Call(
-		args(C.CUDNN_EXECUTE+cuda.DropoutBprop, l.Ptr(), l.Src.Ptr(), grad.Data(), l.dSrc.Data(), l.Reserve.Ptr, l.Reserve.Size),
+		args(C.CUDNN_EXECUTE+cuda.DropoutBprop, l.Ptr(), l.Src.Ptr(), grad.Data(), dsrc.Data(), l.Reserve.Data(), l.Reserve.Size()*4),
 	)
-	return l.dSrc
+	return dsrc
 }
 
 type dropout struct {
 	*layerBase
 	ratio  float64
-	filter Array
+	filter *Array
 	mask   []float32
 	rng    *rand.Rand
 }
 
 func (l *dropout) Memory() (weights, output, temp int) {
-	return 0, Bytes(l.dst, l.dSrc), Bytes(l.filter) + 4*len(l.mask)
+	return 0, Bytes(l.dst), Bytes(l.filter) + 4*len(l.mask)
 }
 
-func (l *dropout) InShape() []int { return l.dst.Dims() }
+func (l *dropout) InShape() []int { return l.dst.Dims }
 
-func (l *dropout) OutShape() []int { return l.dst.Dims() }
+func (l *dropout) OutShape() []int { return l.dst.Dims }
 
-func (l *dropout) Fprop(q Queue, in, work Array, trainMode bool) Array {
+func (l *dropout) Fprop(q Queue, in *Array, work *Pool, trainMode bool) *Array {
 	if !trainMode {
 		return in
 	}
@@ -357,16 +375,13 @@ func (l *dropout) Fprop(q Queue, in, work Array, trainMode bool) Array {
 	return l.dst
 }
 
-func (l *dropout) Bprop(q Queue, grad, work Array) Array {
-	l.allocBprop(q)
-	q.Call(
-		Mul(l.filter, grad, l.dSrc),
-	)
-	return l.dSrc
+func (l *dropout) Bprop(q Queue, grad, dsrc *Array, work *Pool) *Array {
+	q.Call(Mul(l.filter, grad, dsrc))
+	return dsrc
 }
 
 // Create new batch normalisation layer
-func NewBatchNormLayer(q Queue, avgFactor, epsilon float64, shape []int) BatchNormLayer {
+func NewBatchNormLayer(q Queue, opts LayerOpts, avgFactor, epsilon float64, shape []int) BatchNormLayer {
 	if len(shape) != 4 {
 		panic("BatchNormLayer: expect 4 dimensional input")
 	}
@@ -383,7 +398,7 @@ func NewBatchNormLayer(q Queue, avgFactor, epsilon float64, shape []int) BatchNo
 	case cpuDevice:
 		return &batchNormMkl{
 			batchNorm: p,
-			layerMKL:  newLayerMKL(mkl.BatchNorm(d.attr, n, c, h, w, epsilon), true),
+			layerMKL:  newLayerMKL(mkl.BatchNorm(d.attr, n, c, h, w, epsilon)),
 		}
 	case gpuDevice:
 		return &batchNormCuda{
@@ -399,15 +414,15 @@ func NewBatchNormLayer(q Queue, avgFactor, epsilon float64, shape []int) BatchNo
 type batchNorm struct {
 	avgFactor float32
 	epsilon   float32
-	w, b      Array
-	dw, db    Array
-	mean      Array
-	variance  Array
-	runMean   Array
-	runVar    Array
+	w, b      *Array
+	dw, db    *Array
+	mean      *Array
+	variance  *Array
+	runMean   *Array
+	runVar    *Array
 }
 
-func (l batchNorm) Stats() (runMean, runVar Array) {
+func (l batchNorm) Stats() (runMean, runVar *Array) {
 	return l.runMean, l.runVar
 }
 
@@ -425,7 +440,7 @@ type batchNormCuda struct {
 	*layerBase
 }
 
-func (l *batchNormCuda) SetParamData(W, B, dW, dB Array) {
+func (l *batchNormCuda) SetParamData(W, B, dW, dB *Array) {
 	l.w, l.b, l.dw, l.db = W, B, dW, dB
 }
 
@@ -445,10 +460,10 @@ func (l *batchNormCuda) Release() {
 }
 
 func (l *batchNormCuda) Memory() (weights, output, temp int) {
-	return 0, Bytes(l.dst, l.dSrc), l.memory()
+	return 0, Bytes(l.dst), l.memory()
 }
 
-func (l *batchNormCuda) Fprop(q Queue, in, work Array, trainMode bool) Array {
+func (l *batchNormCuda) Fprop(q Queue, in *Array, work *Pool, trainMode bool) *Array {
 	f := C.CUDNN_EXECUTE + cuda.BnormFpropInfer
 	if trainMode {
 		f = C.CUDNN_EXECUTE + cuda.BnormFpropTrain
@@ -462,14 +477,13 @@ func (l *batchNormCuda) Fprop(q Queue, in, work Array, trainMode bool) Array {
 	return l.dst
 }
 
-func (l *batchNormCuda) Bprop(q Queue, grad, work Array) Array {
-	l.allocBprop(q)
+func (l *batchNormCuda) Bprop(q Queue, grad, dsrc *Array, work *Pool) *Array {
 	q.Call(
-		args(C.CUDNN_EXECUTE+cuda.BnormBprop, l.Src.Ptr(), l.src.Data(), grad.Data(), l.dSrc.Data(),
+		args(C.CUDNN_EXECUTE+cuda.BnormBprop, l.Src.Ptr(), l.src.Data(), grad.Data(), dsrc.Data(),
 			l.Shape.Ptr(), l.w.Data(), l.dw.Data(), l.db.Data(), l.mean.Data(), l.variance.Data(),
 			l.epsilon),
 	)
-	return l.dSrc
+	return dsrc
 }
 
 type batchNormMkl struct {
@@ -477,7 +491,7 @@ type batchNormMkl struct {
 	layerMKL
 }
 
-func (l *batchNormMkl) SetParamData(W, B, dW, dB Array) {
+func (l *batchNormMkl) SetParamData(W, B, dW, dB *Array) {
 	l.w, l.dw = W, dW
 	l.SetStatsData(l.w.Data(), l.dw.Data(), l.mean.Data(), l.variance.Data())
 }
@@ -485,7 +499,7 @@ func (l *batchNormMkl) SetParamData(W, B, dW, dB Array) {
 func (l *batchNormMkl) InitParams(q Queue) {
 	q.Call(
 		Fill(l.w, 0),
-		WriteCol(l.w, 0, ones(l.w.Dims()[0])),
+		WriteCol(l.w, 0, ones(l.w.Dims[0])),
 		Fill(l.runMean, 0),
 		Fill(l.runVar, 1),
 	)
@@ -497,42 +511,39 @@ func (l *batchNormMkl) Release() {
 }
 
 func (l *batchNormMkl) Memory() (weights, output, temp int) {
-	return 0, Bytes(l.dst, l.dSrc), l.memory()
+	return 0, Bytes(l.dst), l.memory()
 }
 
-func (l *batchNormMkl) Bprop(q Queue, grad, work Array) Array {
-	l.layerMKL.Bprop(q, grad, work)
+func (l *batchNormMkl) Bprop(q Queue, grad, dsrc *Array, work *Pool) *Array {
+	l.layerMKL.Bprop(q, grad, dsrc, work)
 	q.Call(
 		Axpy(1-l.avgFactor, l.runMean, l.runMean),
 		Axpy(l.avgFactor, l.mean, l.runMean),
 		Axpy(1-l.avgFactor, l.runVar, l.runVar),
 		Axpy(l.avgFactor, l.variance, l.runVar),
 	)
-	return l.dSrc
+	return dsrc
 }
 
 // layer which wraps Intel MKL DNN layer
 type layerMKL struct {
 	*mkl.Layer
-	dst, dSrc Array
+	dst *Array
 }
 
-func newLayerMKL(layer *mkl.Layer, bpropData bool) layerMKL {
+func newLayerMKL(layer *mkl.Layer) layerMKL {
 	l := layerMKL{
 		Layer: layer,
-		dst:   newArrayCPU(Float32, layer.OutShape(), layer.Dst()),
-	}
-	if bpropData {
-		l.dSrc = newArrayCPU(Float32, layer.InShape(), layer.DiffSrc())
+		dst:   &Array{Buffer: layer.Dst(), Dtype: Float32, Dims: layer.OutShape()},
 	}
 	return l
 }
 
 func (l layerMKL) Memory() (weights, output, temp int) {
-	return 0, Bytes(l.dst, l.dSrc), l.Worksize() * 4
+	return 0, Bytes(l.dst), l.Worksize() * 4
 }
 
-func (l layerMKL) SetParamData(W, B, dW, dB Array) {
+func (l layerMKL) SetParamData(W, B, dW, dB *Array) {
 	if l.BiasShape() != nil {
 		l.Layer.SetParams(W.Data(), B.Data(), dW.Data(), dB.Data())
 	} else {
@@ -540,20 +551,20 @@ func (l layerMKL) SetParamData(W, B, dW, dB Array) {
 	}
 }
 
-func (l layerMKL) Output() Array { return l.dst }
+func (l layerMKL) Output() *Array { return l.dst }
 
-func (l layerMKL) Fprop(q Queue, in, work Array, trainMode bool) Array {
-	if !SameShape(in.Dims(), l.InShape()) {
-		panic(fmt.Errorf("fprop: invalid input shape: have %v, expect %v", in.Dims(), l.InShape()))
+func (l layerMKL) Fprop(q Queue, in *Array, work *Pool, trainMode bool) *Array {
+	if !SameShape(in.Dims, l.InShape()) {
+		panic(fmt.Errorf("fprop: invalid input shape: have %v, expect %v", in.Dims, l.InShape()))
 	}
 	l.SetSrc(in.Data())
 	q.Call(dnnExecute(l.Fwd, l.ResPtr(), l.Type()+"_fprop"))
 	return l.dst
 }
 
-func (l layerMKL) Bprop(q Queue, grad, work Array) Array {
-	if !SameShape(grad.Dims(), l.OutShape()) {
-		panic(fmt.Errorf("bprop: invalid input shape: have %v, expect %v", grad.Dims(), l.OutShape()))
+func (l layerMKL) Bprop(q Queue, grad, dsrc *Array, work *Pool) *Array {
+	if !SameShape(grad.Dims, l.OutShape()) {
+		panic(fmt.Errorf("bprop: invalid input shape: have %v, expect %v", grad.Dims, l.OutShape()))
 	}
 	l.SetDiffDst(grad.Data())
 	if l.BBias != nil {
@@ -562,10 +573,11 @@ func (l layerMKL) Bprop(q Queue, grad, work Array) Array {
 	if l.BFilter != nil {
 		q.Call(dnnExecute(l.BFilter, l.ResPtr(), l.Type()+"_bprop_filter"))
 	}
-	if l.dSrc != nil {
+	if dsrc != nil {
+		l.SetDiffSrc(dsrc.Data())
 		q.Call(dnnExecute(l.BData, l.ResPtr(), l.Type()+"_bprop_data"))
 	}
-	return l.dSrc
+	return dsrc
 }
 
 func dnnExecute(p *mkl.Primitive, res unsafe.Pointer, desc string) Function {
@@ -580,10 +592,8 @@ func dnnExecute(p *mkl.Primitive, res unsafe.Pointer, desc string) Function {
 
 // base layer type
 type layerBase struct {
-	inShape []int
-	src     Array
-	dst     Array
-	dSrc    Array
+	inShape  []int
+	src, dst *Array
 }
 
 func newLayerBase(d Device, inShape, outShape []int) *layerBase {
@@ -593,20 +603,14 @@ func newLayerBase(d Device, inShape, outShape []int) *layerBase {
 	}
 }
 
-func (l *layerBase) allocBprop(q Queue) {
-	if l.dSrc == nil {
-		l.dSrc = q.NewArray(Float32, l.inShape...)
-	}
-}
-
-func (l *layerBase) Output() Array { return l.dst }
+func (l *layerBase) Output() *Array { return l.dst }
 
 func (l *layerBase) Memory() (weights, output, temp int) {
-	return 0, Bytes(l.dst, l.dSrc), 0
+	return 0, Bytes(l.dst), 0
 }
 
 func (l *layerBase) Release() {
-	Release(l.dst, l.dSrc)
+	Release(l.dst)
 }
 
 func ones(n int) []float32 {

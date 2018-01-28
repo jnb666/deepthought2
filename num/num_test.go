@@ -20,11 +20,11 @@ func TestArray(t *testing.T) {
 		xd := []float32{1, 1, 2, 2, 3, 3}
 		q := dev.NewQueue()
 		x := dev.NewArray(Float32, 6)
-		if typ := x.Dtype(); typ != Float32 {
+		if typ := x.Dtype; typ != Float32 {
 			t.Error("dtype invalid: got", typ)
 		}
 		x = x.Reshape(2, 3)
-		if dim := x.Dims(); !reflect.DeepEqual(dim, []int{2, 3}) {
+		if dim := x.Dims; !reflect.DeepEqual(dim, []int{2, 3}) {
 			t.Error("dims invalid: got", dim)
 		}
 		res := make([]float32, 6)

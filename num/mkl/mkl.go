@@ -97,7 +97,6 @@ func (l *Layer) init() {
 	l.layoutFromPrimitive(l.BData, C.dnnResourceDiffSrc)
 	l.layoutFromPrimitive(l.BData, C.dnnResourceDiffDst)
 	l.Alloc(C.dnnResourceDst)
-	l.Alloc(C.dnnResourceDiffSrc)
 }
 
 func (l *Layer) initParams(noBias bool) {
@@ -116,7 +115,8 @@ func (l *Layer) layoutFromPrimitive(prim *Primitive, typ C.dnnResourceType_t) {
 }
 
 func (l *Layer) Alloc(typ C.dnnResourceType_t) {
-	l.data[typ] = NewBuffer(l.layout[typ].Size())
+	buf := NewBuffer(l.layout[typ].Size())
+	l.data[typ] = buf.Data()
 }
 
 func (l *Layer) String() string {
@@ -230,16 +230,16 @@ func (r Resource) ResPtr() unsafe.Pointer {
 	return unsafe.Pointer(&r.data[0])
 }
 
-func (r Resource) Dst() unsafe.Pointer {
-	return r.data[C.dnnResourceDst]
-}
-
-func (r Resource) DiffSrc() unsafe.Pointer {
-	return r.data[C.dnnResourceDiffSrc]
+func (r Resource) Dst() Buffer {
+	return Buffer{ptr: r.data[C.dnnResourceDst], size: r.layout[C.dnnResourceDst].Size()}
 }
 
 func (r Resource) SetSrc(p unsafe.Pointer) {
 	r.data[C.dnnResourceSrc] = p
+}
+
+func (r Resource) SetDiffSrc(p unsafe.Pointer) {
+	r.data[C.dnnResourceDiffSrc] = p
 }
 
 func (r Resource) SetDiffDst(p unsafe.Pointer) {
@@ -383,14 +383,37 @@ func getError(err C.dnnError_t) error {
 	}
 }
 
+type Buffer struct {
+	ptr  unsafe.Pointer
+	size int
+}
+
 // Allocate a block of memory of given no. of 32 bit words - align on 64 byte boundary
-func NewBuffer(size int) unsafe.Pointer {
-	buf := make([]float32, size+16)
-	ptr := unsafe.Pointer(&buf[0])
-	off := (uintptr(ptr) % 64) / 4
+func NewBuffer(size int) Buffer {
+	if size <= 0 {
+		panic("NewBuffer: size must be greater than 0")
+	}
+	b := Buffer{size: size}
+	arr := make([]float32, size+16)
+	b.ptr = unsafe.Pointer(&arr[0])
+	off := (uintptr(b.ptr) % 64) / 4
 	if off != 0 {
-		return unsafe.Pointer(&buf[16-off])
-	} else {
-		return ptr
+		b.ptr = unsafe.Pointer(&arr[16-off])
+	}
+	return b
+}
+
+func (b Buffer) Data() unsafe.Pointer {
+	return b.ptr
+}
+
+func (b Buffer) Size() int {
+	return b.size
+}
+
+func (b Buffer) Release() {
+	if b.size > 0 {
+		b.size = 0
+		b.ptr = nil
 	}
 }

@@ -82,39 +82,81 @@ func getSize(dims []int) (nin, nout int) {
 // Network type represents a multilayer neural network model.
 type Network struct {
 	Config
-	Layers    []Layer
-	WorkSpace num.Array
-	queue     num.Queue
-	classes   num.Array
-	diffs     num.Array
-	batchErr  num.Array
-	totalErr  num.Array
-	batchLoss num.Array
-	totalLoss num.Array
-	inputGrad num.Array
-	inShape   []int
-	workSize  []int
+	Layers     []Layer
+	WorkSpace  *num.Pool
+	queue      num.Queue
+	classes    *num.Array
+	diffs      *num.Array
+	batchErr   *num.Array
+	totalErr   *num.Array
+	batchLoss  *num.Array
+	totalLoss  *num.Array
+	bpropPool1 *num.Pool
+	bpropPool2 *num.Pool
+	weightPool *num.Pool
+	inShape    []int
+	workSize   []int
+	inputSize  []int
+	dsrc       []*num.Array
 }
 
-// New function creates a new network with the given layers.
-func New(queue num.Queue, conf Config, batchSize int, inShape []int, rng *rand.Rand) *Network {
+// New function creates a new network with the given layers. If bprop is true then allocate memory for back propagation.
+func New(queue num.Queue, conf Config, batchSize int, inShape []int, bprop bool, rng *rand.Rand) *Network {
 	n := &Network{Config: conf, queue: queue}
 	n.allocArrays(batchSize)
 	n.inShape = append(inShape, batchSize)
 	shape := n.inShape
-	layerId := 0
 	n.workSize = make([]int, len(conf.Layers))
+	n.inputSize = make([]int, len(conf.Layers)+1)
+	opts := num.FpropOnly
+	if bprop {
+		opts |= num.BpropWeights
+	}
+	if conf.Momentum != 0 {
+		opts |= num.MomentumUpdate
+	}
+	weightSize := 0
 	for i, l := range conf.Layers {
 		layer := l.Unmarshal()
-		n.workSize[i] = layer.Init(queue, shape, layerId, conf.Momentum != 0, rng)
+		n.workSize[i] = layer.Init(queue, shape, opts, rng)
 		n.Layers = append(n.Layers, layer)
+		if opts&num.BpropData != 0 {
+			n.inputSize[i] = num.Prod(layer.InShape())
+		}
+		if conf.DebugLevel >= 1 {
+			log.Printf("init layer %d: %s opts=%s work=%d insize=%d\n", i, l.Type, opts, n.workSize[i], n.inputSize[i])
+		}
 		shape = layer.OutShape()
-		if l.Type != "flatten" {
-			layerId++
+		if l.Type != "flatten" && bprop {
+			opts |= num.BpropData
+		}
+		if lp, ok := layer.(ParamLayer); ok && bprop && conf.Nesterov {
+			size := num.Prod(lp.FilterShape())
+			if lp.BiasShape() != nil {
+				size += num.Prod(lp.BiasShape())
+			}
+			if size > weightSize {
+				weightSize = size
+			}
 		}
 	}
-	if wsize := max(n.workSize); wsize > 0 {
-		n.WorkSpace = queue.NewArray(num.Float32, wsize/4)
+	if opts&num.BpropData != 0 {
+		n.inputSize[len(n.Layers)] = num.Prod(shape)
+	}
+	wsize := max(n.workSize...)
+	insize := max(n.inputSize...)
+	if conf.DebugLevel >= 1 {
+		log.Printf("maxWorkSize=%d  maxInSize=%d  maxWeightSize=%d\n", wsize, insize, weightSize)
+	}
+	if wsize > 0 {
+		n.WorkSpace = queue.NewPool(wsize)
+	}
+	if insize > 0 {
+		n.bpropPool1 = queue.NewPool(insize)
+		n.bpropPool2 = queue.NewPool(insize)
+	}
+	if weightSize > 0 {
+		n.weightPool = queue.NewPool(weightSize)
 	}
 	return n
 }
@@ -125,7 +167,8 @@ func (n *Network) Release() {
 	for _, layer := range n.Layers {
 		layer.Release()
 	}
-	num.Release(n.classes, n.diffs, n.batchLoss, n.batchErr, n.totalLoss, n.totalErr, n.WorkSpace, n.inputGrad)
+	num.Release(n.classes, n.diffs, n.batchLoss, n.batchErr, n.totalLoss, n.totalErr,
+		n.WorkSpace, n.bpropPool1, n.bpropPool2, n.weightPool)
 }
 
 // Initialise network weights using a linear or normal distribution.
@@ -163,7 +206,7 @@ func (n *Network) OutLayer() OutputLayer {
 }
 
 // Feed forward the input to get the predicted output
-func (n *Network) Fprop(input num.Array, trainMode bool) num.Array {
+func (n *Network) Fprop(input *num.Array, trainMode bool) *num.Array {
 	pred := input
 	for i, layer := range n.Layers {
 		if n.DebugLevel >= 2 && pred != nil {
@@ -175,36 +218,47 @@ func (n *Network) Fprop(input num.Array, trainMode bool) num.Array {
 }
 
 // Get difference at output, back propagate gradient and update weights
-func (n *Network) Bprop(batch int, yPred, yOneHot num.Array, opt Optimiser) {
+func (n *Network) Bprop(batch int, yPred, yOneHot *num.Array, opt Optimiser) {
 	q := n.queue
+	pool1, pool2 := n.bpropPool1, n.bpropPool2
+	pool1.Clear()
+	grad := pool1.NewArray(num.Float32, yOneHot.Dims...)
 	q.Call(
-		num.Copy(yPred, n.inputGrad),
-		num.Axpy(-1, yOneHot, n.inputGrad),
+		num.Copy(yPred, grad),
+		num.Axpy(-1, yOneHot, grad),
 	)
 	if n.DebugLevel >= 2 || (n.DebugLevel == 1 && batch == 0) {
-		log.Printf("input grad:\n%s", n.inputGrad.String(q))
+		log.Printf("input grad:\n%s", grad.String(q))
 	}
-	grad := n.inputGrad
 	for i := len(n.Layers) - 1; i >= 0; i-- {
-		grad = n.Layers[i].Bprop(q, grad, n.WorkSpace)
+		layer := n.Layers[i]
+		var dsrc *num.Array
+		if n.inputSize[i] > 0 {
+			pool2.Clear()
+			dsrc = pool2.NewArray(num.Float32, layer.InShape()...)
+		}
+		grad = layer.Bprop(q, grad, dsrc, n.WorkSpace)
 		if n.DebugLevel >= 3 && grad != nil {
 			log.Printf("layer %d bprop output:\n%s", i, grad.String(q))
 		}
+		pool1, pool2 = pool2, pool1
+		q.Finish()
 	}
 	for _, layer := range n.Layers {
 		if l, ok := layer.(ParamLayer); ok {
-			W, B, dW, dB := l.Params()
-			vW, vB, vWPrev, vBPrev := l.ParamVelocity()
-			opt.Update(q, true, W, dW, vW, vWPrev)
+			W, B := l.Params()
+			dW, dB := l.ParamGrads()
+			vW, vB := l.ParamVelocity()
+			opt.Update(q, l.Type() != "batchNorm", W, dW, vW)
 			if B != nil {
-				opt.Update(q, false, B, dB, vB, vBPrev)
+				opt.Update(q, false, B, dB, vB)
 			}
 		}
 	}
 }
 
 // get the loss for this batch
-func (n *Network) calcBatchLoss(batch int, yOneHot, yPred num.Array) {
+func (n *Network) calcBatchLoss(batch int, yOneHot, yPred *num.Array) {
 	q := n.queue
 	losses := n.OutLayer().Loss(q, yOneHot, yPred)
 	if n.DebugLevel >= 2 {
@@ -217,7 +271,7 @@ func (n *Network) calcBatchLoss(batch int, yOneHot, yPred num.Array) {
 }
 
 // get the error for this batch, if pred is non-null then save predicted values
-func (n *Network) calcBatchError(batch int, dset *Dataset, y, yPred num.Array, pred []int32) {
+func (n *Network) calcBatchError(batch int, dset *Dataset, y, yPred *num.Array, pred []int32) {
 	q := n.queue
 	q.Call(
 		num.Unhot(yPred, n.classes),
@@ -225,7 +279,7 @@ func (n *Network) calcBatchError(batch int, dset *Dataset, y, yPred num.Array, p
 		num.Sum(n.diffs, n.batchErr),
 		num.Axpy(1, n.batchErr, n.totalErr),
 	)
-	if n.DebugLevel >= 1 || (n.DebugLevel >= 1 && batch == 0) {
+	if n.DebugLevel >= 2 || (n.DebugLevel >= 1 && batch == 0) {
 		log.Printf("batch %d error =%s\n", batch, n.batchErr.String(q))
 		log.Println(y.String(q))
 		log.Println(n.classes.String(q))
@@ -303,12 +357,15 @@ func (n *Network) MemoryProfile() string {
 		n.inShape[len(n.inShape)-1])
 	for i, layer := range n.Layers {
 		if mem[i][3] > 0 {
-			s += fmt.Sprintf("%2d: %-30s %8s %8s %8s %8s\n", i, layer.ToString(), FormatBytes(mem[i][0]),
-				FormatBytes(mem[i][1]), FormatBytes(mem[i][2]+n.workSize[i]), FormatBytes(mem[i][3]+n.workSize[i]))
+			input := n.inputSize[i] * 4
+			work := n.workSize[i] * 4
+			s += fmt.Sprintf("%2d: %-30s %8s %8s %8s %8s\n", i, layer.ToString(),
+				FormatBytes(mem[i][0]), FormatBytes(mem[i][1]+input), FormatBytes(mem[i][2]+work),
+				FormatBytes(mem[i][3]+input+work))
 		}
 	}
-	s += fmt.Sprintf("--- TOTAL --- %20s %8s %8s %8s %8s\n", "", FormatBytes(total[0]), FormatBytes(total[1]),
-		FormatBytes(total[2]), FormatBytes(total[3]))
+	s += fmt.Sprintf("--- TOTAL --- %20s %8s %8s %8s %8s\n", "",
+		FormatBytes(total[0]), FormatBytes(total[1]), FormatBytes(total[2]), FormatBytes(total[3]))
 	return s
 }
 
@@ -322,9 +379,14 @@ func (n *Network) meminfo() (mem [][4]int, total [4]int) {
 		}
 		mem = append(mem, r)
 	}
-	totalWork := max(n.workSize)
+	totalInput := max(n.inputSize...) * 8
+	totalWork := max(n.workSize...) * 4
+	if n.weightPool != nil {
+		total[0] += n.weightPool.Size() * 4
+	}
+	total[1] += totalInput
 	total[2] += totalWork
-	total[3] += totalWork
+	total[3] += totalInput + totalWork
 	return
 }
 
@@ -332,7 +394,7 @@ func (n *Network) meminfo() (mem [][4]int, total [4]int) {
 func (n *Network) PrintWeights() {
 	for i, layer := range n.Layers {
 		if l, ok := layer.(ParamLayer); ok {
-			W, B, _, _ := l.Params()
+			W, B := l.Params()
 			log.Printf("== Layer %d weights ==\n%s %s\n", i, W.String(n.queue), B.String(n.queue))
 		}
 	}
@@ -376,7 +438,7 @@ func FormatBytes(n int) string {
 	return fmt.Sprintf("%dM", 1+(n-1)/(1024*1024))
 }
 
-func max(arr []int) int {
+func max(arr ...int) int {
 	m := arr[0]
 	if len(arr) > 1 {
 		for _, val := range arr[1:] {

@@ -144,7 +144,7 @@ func (t *TestBase) Init(dev num.Device, conf Config, data map[string]Data, rng *
 		}
 	}
 	if opts.BatchSize != conf.TrainBatch {
-		t.Net = New(dev.NewQueue(), conf, t.Data["test"].BatchSize, t.Data["test"].Shape(), rng)
+		t.Net = New(dev.NewQueue(), conf, t.Data["test"].BatchSize, t.Data["test"].Shape(), false, rng)
 		log.Println("allocate test network: input shape ", t.Net.inShape)
 	}
 	return t
@@ -282,14 +282,12 @@ func Train(net *Network, dset *Dataset, test Tester) {
 // Perform one training epoch on dataset, returns the current loss prior to updating the weights.
 func TrainEpoch(net *Network, dset *Dataset, epoch int, pred []int32) (trainLoss, trainError float64) {
 	q := net.queue
-	if net.inputGrad == nil {
-		net.inputGrad = q.NewArray(num.Float32, dset.ClassSize(), dset.BatchSize)
-	}
 	if net.Shuffle {
 		dset.Shuffle()
 	}
 	learningRate, weightDecay := net.OptimiserParams(epoch, dset.Samples)
 	optimiser := SGD{
+		Pool:         net.weightPool,
 		LearningRate: float32(learningRate / float64(dset.BatchSize)),
 		WeightDecay:  float32(weightDecay),
 		Momentum:     float32(net.Momentum),
@@ -341,18 +339,19 @@ func TrainEpoch(net *Network, dset *Dataset, epoch int, pred []int32) (trainLoss
 
 // Optimiser updates the weights
 type Optimiser interface {
-	Update(q num.Queue, decay bool, x, dx, v, vPrev num.Array)
+	Update(q num.Queue, decay bool, x, dx, v *num.Array)
 }
 
 // Vanilla stockastic gradient descent
 type SGD struct {
+	*num.Pool
 	LearningRate float32
 	WeightDecay  float32
 	Momentum     float32
 	Nesterov     bool
 }
 
-func (o SGD) Update(q num.Queue, decay bool, x, dx, v, vPrev num.Array) {
+func (o SGD) Update(q num.Queue, decay bool, x, dx, v *num.Array) {
 	q.Call(num.Scale(-o.LearningRate, dx))
 	if decay && o.WeightDecay != 0 {
 		q.Call(num.Axpy(-o.WeightDecay, x, dx))
@@ -360,6 +359,8 @@ func (o SGD) Update(q num.Queue, decay bool, x, dx, v, vPrev num.Array) {
 	switch {
 	case o.Momentum != 0 && o.Nesterov:
 		// v = dx + mom*v; x += -mom*vPrev + (1 + mom)*v
+		o.Clear()
+		vPrev := o.NewArray(num.Float32, v.Dims...)
 		q.Call(
 			num.Copy(v, vPrev),
 			num.Scale(o.Momentum, v),

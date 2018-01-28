@@ -19,8 +19,10 @@ type Device interface {
 	// Setup new worker queue
 	NewQueue() Queue
 	// Allocate new n dimensional array
-	NewArray(dtype DataType, dims ...int) Array
-	NewArrayLike(a Array) Array
+	NewArray(dtype DataType, dims ...int) *Array
+	NewArrayLike(a *Array) *Array
+	// Allocate memory pool with given size in 32 bit words
+	NewPool(size int) *Pool
 }
 
 // Initialise new CPU or GPU device

@@ -59,29 +59,49 @@ func (s *Stream) Release() {
 }
 
 type Buffer struct {
-	Ptr  unsafe.Pointer
-	Size int
+	ptr  unsafe.Pointer
+	size int
 }
 
-// Allocate a buffer on the GPU with given number of bytes
+// Allocate a buffer on the GPU with given number of 32 bit words
 func NewBuffer(size int) Buffer {
-	buf := Buffer{Size: size}
-	if size > 0 {
-		chk(C.cudaMalloc(&buf.Ptr, C.size_t(size)))
+	if size <= 0 {
+		panic("NewBuffer: size must be greater than 0")
 	}
-	return buf
-}
-
-func (b Buffer) Clear() Buffer {
-	chk(C.cudaMemset(b.Ptr, 0, C.size_t(b.Size)))
+	b := Buffer{size: size}
+	chk(C.cudaMalloc(&b.ptr, C.size_t(size*4)))
+	chk(C.cudaMemset(b.ptr, 0, C.size_t(size*4)))
 	return b
 }
 
-func (b Buffer) Free() {
-	if b.Size > 0 {
-		C.cudaFree(b.Ptr)
-		b.Size = 0
+func (b Buffer) Data() unsafe.Pointer {
+	return b.ptr
+}
+
+func (b Buffer) Size() int {
+	return b.size
+}
+
+func (b Buffer) Release() {
+	if b.size > 0 {
+		C.cudaFree(b.ptr)
+		b.size = 0
+		b.ptr = nil
 	}
+}
+
+func words(bytes C.size_t) int {
+	return int(bytes)/4 + (3+int(bytes)%4)/4
+}
+
+func maxWords(bytes []C.size_t) int {
+	size := 0
+	for _, s := range bytes {
+		if w := words(s); w > size {
+			size = w
+		}
+	}
+	return size
 }
 
 type Error C.cudaError_t

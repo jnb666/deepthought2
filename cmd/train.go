@@ -12,11 +12,12 @@ import (
 func predict(q num.Queue, net *nnet.Network, d nnet.Data) {
 	rng := nnet.SetSeed(net.RandSeed)
 	dset := nnet.NewDataset(q.Dev(), d, net.DatasetConfig(false), rng)
+	dset.NextEpoch()
 	x, y, _ := dset.NextBatch()
-	classes := q.NewArray(num.Int32, y.Dims()[0])
+	classes := q.NewArray(num.Int32, y.Dims[0])
 	yPred := net.Fprop(x, false)
 	q.Call(num.Unhot(yPred, classes))
-	log.Print("predict:", yPred.String(q))
+	log.Print("predict:\n", yPred.String(q))
 	log.Println("classes:", classes.String(q))
 	log.Println("labels: ", y.String(q))
 }
@@ -63,7 +64,7 @@ func main() {
 	trainData.Profiling(conf.Profile, "train")
 
 	// create network and initialise weights
-	trainNet := nnet.New(q, conf, trainData.BatchSize, trainData.Shape(), rng)
+	trainNet := nnet.New(q, conf, trainData.BatchSize, trainData.Shape(), true, rng)
 	log.Println(trainNet)
 	trainNet.InitWeights(rng)
 	if conf.DebugLevel >= 1 {
@@ -90,6 +91,7 @@ func main() {
 	if conf.Profile {
 		log.Print(q.Profile())
 	}
+	trainNet.Release()
 	trainData.Release()
 	tester.Release()
 	q.Shutdown()
