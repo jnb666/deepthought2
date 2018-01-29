@@ -78,7 +78,7 @@ func (b Buffer) Data() unsafe.Pointer {
 	return b.ptr
 }
 
-func (b Buffer) Size() int {
+func (b Buffer) Capacity() int {
 	return b.size
 }
 

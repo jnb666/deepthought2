@@ -287,7 +287,6 @@ func TrainEpoch(net *Network, dset *Dataset, epoch int, pred []int32) (trainLoss
 	}
 	learningRate, weightDecay := net.OptimiserParams(epoch, dset.Samples)
 	optimiser := SGD{
-		Pool:         net.weightPool,
 		LearningRate: float32(learningRate / float64(dset.BatchSize)),
 		WeightDecay:  float32(weightDecay),
 		Momentum:     float32(net.Momentum),
@@ -339,19 +338,18 @@ func TrainEpoch(net *Network, dset *Dataset, epoch int, pred []int32) (trainLoss
 
 // Optimiser updates the weights
 type Optimiser interface {
-	Update(q num.Queue, decay bool, x, dx, v *num.Array)
+	Update(q num.Queue, decay bool, x, dx, v *num.Array, work num.Buffer)
 }
 
 // Vanilla stockastic gradient descent
 type SGD struct {
-	*num.Pool
 	LearningRate float32
 	WeightDecay  float32
 	Momentum     float32
 	Nesterov     bool
 }
 
-func (o SGD) Update(q num.Queue, decay bool, x, dx, v *num.Array) {
+func (o SGD) Update(q num.Queue, decay bool, x, dx, v *num.Array, work num.Buffer) {
 	q.Call(num.Scale(-o.LearningRate, dx))
 	if decay && o.WeightDecay != 0 {
 		q.Call(num.Axpy(-o.WeightDecay, x, dx))
@@ -359,8 +357,7 @@ func (o SGD) Update(q num.Queue, decay bool, x, dx, v *num.Array) {
 	switch {
 	case o.Momentum != 0 && o.Nesterov:
 		// v = dx + mom*v; x += -mom*vPrev + (1 + mom)*v
-		o.Clear()
-		vPrev := o.NewArray(num.Float32, v.Dims...)
+		vPrev := num.NewArray(work, num.Float32, v.Dims...)
 		q.Call(
 			num.Copy(v, vPrev),
 			num.Scale(o.Momentum, v),

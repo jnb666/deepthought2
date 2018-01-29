@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"github.com/jnb666/deepthought2/num/cuda"
 	"github.com/jnb666/deepthought2/num/mkl"
-	"reflect"
 	"unsafe"
 )
 
@@ -19,57 +18,26 @@ type Buffer interface {
 	// pointer to data
 	Data() unsafe.Pointer
 	// size of buffer in 32 bit words
-	Size() int
+	Capacity() int
 	// release frees the memory
 	Release()
 }
 
-type subBuffer struct {
-	buf  Buffer
-	off  int
-	size int
+func (d cpuDevice) NewBuffer(size int) Buffer {
+	return mkl.NewBuffer(size)
 }
 
-func (s subBuffer) Data() unsafe.Pointer {
-	return unsafe.Pointer(uintptr(s.buf.Data()) + uintptr(s.off*4))
+func (d gpuDevice) NewBuffer(size int) Buffer {
+	return cuda.NewBuffer(size)
 }
 
-func (s subBuffer) Size() int { return s.size }
-
-func (s subBuffer) Release() {}
-
-// Memory pool can be used to allocate temporary arrays
-type Pool struct {
-	Buffer
-	used int
-}
-
-// Clear space used in the pool
-func (p *Pool) Clear() {
-	p.used = 0
-}
-
-// Allocate a new array in the pool
-func (p *Pool) NewArray(dtype DataType, dims ...int) *Array {
+// Allocate a new array using the provided buffer
+func NewArray(buf Buffer, dtype DataType, dims ...int) *Array {
 	size := Prod(dims)
-	if p.Size()-p.used < size {
-		panic("NewArray: not enough space in pool!")
+	if size > buf.Capacity() {
+		panic(fmt.Errorf("NewArray: buffer is too small size=%d capacity=%d\n", size, buf.Capacity()))
 	}
-	arr := &Array{
-		Buffer: subBuffer{buf: p.Buffer, off: p.used, size: size},
-		Dtype:  dtype,
-		Dims:   dims,
-	}
-	p.used += size
-	return arr
-}
-
-func (d cpuDevice) NewPool(size int) *Pool {
-	return &Pool{Buffer: mkl.NewBuffer(size)}
-}
-
-func (d gpuDevice) NewPool(size int) *Pool {
-	return &Pool{Buffer: cuda.NewBuffer(size)}
+	return &Array{Buffer: buf, Dtype: dtype, Dims: dims}
 }
 
 // Array struct is a general n dimensional tensor similar to a numpy ndarray
@@ -78,6 +46,11 @@ type Array struct {
 	Buffer
 	Dtype DataType
 	Dims  []int
+}
+
+// Size of data in array in words
+func (a *Array) Size() int {
+	return Prod(a.Dims)
 }
 
 // Reshape returns a new array of the same size with a view on the same data but with a different shape
@@ -117,11 +90,7 @@ func (a *Array) String(q Queue) string {
 
 // array resident in main memory
 func (d cpuDevice) NewArray(dtype DataType, dims ...int) *Array {
-	return &Array{
-		Buffer: mkl.NewBuffer(Prod(dims)),
-		Dtype:  dtype,
-		Dims:   dims,
-	}
+	return NewArray(mkl.NewBuffer(Prod(dims)), dtype, dims...)
 }
 
 func (d cpuDevice) NewArrayLike(a *Array) *Array {
@@ -130,11 +99,7 @@ func (d cpuDevice) NewArrayLike(a *Array) *Array {
 
 // array resident on GPU
 func (d gpuDevice) NewArray(dtype DataType, dims ...int) *Array {
-	return &Array{
-		Buffer: cuda.NewBuffer(Prod(dims)),
-		Dtype:  dtype,
-		Dims:   dims,
-	}
+	return NewArray(cuda.NewBuffer(Prod(dims)), dtype, dims...)
 }
 
 func (d gpuDevice) NewArrayLike(a *Array) *Array {
@@ -244,11 +209,18 @@ func Bytes(arr ...*Array) (bytes int) {
 	return bytes
 }
 
-// Release one or more arrays
+// Release one or more arrays or buffers
 func Release(arr ...Buffer) {
 	for _, a := range arr {
-		if a != nil && !reflect.ValueOf(a).IsNil() {
-			a.Release()
+		switch obj := a.(type) {
+		case *Array:
+			if obj != nil {
+				obj.Release()
+			}
+		case mkl.Buffer:
+			obj.Release()
+		case cuda.Buffer:
+			obj.Release()
 		}
 	}
 }

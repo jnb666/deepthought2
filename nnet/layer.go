@@ -14,8 +14,8 @@ type Layer interface {
 	Init(q num.Queue, inShape []int, opts num.LayerOpts, rng *rand.Rand) int
 	InShape() []int
 	OutShape() []int
-	Fprop(q num.Queue, in *num.Array, work *num.Pool, trainMode bool) *num.Array
-	Bprop(q num.Queue, grad, dsrc *num.Array, work *num.Pool) *num.Array
+	Fprop(q num.Queue, in *num.Array, work num.Buffer, trainMode bool) *num.Array
+	Bprop(q num.Queue, grad, dsrc *num.Array, work num.Buffer) *num.Array
 	Type() string
 	ToString() string
 	Output() *num.Array
@@ -280,19 +280,18 @@ func (l *linear) Release() {
 
 func (l *linear) Output() *num.Array { return l.dst }
 
-func (l *linear) Fprop(q num.Queue, in *num.Array, work *num.Pool, trainMode bool) *num.Array {
-	temp := work.NewArray(num.Float32, l.inShape[1], l.Nout)
+func (l *linear) Fprop(q num.Queue, in *num.Array, work num.Buffer, trainMode bool) *num.Array {
+	temp := num.NewArray(work, num.Float32, l.inShape[1], l.Nout)
 	l.src = in
 	q.Call(
 		num.Copy(l.b, temp),
 		num.Gemm(l.src, l.w, temp, num.Trans, num.NoTrans, true),
 		num.Transpose(temp, l.dst),
-	).Finish()
-	work.Clear()
+	)
 	return l.dst
 }
 
-func (l *linear) Bprop(q num.Queue, grad, dsrc *num.Array, work *num.Pool) *num.Array {
+func (l *linear) Bprop(q num.Queue, grad, dsrc *num.Array, work num.Buffer) *num.Array {
 	if l.ones == nil {
 		l.ones = q.NewArray(num.Float32, grad.Dims[1])
 		q.Call(num.Fill(l.ones, 1))
@@ -302,12 +301,11 @@ func (l *linear) Bprop(q num.Queue, grad, dsrc *num.Array, work *num.Pool) *num.
 		num.Gemm(l.src, grad, l.dw, num.NoTrans, num.Trans, false),
 	)
 	if dsrc != nil {
-		temp := work.NewArray(num.Float32, l.inShape[1], l.inShape[0])
+		temp := num.NewArray(work, num.Float32, l.inShape[1], l.inShape[0])
 		q.Call(
 			num.Gemm(grad, l.w, temp, num.Trans, num.Trans, false),
 			num.Transpose(temp, dsrc),
-		).Finish()
-		work.Clear()
+		)
 	}
 	return dsrc
 }
@@ -457,12 +455,12 @@ func (l *flatten) Release() {}
 
 func (l *flatten) Output() *num.Array { return l.dst }
 
-func (l *flatten) Fprop(q num.Queue, in *num.Array, work *num.Pool, trainMode bool) *num.Array {
+func (l *flatten) Fprop(q num.Queue, in *num.Array, work num.Buffer, trainMode bool) *num.Array {
 	l.dst = in.Reshape(l.outShape...)
 	return l.dst
 }
 
-func (l *flatten) Bprop(q num.Queue, grad, dsrc *num.Array, work *num.Pool) *num.Array {
+func (l *flatten) Bprop(q num.Queue, grad, dsrc *num.Array, work num.Buffer) *num.Array {
 	if grad != nil && dsrc != nil {
 		q.Call(num.Copy(grad.Reshape(l.inShape...), dsrc))
 	}

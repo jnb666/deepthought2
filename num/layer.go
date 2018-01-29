@@ -36,8 +36,8 @@ func (l LayerOpts) String() string {
 type Layer interface {
 	InShape() []int
 	OutShape() []int
-	Fprop(q Queue, in *Array, work *Pool, trainMode bool) *Array
-	Bprop(q Queue, grad, dsrc *Array, work *Pool) *Array
+	Fprop(q Queue, in *Array, work Buffer, trainMode bool) *Array
+	Bprop(q Queue, grad, dsrc *Array, work Buffer) *Array
 	Output() *Array
 	Memory() (weights, outputs, temp int)
 	Release()
@@ -102,14 +102,14 @@ func (l *convCuda) SetParamData(W, B, dW, dB *Array) {
 	}
 }
 
-func (l *convCuda) Fprop(que Queue, in *Array, work *Pool, trainMode bool) *Array {
+func (l *convCuda) Fprop(que Queue, in *Array, work Buffer, trainMode bool) *Array {
 	if !SameShape(in.Dims, l.InShape()) {
 		panic(fmt.Errorf("fprop conv: invalid input shape: have %v, expect %v", in.Dims, l.InShape()))
 	}
 	l.src = in
 	q := que.(*gpuQueue)
 	q.Call(
-		args(C.CUDNN_EXECUTE+cuda.ConvFprop, l.Algo[cuda.FwdAlgo], work.Size()*4, l.Ptr(), work.Data(),
+		args(C.CUDNN_EXECUTE+cuda.ConvFprop, l.Algo[cuda.FwdAlgo], work.Capacity()*4, l.Ptr(), work.Data(),
 			l.Filter.Ptr(), l.Src.Ptr(), l.Dst.Ptr(), l.w, in.Data(), l.dst.Data()),
 	)
 	if l.Bias != nil {
@@ -120,7 +120,7 @@ func (l *convCuda) Fprop(que Queue, in *Array, work *Pool, trainMode bool) *Arra
 	return l.dst
 }
 
-func (l *convCuda) Bprop(que Queue, grad, dsrc *Array, work *Pool) *Array {
+func (l *convCuda) Bprop(que Queue, grad, dsrc *Array, work Buffer) *Array {
 	if !SameShape(grad.Dims, l.OutShape()) {
 		panic(fmt.Errorf("bprop conv: invalid input shape: have %v, expect %v", grad.Dims, l.OutShape()))
 	}
@@ -131,12 +131,12 @@ func (l *convCuda) Bprop(que Queue, grad, dsrc *Array, work *Pool) *Array {
 		)
 	}
 	q.Call(
-		args(C.CUDNN_EXECUTE+cuda.ConvBpropFilter, l.Algo[cuda.BwdFilterAlgo], work.Size()*4, l.Ptr(), work.Data(),
+		args(C.CUDNN_EXECUTE+cuda.ConvBpropFilter, l.Algo[cuda.BwdFilterAlgo], work.Capacity()*4, l.Ptr(), work.Data(),
 			l.Src.Ptr(), l.Dst.Ptr(), l.Filter.Ptr(), l.src.Data(), grad.Data(), l.dw),
 	)
 	if dsrc != nil {
 		q.Call(
-			args(C.CUDNN_EXECUTE+cuda.ConvBpropData, l.Algo[cuda.BwdDataAlgo], work.Size()*4, l.Ptr(), work.Data(),
+			args(C.CUDNN_EXECUTE+cuda.ConvBpropData, l.Algo[cuda.BwdDataAlgo], work.Capacity()*4, l.Ptr(), work.Data(),
 				l.Filter.Ptr(), l.Dst.Ptr(), l.Src.Ptr(), l.w, grad.Data(), dsrc.Data()),
 		)
 	}
@@ -174,7 +174,7 @@ func (l *poolCuda) Release() {
 	l.layerBase.Release()
 }
 
-func (l *poolCuda) Fprop(q Queue, in *Array, work *Pool, trainMode bool) *Array {
+func (l *poolCuda) Fprop(q Queue, in *Array, work Buffer, trainMode bool) *Array {
 	if !SameShape(in.Dims, l.InShape()) {
 		panic(fmt.Errorf("fprop pool: invalid input shape: have %v, expect %v", in.Dims, l.InShape()))
 	}
@@ -185,7 +185,7 @@ func (l *poolCuda) Fprop(q Queue, in *Array, work *Pool, trainMode bool) *Array 
 	return l.dst
 }
 
-func (l *poolCuda) Bprop(q Queue, grad, dsrc *Array, work *Pool) *Array {
+func (l *poolCuda) Bprop(q Queue, grad, dsrc *Array, work Buffer) *Array {
 	if !SameShape(grad.Dims, l.OutShape()) {
 		panic(fmt.Errorf("bprop pool: invalid input shape: have %v, expect %v", grad.Dims, l.OutShape()))
 	}
@@ -232,7 +232,7 @@ func (l *activationCuda) Release() {
 	l.layerBase.Release()
 }
 
-func (l *activationCuda) Fprop(q Queue, in *Array, work *Pool, trainMode bool) *Array {
+func (l *activationCuda) Fprop(q Queue, in *Array, work Buffer, trainMode bool) *Array {
 	l.src = in
 	q.Call(
 		args(C.CUDNN_EXECUTE+cuda.ActivFprop, l.Ptr(), l.Src.Ptr(), in.Data(), l.dst.Data()),
@@ -240,7 +240,7 @@ func (l *activationCuda) Fprop(q Queue, in *Array, work *Pool, trainMode bool) *
 	return l.dst
 }
 
-func (l *activationCuda) Bprop(q Queue, grad, dsrc *Array, work *Pool) *Array {
+func (l *activationCuda) Bprop(q Queue, grad, dsrc *Array, work Buffer) *Array {
 	q.Call(
 		args(C.CUDNN_EXECUTE+cuda.ActivBprop, l.Ptr(), l.Src.Ptr(), l.dst.Data(), grad.Data(), l.src.Data(), dsrc.Data()),
 	)
@@ -269,7 +269,7 @@ func (a *activation) InShape() []int { return a.dst.Dims }
 
 func (a *activation) OutShape() []int { return a.dst.Dims }
 
-func (a *activation) Fprop(q Queue, in *Array, work *Pool, trainMode bool) *Array {
+func (a *activation) Fprop(q Queue, in *Array, work Buffer, trainMode bool) *Array {
 	a.src = in
 	if a.softmax {
 		q.Call(Softmax(a.src, a.dst))
@@ -279,7 +279,7 @@ func (a *activation) Fprop(q Queue, in *Array, work *Pool, trainMode bool) *Arra
 	return a.dst
 }
 
-func (a *activation) Bprop(q Queue, grad, dsrc *Array, work *Pool) *Array {
+func (a *activation) Bprop(q Queue, grad, dsrc *Array, work Buffer) *Array {
 	if a.softmax {
 		q.Call(Copy(grad, dsrc))
 	} else {
@@ -315,7 +315,7 @@ type dropoutCuda struct {
 }
 
 func (l *dropoutCuda) Memory() (weights, output, temp int) {
-	return 0, Bytes(l.dst), l.Reserve.Size()*4 + l.States.Size()*4
+	return 0, Bytes(l.dst), l.Reserve.Capacity()*4 + l.States.Capacity()*4
 }
 
 func (l *dropoutCuda) Release() {
@@ -323,20 +323,20 @@ func (l *dropoutCuda) Release() {
 	l.DropoutLayer.Release()
 }
 
-func (l *dropoutCuda) Fprop(q Queue, in *Array, work *Pool, trainMode bool) *Array {
+func (l *dropoutCuda) Fprop(q Queue, in *Array, work Buffer, trainMode bool) *Array {
 	if !trainMode {
 		return in
 	}
 	l.src = in
 	q.Call(
-		args(C.CUDNN_EXECUTE+cuda.DropoutFprop, l.Ptr(), l.Src.Ptr(), in.Data(), l.dst.Data(), l.Reserve.Data(), l.Reserve.Size()*4),
+		args(C.CUDNN_EXECUTE+cuda.DropoutFprop, l.Ptr(), l.Src.Ptr(), in.Data(), l.dst.Data(), l.Reserve.Data(), l.Reserve.Capacity()*4),
 	)
 	return l.dst
 }
 
-func (l *dropoutCuda) Bprop(q Queue, grad, dsrc *Array, work *Pool) *Array {
+func (l *dropoutCuda) Bprop(q Queue, grad, dsrc *Array, work Buffer) *Array {
 	q.Call(
-		args(C.CUDNN_EXECUTE+cuda.DropoutBprop, l.Ptr(), l.Src.Ptr(), grad.Data(), dsrc.Data(), l.Reserve.Data(), l.Reserve.Size()*4),
+		args(C.CUDNN_EXECUTE+cuda.DropoutBprop, l.Ptr(), l.Src.Ptr(), grad.Data(), dsrc.Data(), l.Reserve.Data(), l.Reserve.Capacity()*4),
 	)
 	return dsrc
 }
@@ -357,7 +357,7 @@ func (l *dropout) InShape() []int { return l.dst.Dims }
 
 func (l *dropout) OutShape() []int { return l.dst.Dims }
 
-func (l *dropout) Fprop(q Queue, in *Array, work *Pool, trainMode bool) *Array {
+func (l *dropout) Fprop(q Queue, in *Array, work Buffer, trainMode bool) *Array {
 	if !trainMode {
 		return in
 	}
@@ -375,7 +375,7 @@ func (l *dropout) Fprop(q Queue, in *Array, work *Pool, trainMode bool) *Array {
 	return l.dst
 }
 
-func (l *dropout) Bprop(q Queue, grad, dsrc *Array, work *Pool) *Array {
+func (l *dropout) Bprop(q Queue, grad, dsrc *Array, work Buffer) *Array {
 	q.Call(Mul(l.filter, grad, dsrc))
 	return dsrc
 }
@@ -463,7 +463,7 @@ func (l *batchNormCuda) Memory() (weights, output, temp int) {
 	return 0, Bytes(l.dst), l.memory()
 }
 
-func (l *batchNormCuda) Fprop(q Queue, in *Array, work *Pool, trainMode bool) *Array {
+func (l *batchNormCuda) Fprop(q Queue, in *Array, work Buffer, trainMode bool) *Array {
 	f := C.CUDNN_EXECUTE + cuda.BnormFpropInfer
 	if trainMode {
 		f = C.CUDNN_EXECUTE + cuda.BnormFpropTrain
@@ -477,7 +477,7 @@ func (l *batchNormCuda) Fprop(q Queue, in *Array, work *Pool, trainMode bool) *A
 	return l.dst
 }
 
-func (l *batchNormCuda) Bprop(q Queue, grad, dsrc *Array, work *Pool) *Array {
+func (l *batchNormCuda) Bprop(q Queue, grad, dsrc *Array, work Buffer) *Array {
 	q.Call(
 		args(C.CUDNN_EXECUTE+cuda.BnormBprop, l.Src.Ptr(), l.src.Data(), grad.Data(), dsrc.Data(),
 			l.Shape.Ptr(), l.w.Data(), l.dw.Data(), l.db.Data(), l.mean.Data(), l.variance.Data(),
@@ -514,7 +514,7 @@ func (l *batchNormMkl) Memory() (weights, output, temp int) {
 	return 0, Bytes(l.dst), l.memory()
 }
 
-func (l *batchNormMkl) Bprop(q Queue, grad, dsrc *Array, work *Pool) *Array {
+func (l *batchNormMkl) Bprop(q Queue, grad, dsrc *Array, work Buffer) *Array {
 	l.layerMKL.Bprop(q, grad, dsrc, work)
 	q.Call(
 		Axpy(1-l.avgFactor, l.runMean, l.runMean),
@@ -532,11 +532,10 @@ type layerMKL struct {
 }
 
 func newLayerMKL(layer *mkl.Layer) layerMKL {
-	l := layerMKL{
+	return layerMKL{
 		Layer: layer,
-		dst:   &Array{Buffer: layer.Dst(), Dtype: Float32, Dims: layer.OutShape()},
+		dst:   NewArray(layer.Dst(), Float32, layer.OutShape()...),
 	}
-	return l
 }
 
 func (l layerMKL) Memory() (weights, output, temp int) {
@@ -553,7 +552,7 @@ func (l layerMKL) SetParamData(W, B, dW, dB *Array) {
 
 func (l layerMKL) Output() *Array { return l.dst }
 
-func (l layerMKL) Fprop(q Queue, in *Array, work *Pool, trainMode bool) *Array {
+func (l layerMKL) Fprop(q Queue, in *Array, work Buffer, trainMode bool) *Array {
 	if !SameShape(in.Dims, l.InShape()) {
 		panic(fmt.Errorf("fprop: invalid input shape: have %v, expect %v", in.Dims, l.InShape()))
 	}
@@ -562,7 +561,7 @@ func (l layerMKL) Fprop(q Queue, in *Array, work *Pool, trainMode bool) *Array {
 	return l.dst
 }
 
-func (l layerMKL) Bprop(q Queue, grad, dsrc *Array, work *Pool) *Array {
+func (l layerMKL) Bprop(q Queue, grad, dsrc *Array, work Buffer) *Array {
 	if !SameShape(grad.Dims, l.OutShape()) {
 		panic(fmt.Errorf("bprop: invalid input shape: have %v, expect %v", grad.Dims, l.OutShape()))
 	}

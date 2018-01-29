@@ -21,8 +21,8 @@ type Device interface {
 	// Allocate new n dimensional array
 	NewArray(dtype DataType, dims ...int) *Array
 	NewArrayLike(a *Array) *Array
-	// Allocate memory pool with given size in 32 bit words
-	NewPool(size int) *Pool
+	// Allocate memory with given size in 32 bit words
+	NewBuffer(size int) Buffer
 }
 
 // Initialise new CPU or GPU device

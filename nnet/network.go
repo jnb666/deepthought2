@@ -83,7 +83,7 @@ func getSize(dims []int) (nin, nout int) {
 type Network struct {
 	Config
 	Layers     []Layer
-	WorkSpace  *num.Pool
+	WorkSpace  num.Buffer
 	queue      num.Queue
 	classes    *num.Array
 	diffs      *num.Array
@@ -91,13 +91,11 @@ type Network struct {
 	totalErr   *num.Array
 	batchLoss  *num.Array
 	totalLoss  *num.Array
-	bpropPool1 *num.Pool
-	bpropPool2 *num.Pool
-	weightPool *num.Pool
+	bpropPool1 num.Buffer
+	bpropPool2 num.Buffer
 	inShape    []int
 	workSize   []int
 	inputSize  []int
-	dsrc       []*num.Array
 }
 
 // New function creates a new network with the given layers. If bprop is true then allocate memory for back propagation.
@@ -106,7 +104,7 @@ func New(queue num.Queue, conf Config, batchSize int, inShape []int, bprop bool,
 	n.allocArrays(batchSize)
 	n.inShape = append(inShape, batchSize)
 	shape := n.inShape
-	n.workSize = make([]int, len(conf.Layers))
+	n.workSize = make([]int, len(conf.Layers)+1)
 	n.inputSize = make([]int, len(conf.Layers)+1)
 	opts := num.FpropOnly
 	if bprop {
@@ -143,20 +141,18 @@ func New(queue num.Queue, conf Config, batchSize int, inShape []int, bprop bool,
 	if opts&num.BpropData != 0 {
 		n.inputSize[len(n.Layers)] = num.Prod(shape)
 	}
+	n.workSize[len(n.Layers)] = weightSize
 	wsize := max(n.workSize...)
 	insize := max(n.inputSize...)
 	if conf.DebugLevel >= 1 {
 		log.Printf("maxWorkSize=%d  maxInSize=%d  maxWeightSize=%d\n", wsize, insize, weightSize)
 	}
 	if wsize > 0 {
-		n.WorkSpace = queue.NewPool(wsize)
+		n.WorkSpace = queue.NewBuffer(wsize)
 	}
 	if insize > 0 {
-		n.bpropPool1 = queue.NewPool(insize)
-		n.bpropPool2 = queue.NewPool(insize)
-	}
-	if weightSize > 0 {
-		n.weightPool = queue.NewPool(weightSize)
+		n.bpropPool1 = queue.NewBuffer(insize)
+		n.bpropPool2 = queue.NewBuffer(insize)
 	}
 	return n
 }
@@ -168,7 +164,7 @@ func (n *Network) Release() {
 		layer.Release()
 	}
 	num.Release(n.classes, n.diffs, n.batchLoss, n.batchErr, n.totalLoss, n.totalErr,
-		n.WorkSpace, n.bpropPool1, n.bpropPool2, n.weightPool)
+		n.WorkSpace, n.bpropPool1, n.bpropPool2)
 }
 
 // Initialise network weights using a linear or normal distribution.
@@ -221,8 +217,7 @@ func (n *Network) Fprop(input *num.Array, trainMode bool) *num.Array {
 func (n *Network) Bprop(batch int, yPred, yOneHot *num.Array, opt Optimiser) {
 	q := n.queue
 	pool1, pool2 := n.bpropPool1, n.bpropPool2
-	pool1.Clear()
-	grad := pool1.NewArray(num.Float32, yOneHot.Dims...)
+	grad := num.NewArray(pool1, num.Float32, yOneHot.Dims...)
 	q.Call(
 		num.Copy(yPred, grad),
 		num.Axpy(-1, yOneHot, grad),
@@ -234,24 +229,22 @@ func (n *Network) Bprop(batch int, yPred, yOneHot *num.Array, opt Optimiser) {
 		layer := n.Layers[i]
 		var dsrc *num.Array
 		if n.inputSize[i] > 0 {
-			pool2.Clear()
-			dsrc = pool2.NewArray(num.Float32, layer.InShape()...)
+			dsrc = num.NewArray(pool2, num.Float32, layer.InShape()...)
 		}
 		grad = layer.Bprop(q, grad, dsrc, n.WorkSpace)
 		if n.DebugLevel >= 3 && grad != nil {
 			log.Printf("layer %d bprop output:\n%s", i, grad.String(q))
 		}
 		pool1, pool2 = pool2, pool1
-		q.Finish()
 	}
 	for _, layer := range n.Layers {
 		if l, ok := layer.(ParamLayer); ok {
 			W, B := l.Params()
 			dW, dB := l.ParamGrads()
 			vW, vB := l.ParamVelocity()
-			opt.Update(q, l.Type() != "batchNorm", W, dW, vW)
+			opt.Update(q, l.Type() != "batchNorm", W, dW, vW, n.WorkSpace)
 			if B != nil {
-				opt.Update(q, false, B, dB, vB)
+				opt.Update(q, false, B, dB, vB, n.WorkSpace)
 			}
 		}
 	}
@@ -381,9 +374,6 @@ func (n *Network) meminfo() (mem [][4]int, total [4]int) {
 	}
 	totalInput := max(n.inputSize...) * 8
 	totalWork := max(n.workSize...) * 4
-	if n.weightPool != nil {
-		total[0] += n.weightPool.Size() * 4
-	}
 	total[1] += totalInput
 	total[2] += totalWork
 	total[3] += totalInput + totalWork

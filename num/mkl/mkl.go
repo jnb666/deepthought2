@@ -297,10 +297,6 @@ func (l *Layout) Size() int {
 
 // utilities
 func getOutSize(in, filter, stride int, padding bool) (out, pad int, err error) {
-	if filter > in {
-		err = fmt.Errorf("filter size %d > input size %d", filter, in)
-		return
-	}
 	var end int
 	if padding {
 		out = in / stride
@@ -407,7 +403,7 @@ func (b Buffer) Data() unsafe.Pointer {
 	return b.ptr
 }
 
-func (b Buffer) Size() int {
+func (b Buffer) Capacity() int {
 	return b.size
 }
 

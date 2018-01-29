@@ -267,7 +267,7 @@ func Dropout(s *Stream, ratio float64, shape []int, seed int64) *DropoutLayer {
 
 	chkDnn(C.cudnnCreateDropoutDescriptor(&l.desc))
 	chkDnn(C.cudnnSetDropoutDescriptor(l.desc, s.cudnn, C.float(ratio),
-		l.States.Data(), C.size_t(l.States.Size()*4), C.ulonglong(seed)))
+		l.States.Data(), C.size_t(l.States.Capacity()*4), C.ulonglong(seed)))
 	return l
 }
 
@@ -371,10 +371,6 @@ func (l *FilterLayout) Release() {
 }
 
 func getOutSize(in, filter, stride int, padding bool) (out, pad int, err error) {
-	if filter > in {
-		err = fmt.Errorf("filter size %d > input size %d", filter, in)
-		return
-	}
 	var end int
 	if padding {
 		out = in / stride
