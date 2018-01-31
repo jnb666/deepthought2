@@ -1,3 +1,4 @@
+// Network in network: see https://arxiv.org/abs/1312.4400
 package main
 
 import (
@@ -25,6 +26,7 @@ func main() {
 		MaxEpoch:     200,
 		StopAfter:    3,
 		ExtraEpochs:  5,
+		ValidEMA:     20,
 		TrainBatch:   125,
 		Shuffle:      true,
 		UseGPU:       true,

@@ -42,6 +42,7 @@ type Config struct {
 	LogEvery     int
 	StopAfter    int
 	ExtraEpochs  int
+	ValidEMA     float64
 	MinLoss      float64
 	RandSeed     int64
 	DebugLevel   int

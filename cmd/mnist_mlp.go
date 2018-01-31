@@ -1,3 +1,4 @@
+// mnist mlp exanple based on http://www.imm.dtu.dk/~abll/blog/simple_cnn/
 package main
 
 import (

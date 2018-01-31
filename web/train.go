@@ -17,6 +17,7 @@ import (
 	"html/template"
 	"image/color"
 	"log"
+	"math"
 	"net/http"
 	"sort"
 	"strings"
@@ -245,7 +246,6 @@ func (p *TrainPage) getHistory() {
 }
 
 func (p *TrainPage) History() []HistoryRow {
-	statsHead := p.StatsHeaders()
 	table := []HistoryRow{}
 	setId := 0
 	for i, params := range p.keys {
@@ -262,9 +262,9 @@ func (p *TrainPage) History() []HistoryRow {
 		for _, i := range p.groups[params] {
 			h := p.net.History[i]
 			r.Stats = append(r.Stats, fmt.Sprint(h.Stats.Epoch))
-			for j := range h.Stats.Values {
-				if strings.HasSuffix(statsHead[j], " error") {
-					r.Stats = append(r.Stats, h.Stats.FormatItem(j))
+			for j := range h.Stats.Error {
+				if j <= 2 {
+					r.Stats = append(r.Stats, h.Stats.FormatError(j))
 				}
 			}
 			r.Stats = append(r.Stats, h.Stats.FormatElapsed())
@@ -278,9 +278,17 @@ func (p *TrainPage) History() []HistoryRow {
 func (p *TrainPage) lossPlot() template.HTML {
 	plt := newPlot()
 	plt.Add(plotter.NewGrid())
-	plt.X.Label.Text = "epoch"
-	plt.Y.Label.Text = "loss"
-	line := newLinePlot(p.net.test.Stats, 0, 1)
+	plt.X.Label.Text = "batch"
+	plt.Y.Label.Text = "log loss"
+	vals := plotter.XYs{}
+	batch := 1.0
+	for _, s := range p.net.test.Stats {
+		for _, loss := range s.Loss {
+			vals = append(vals, xy{batch, math.Log10(loss)})
+			batch++
+		}
+	}
+	line := newLinePlot(vals, false)
 	line.Color = plotutil.Color(0)
 	plt.Add(line)
 	plt.Legend.Add("training loss ", line)
@@ -293,7 +301,12 @@ func (p *TrainPage) errorPlot() template.HTML {
 	plt.X.Label.Text = "epoch"
 	plt.Y.Label.Text = "error %"
 	for i, name := range p.StatsHeaders()[1:] {
-		line := newLinePlot(p.net.test.Stats, i+1, 100)
+		vals := plotter.XYs{}
+		for _, s := range p.net.test.Stats {
+			vals = append(vals, xy{float64(s.Epoch), s.Error[i] * 100})
+		}
+		line := newLinePlot(vals, true)
+		line.Width = 2
 		line.Color = plotutil.Color(i)
 		plt.Add(line)
 		plt.Legend.Add(name, line)
@@ -331,10 +344,10 @@ func (p *TrainPage) historyPlot() template.HTML {
 	plt.Add(plotter.NewGrid())
 	plt.Legend.Left = true
 	plt.X.Label.Text = "run time"
-	ix := 1
+	ix := 0
 	head := p.StatsHeaders()
-	if len(head) >= 3 {
-		ix = 2
+	if len(head) >= 2 {
+		ix = 1
 	}
 	plt.Y.Label.Text = head[ix] + " %"
 	var pt struct{ X, Y float64 }
@@ -346,9 +359,9 @@ func (p *TrainPage) historyPlot() template.HTML {
 		var pts plotter.XYs
 		for _, i := range p.groups[params] {
 			h := p.net.History[i]
-			if ix < len(h.Stats.Values) {
+			if ix < len(h.Stats.Error) {
 				pt.X = h.Stats.Elapsed.Seconds()
-				pt.Y = 100 * h.Stats.Values[ix]
+				pt.Y = 100 * h.Stats.Error[ix]
 				pts = append(pts, pt)
 			}
 		}
@@ -405,22 +418,17 @@ func newFont(size vg.Length) vg.Font {
 
 type xy struct{ X, Y float64 }
 
-func newLinePlot(stats []nnet.Stats, ix int, scale float64) linePlot {
-	var pts plotter.XYs
-	xmax, ymax := 1.0, 0.0
-	for _, s := range stats {
-		pt := xy{float64(s.Epoch), s.Values[ix] * scale}
-		pts = append(pts, pt)
-		if pt.X > xmax {
-			xmax = pt.X
-		}
-		if pt.Y > ymax {
-			ymax = pt.Y
+func newLinePlot(pts plotter.XYs, minZero bool) linePlot {
+	xmax, ymax, ymin := 1.0, 0.0, 0.0
+	for _, pt := range pts {
+		xmax = math.Max(pt.X, xmax)
+		ymax = math.Max(pt.Y, ymax)
+		if !minZero {
+			ymin = math.Min(pt.Y, ymin)
 		}
 	}
 	l, _ := plotter.NewLine(pts)
-	l.Width = 2
-	return linePlot{Line: l, xmin: 1, xmax: xmax, ymin: 0, ymax: ymax}
+	return linePlot{Line: l, xmin: 1, xmax: xmax, ymin: ymin, ymax: ymax}
 }
 
 // modified plotter.Line with a fixed scale

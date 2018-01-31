@@ -1,3 +1,4 @@
+// mnist conv net based on http://neuralnetworksanddeeplearning.com/chap6.html
 package main
 
 import (
@@ -38,6 +39,7 @@ func main() {
 	conf.DataSet = "mnist2"
 	conf.Distort = true
 	conf.MaxEpoch = 40
+	conf.ValidEMA = 10
 	conf.StopAfter = 2
 	conf.ExtraEpochs = 3
 	fmt.Println(conf)

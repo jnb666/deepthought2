@@ -1,3 +1,4 @@
+// mnist conv net based on http://www.imm.dtu.dk/~abll/blog/simple_cnn/
 package main
 
 import (

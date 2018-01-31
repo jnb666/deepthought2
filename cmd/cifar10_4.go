@@ -1,3 +1,4 @@
+// cifar-10 4 layer net based on https://blog.plon.io/tutorials/cifar-10-classification-using-keras-tutorial/
 package main
 
 import (

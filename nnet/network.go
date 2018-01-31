@@ -87,10 +87,7 @@ type Network struct {
 	queue      num.Queue
 	classes    *num.Array
 	diffs      *num.Array
-	batchErr   *num.Array
-	totalErr   *num.Array
-	batchLoss  *num.Array
-	totalLoss  *num.Array
+	total      *num.Array
 	bpropPool1 num.Buffer
 	bpropPool2 num.Buffer
 	inShape    []int
@@ -163,8 +160,7 @@ func (n *Network) Release() {
 	for _, layer := range n.Layers {
 		layer.Release()
 	}
-	num.Release(n.classes, n.diffs, n.batchLoss, n.batchErr, n.totalLoss, n.totalErr,
-		n.WorkSpace, n.bpropPool1, n.bpropPool2)
+	num.Release(n.classes, n.diffs, n.total, n.WorkSpace, n.bpropPool1, n.bpropPool2)
 }
 
 // Initialise network weights using a linear or normal distribution.
@@ -250,30 +246,31 @@ func (n *Network) Bprop(batch int, yPred, yOneHot *num.Array, opt Optimiser) {
 	}
 }
 
-// get the loss for this batch
-func (n *Network) calcBatchLoss(batch int, yOneHot, yPred *num.Array) {
+// get the average loss for this batch
+func (n *Network) BatchLoss(yOneHot, yPred *num.Array) float64 {
 	q := n.queue
 	losses := n.OutLayer().Loss(q, yOneHot, yPred)
 	if n.DebugLevel >= 2 {
 		log.Printf("loss:\n%s", losses.String(q))
 	}
+	var total = []float32{0}
 	q.Call(
-		num.Sum(losses, n.batchLoss),
-		num.Axpy(1, n.batchLoss, n.totalLoss),
-	)
+		num.Sum(losses, n.total),
+		num.Read(n.total, total),
+	).Finish()
+	return float64(total[0]) / float64(yOneHot.Dims[1])
 }
 
-// get the error for this batch, if pred is non-null then save predicted values
-func (n *Network) calcBatchError(batch int, dset *Dataset, y, yPred *num.Array, pred []int32) {
+// get the total error for this batch, if pred is non-null then save predicted values
+func (n *Network) BatchError(batch int, dset *Dataset, y, yPred *num.Array, pred []int32) float64 {
 	q := n.queue
 	q.Call(
 		num.Unhot(yPred, n.classes),
 		num.Neq(n.classes, y, n.diffs),
-		num.Sum(n.diffs, n.batchErr),
-		num.Axpy(1, n.batchErr, n.totalErr),
+		num.Sum(n.diffs, n.total),
 	)
-	if n.DebugLevel >= 2 || (n.DebugLevel >= 1 && batch == 0) {
-		log.Printf("batch %d error =%s\n", batch, n.batchErr.String(q))
+	if n.DebugLevel >= 2 || (n.DebugLevel == 1 && batch == 0) {
+		log.Printf("batch error = %s\n", batch, n.total.String(q))
 		log.Println(y.String(q))
 		log.Println(n.classes.String(q))
 		log.Println(n.diffs.String(q))
@@ -286,17 +283,20 @@ func (n *Network) calcBatchError(batch int, dset *Dataset, y, yPred *num.Array, 
 		}
 		q.Call(num.Read(n.classes, pred[start:end]))
 	}
+	var total = []float32{0}
+	q.Call(num.Read(n.total, total)).Finish()
+	return float64(total[0])
 }
 
 // Calculate the error from the predicted versus actual values
 // if pred slice is not nil then also return the predicted output classes.
 func (n *Network) Error(dset *Dataset, pred []int32) float64 {
 	dset.NextEpoch()
-	n.queue.Call(num.Fill(n.totalErr, 0))
 	var p []int32
 	if pred != nil {
 		p = make([]int32, dset.Samples)
 	}
+	totalErr := 0.0
 	for batch := 0; batch < dset.Batches; batch++ {
 		n.queue.Finish()
 		x, y, _ := dset.NextBatch()
@@ -304,16 +304,14 @@ func (n *Network) Error(dset *Dataset, pred []int32) float64 {
 		if n.DebugLevel >= 2 {
 			log.Printf("yPred\n%s", yPred.String(n.queue))
 		}
-		n.calcBatchError(batch, dset, y, yPred, p)
+		totalErr += n.BatchError(batch, dset, y, yPred, p)
 	}
-	err := []float32{0}
-	n.queue.Call(num.Read(n.totalErr, err)).Finish()
 	if pred != nil {
 		for i, ix := range dset.indexes {
 			pred[ix] = p[i]
 		}
 	}
-	return float64(err[0]) / float64(dset.Samples)
+	return totalErr / float64(dset.Samples)
 }
 
 // Print network description
@@ -393,10 +391,7 @@ func (n *Network) PrintWeights() {
 func (n *Network) allocArrays(size int) {
 	n.classes = n.queue.NewArray(num.Int32, size)
 	n.diffs = n.queue.NewArray(num.Int32, size)
-	n.batchLoss = n.queue.NewArray(num.Float32)
-	n.totalLoss = n.queue.NewArray(num.Float32)
-	n.batchErr = n.queue.NewArray(num.Float32)
-	n.totalErr = n.queue.NewArray(num.Float32)
+	n.total = n.queue.NewArray(num.Float32)
 }
 
 // Set random number seed, or random seed if seed <= 0

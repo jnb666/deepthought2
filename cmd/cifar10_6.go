@@ -1,3 +1,4 @@
+// Simple 6 layer network based on https://www.kaggle.com/c/cifar-10/discussion/40237
 package main
 
 import (
@@ -42,13 +43,14 @@ func main() {
 		DataSet:      "cifar10_2",
 		Eta:          0.01,
 		EtaDecay:     0.2,
-		EtaDecayStep: 40,
+		EtaDecayStep: 30,
 		Lambda:       5,
 		Momentum:     0.9,
 		Nesterov:     true,
 		MaxEpoch:     200,
 		StopAfter:    2,
 		ExtraEpochs:  4,
+		ValidEMA:     20,
 		TrainBatch:   125,
 		Shuffle:      true,
 		UseGPU:       true,

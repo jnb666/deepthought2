@@ -6,16 +6,14 @@ import (
 	"math"
 )
 
-const emaN = 10.0
-
 // Calc exponentional moving average
 type EMA float64
 
-func (e EMA) Add(val float64) float64 {
+func (e EMA) Add(val, n float64) float64 {
 	if e == 0 {
 		return val
 	}
-	k := 2.0 / (emaN + 1.0)
+	k := 2.0 / (n + 1.0)
 	return val*k + float64(e)*(1-k)
 }
 
