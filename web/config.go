@@ -32,9 +32,10 @@ type Field struct {
 }
 
 type Layer struct {
-	Index int
-	Desc  string
-	Shape string
+	Index  int
+	Desc   string
+	Shape  string
+	Prefix template.HTML
 }
 
 // Base data for handler functions to view and update the network config
@@ -268,15 +269,26 @@ func getFields(net *Network) []Field {
 }
 
 func getLayers(net *Network) []Layer {
-	conf := net.Conf
-	layers := make([]Layer, len(conf.Layers))
-	for i, l := range conf.Layers {
-		dims := net.Layers[i].OutShape()
-		layers[i].Index = i
-		layers[i].Desc = l.Unmarshal().ToString()
-		layers[i].Shape = fmt.Sprint(dims[:len(dims)-1])
+	layers := []Layer{{Desc: "input", Shape: shape(net.InShape)}}
+	for _, l := range net.Layers {
+		layers = append(layers, Layer{Index: len(layers), Desc: l.String(), Shape: shape(l.OutShape())})
+		if group, ok := l.(nnet.LayerGroup); ok {
+			desc := group.LayerDesc()
+			for i, l := range group.Layers() {
+				prefix := desc[i]
+				if strings.TrimSpace(desc[i]) == "" {
+					prefix = "&nbsp;"
+				}
+				layers = append(layers, Layer{Index: len(layers), Desc: l.String(), Shape: shape(l.OutShape()),
+					Prefix: template.HTML(prefix)})
+			}
+		}
 	}
 	return layers
+}
+
+func shape(dims []int) string {
+	return fmt.Sprint(dims[:len(dims)-1])
 }
 
 func getTuneFields(tuners []TuneParams) []Field {

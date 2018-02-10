@@ -153,7 +153,14 @@ func (c Config) String() string {
 	if c.Layers != nil {
 		str := []string{"\n== Network =="}
 		for i, layer := range c.Layers {
-			str = append(str, fmt.Sprintf("%2d: %s", i, layer))
+			l := layer.Unmarshal()
+			str = append(str, fmt.Sprintf("%2d: %s", i, l))
+			if group, ok := l.(LayerGroup); ok {
+				desc := group.LayerDesc()
+				for j, l := range group.Layers() {
+					str = append(str, fmt.Sprintf("    %s %s", desc[j], l))
+				}
+			}
 		}
 		s += strings.Join(str, "\n")
 	}

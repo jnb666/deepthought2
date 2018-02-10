@@ -55,17 +55,17 @@ func getInputs(t *testing.T, q num.Queue) (input, W, B *num.Array) {
 	return
 }
 
-func setupNetwork(q num.Queue, W, B *num.Array, opts num.LayerOpts) (l1, l2 Layer, dW, dB *num.Array, temp num.Buffer) {
+func setupNetwork(q num.Queue, W, B *num.Array) (l1, l2 Layer, dW, dB *num.Array, temp [3]num.Buffer) {
 	lin := &linear{Linear: Linear{Nout: nOut}}
-	work1 := lin.Init(q, []int{nIn, batch}, opts, nil)
+	work1 := lin.Init(q, []int{nIn, batch}, num.BpropWeights, nil)
 	layerW, layerB := lin.Params()
 	q.Call(
 		num.Copy(W, layerW),
 		num.Copy(B, layerB),
 	)
 	relu := &activation{Activation: Activation{Atype: "relu"}}
-	work2 := relu.Init(q, []int{nOut, batch}, opts, nil)
-	temp = q.NewBuffer(max(work1, work2))
+	work2 := relu.Init(q, []int{nOut, batch}, num.BpropData, nil)
+	temp[0] = q.NewBuffer(max(work1, work2))
 	return lin, relu, lin.dw, lin.db, temp
 }
 
@@ -88,10 +88,10 @@ func TestFprop(t *testing.T) {
 	for _, dev := range devices {
 		q := dev.NewQueue()
 		input, W, B := getInputs(t, q)
-		lin, relu, _, _, work := setupNetwork(q, W, B, num.FpropOnly)
+		lin, relu, _, _, work := setupNetwork(q, W, B)
 
-		temp := lin.Fprop(q, input, work, true)
-		output := relu.Fprop(q, temp, work, true)
+		temp := lin.Fprop(q, input, work[0], true)
+		output := relu.Fprop(q, temp, work[0], true)
 
 		expect := []float32{
 			0, 0.21253887, 0.49112207, 0,
@@ -129,11 +129,11 @@ func TestDNNBprop(t *testing.T) {
 	for _, dev := range devices {
 		q := dev.NewQueue()
 		input, W, B := getInputs(t, q)
-		lin, relu, dW, dB, work := setupNetwork(q, W, B, num.BpropWeights+num.BpropData)
+		lin, relu, dW, dB, work := setupNetwork(q, W, B)
 		yOneHot := getOutput(q)
 
-		temp := lin.Fprop(q, input, work, true)
-		output := relu.Fprop(q, temp, work, true)
+		temp := lin.Fprop(q, input, work[0], true)
+		output := relu.Fprop(q, temp, work[0], true)
 
 		grad := inputGrad(t, q, output, yOneHot)
 		dsrc := q.NewArray(num.Float32, relu.InShape()...)

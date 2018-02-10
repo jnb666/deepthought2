@@ -142,14 +142,8 @@ func (l *Layer) Worksize() int {
 
 // Setup new convolution layer
 func Convolution(attr *Attr, n, c, h, w, nFeats, filtSize, stride int, padding, noBias bool) *Layer {
-	wOut, wPad, err := getOutSize(w, filtSize, stride, padding)
-	if err != nil {
-		panic(err)
-	}
-	hOut, hPad, err := getOutSize(h, filtSize, stride, padding)
-	if err != nil {
-		panic(err)
-	}
+	wOut, wPad := getOutSize(w, filtSize, stride, padding)
+	hOut, hPad := getOutSize(h, filtSize, stride, padding)
 	l := NewLayer("conv", []int{w, h, c, n}, []int{wOut, hOut, nFeats, n})
 	l.filtShape = []int{filtSize, filtSize, c, nFeats}
 	inSize := sizeDims(l.inShape)
@@ -180,8 +174,8 @@ func Convolution(attr *Attr, n, c, h, w, nFeats, filtSize, stride int, padding, 
 
 // Setup new max pooling or average pooling layer
 func Pooling(attr *Attr, n, c, h, w, size, stride int, padding, average bool) *Layer {
-	wOut, wPad, _ := getOutSize(w, size, stride, padding)
-	hOut, hPad, _ := getOutSize(h, size, stride, padding)
+	wOut, wPad := getOutSize(w, size, stride, padding)
+	hOut, hPad := getOutSize(h, size, stride, padding)
 	l := NewLayer("pool", []int{w, h, c, n}, []int{wOut, hOut, c, n})
 	csize := sizeDims2(size)
 	cstride := sizeDims2(stride)
@@ -296,27 +290,23 @@ func (l *Layout) Size() int {
 }
 
 // utilities
-func getOutSize(in, filter, stride int, padding bool) (out, pad int, err error) {
-	var end int
+func getOutSize(in, filter, stride int, padding bool) (out, pad int) {
 	if padding {
-		out = in / stride
-		end = filter + (out-1)*stride
-		if end < in {
-			out++
-			end += stride
-		}
-		pad = (end - in) / 2
-		if (end-in)%2 != 0 {
+		out = ciel(in, stride)
+		for out > 1+(in-filter+2*pad)/stride {
 			pad++
 		}
 	} else {
 		out = 1 + (in-filter)/stride
-		end = filter + (out-1)*stride
-		if end != in {
-			err = fmt.Errorf("filter %d and stride %d does not divide input %d", filter, stride, in)
-		}
 	}
 	return
+}
+
+func ciel(a, b int) int {
+	if a%b == 0 {
+		return a / b
+	}
+	return 1 + a/b
 }
 
 func getOffset(hPad, wPad int) (btype C.dnnBorder_t, offset [2]C.int) {

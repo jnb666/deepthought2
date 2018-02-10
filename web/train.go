@@ -278,20 +278,27 @@ func (p *TrainPage) History() []HistoryRow {
 func (p *TrainPage) lossPlot() template.HTML {
 	plt := newPlot()
 	plt.Add(plotter.NewGrid())
-	plt.X.Label.Text = "batch"
+	plt.X.Label.Text = "epoch"
 	plt.Y.Label.Text = "log loss"
 	vals := plotter.XYs{}
-	batch := 1.0
 	for _, s := range p.net.test.Stats {
-		for _, loss := range s.Loss {
-			vals = append(vals, xy{batch, math.Log10(loss)})
-			batch++
+		for batch, loss := range s.Loss {
+			x := float64(s.Epoch-1) + float64(batch)/float64(len(s.Loss))
+			vals = append(vals, xy{x, math.Log10(loss)})
 		}
 	}
 	line := newLinePlot(vals, false)
 	line.Color = plotutil.Color(0)
 	plt.Add(line)
-	plt.Legend.Add("training loss ", line)
+	plt.Legend.Add("loss per batch", line)
+	vals = plotter.XYs{}
+	for _, s := range p.net.test.Stats {
+		vals = append(vals, xy{float64(s.Epoch), math.Log10(s.AvgLoss)})
+	}
+	line = newLinePlot(vals, false)
+	line.Color = plotutil.Color(1)
+	plt.Add(line)
+	plt.Legend.Add("average loss", line)
 	return writePlot(plt, plotWidth, plotHeight)
 }
 

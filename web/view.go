@@ -1,14 +1,12 @@
 package web
 
 import (
-	"bytes"
 	"fmt"
 	"github.com/gorilla/mux"
 	"html/template"
 	"image"
 	"image/color"
 	"image/png"
-	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -35,7 +33,6 @@ type LayerInfo struct {
 	CellWidth int
 	PadWidth  int
 	Class     string
-	ImageData bytes.Buffer
 }
 
 // Base data for handler functions to view network activations and weights
@@ -137,61 +134,50 @@ func (p *ViewPage) getLayers(index int) {
 		// input image
 		classes := p.net.view.data.Classes()
 		label := p.net.Labels[p.net.view.dset][index]
-		norm := ""
-		if p.net.Network.Normalise {
-			norm = "n"
-		}
 		p.Input = info(
 			fmt.Sprintf("input %d %v => %s", index+1, p.net.view.inShape, classes[label]),
-			fmt.Sprintf("/img/%s/%d/%s", p.net.view.dset, index+1, norm),
+			fmt.Sprintf("/img/%s/%d/", p.net.view.dset, index+1),
 			p.net.view.data.Image(index, ""),
 			len(p.net.view.inShape) == 3 && p.net.view.inShape[2] == 3,
 			0, 0, "input",
 		)
 		// outputs at each layer
 		for i, l := range p.net.view.layers {
-			if l.outShape != nil {
-				entry := info(
-					fmt.Sprintf("%d: %s %v", i, l.ltype, l.outShape),
-					fmt.Sprintf("/net/outputs/%d?ts=%d", len(p.Layers), ts),
-					l.outImage, false, factorMinOutput, 100, "weights",
-				)
-				if i == len(p.net.view.layers)-1 {
-					p.Output = entry
-				} else {
-					p.Layers = append(p.Layers, entry)
-				}
+			entry := info(l.desc,
+				fmt.Sprintf("/net/outputs/%d?ts=%d", i, ts),
+				l.image, false, factorMinOutput, 100, "weights",
+			)
+			if i == len(p.net.view.layers)-1 {
+				p.Output = entry
+			} else {
+				p.Layers = append(p.Layers, entry)
 			}
 		}
 		// output classification
 		if l := p.net.view.lastLayer(); l != nil {
-			if len(l.outData) > 1 {
-				imax := arrayMax(l.outData)
-				width := int(100 / float64(len(l.outData)))
-				for i, val := range l.outData {
+			if len(l.data) > 1 {
+				imax := arrayMax(l.data)
+				width := int(100 / float64(len(l.data)))
+				for i, val := range l.data {
 					p.addOutput(val, classes[i], i == imax, width)
 				}
 			} else {
 				class := classes[0]
-				if l.outData[0] > 0.5 {
+				if l.data[0] > 0.5 {
 					class = classes[1]
 				}
-				p.addOutput(l.outData[0], class, false, 100)
+				p.addOutput(l.data[0], class, false, 100)
 			}
 		}
 	case "weights":
 		p.Columns = 1
 		p.net.view.updateWeights()
 		// display weights and biases
-		for i, l := range p.net.view.layers {
-			if l.wShape != nil {
-				entry := info(
-					fmt.Sprintf("%d: %s %v %v", i, l.ltype, l.wShape, l.bShape),
-					fmt.Sprintf("/net/weights/%d?ts=%d", len(p.Layers), ts),
-					l.wImage, false, factorMinWeights, 100, "weights",
-				)
-				p.Layers = append(p.Layers, entry)
-			}
+		for i, l := range p.net.view.weights {
+			entry := info(l.desc, fmt.Sprintf("/net/weights/%d?ts=%d", i, ts),
+				l.image, false, factorMinWeights, 100, "weights",
+			)
+			p.Layers = append(p.Layers, entry)
 		}
 	}
 }
@@ -224,9 +210,6 @@ func info(desc, url string, img image.Image, channels bool, factorMin, scaleWidt
 			if img.Bounds().Dx() <= scaleWidth {
 				info.Width /= 2
 			}
-			if err := png.Encode(&info.ImageData, img); err != nil {
-				log.Println("ERROR: error encoding image", err)
-			}
 		}
 	}
 	info.PadWidth = 100 - len(info.Image)*info.Width
@@ -240,13 +223,25 @@ func (p *ViewPage) Image() func(w http.ResponseWriter, r *http.Request) {
 		p.net.Lock()
 		defer p.net.Unlock()
 		vars := mux.Vars(r)
+		page := vars["page"]
 		layer, _ := strconv.Atoi(vars["layer"])
-		w.Header().Set("Content-type", "image/png")
-		if layer < len(p.Layers) {
-			w.Write(p.Layers[layer].ImageData.Bytes())
-		} else {
-			w.Write(p.Output.ImageData.Bytes())
+		var img *image.NRGBA
+		switch page {
+		case "outputs":
+			if layer >= 0 && layer < len(p.net.view.layers) {
+				img = p.net.view.layers[layer].image
+			}
+		case "weights":
+			if layer >= 0 && layer < len(p.net.view.weights) {
+				img = p.net.view.weights[layer].image
+			}
 		}
+		if img == nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-type", "image/png")
+		png.Encode(w, img)
 	}
 }
 

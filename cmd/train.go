@@ -15,7 +15,7 @@ func predict(q num.Queue, net *nnet.Network, d nnet.Data) {
 	dset.NextEpoch()
 	x, y, _ := dset.NextBatch()
 	classes := q.NewArray(num.Int32, y.Dims[0])
-	yPred := net.Fprop(x, false)
+	yPred := nnet.Fprop(q, net.Layers, x, net.WorkSpace[0], false)
 	q.Call(num.Unhot(yPred, classes))
 	log.Print("predict:\n", yPred.String(q))
 	log.Println("classes:", classes.String(q))

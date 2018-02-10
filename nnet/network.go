@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+var debug int
+
 // Weight initialisation type
 type InitType int
 
@@ -82,25 +84,24 @@ func getSize(dims []int) (nin, nout int) {
 // Network type represents a multilayer neural network model.
 type Network struct {
 	Config
-	Layers     []Layer
-	WorkSpace  num.Buffer
-	queue      num.Queue
-	classes    *num.Array
-	diffs      *num.Array
-	total      *num.Array
-	bpropPool1 num.Buffer
-	bpropPool2 num.Buffer
-	inShape    []int
-	workSize   []int
-	inputSize  []int
+	Layers    []Layer
+	InShape   []int
+	WorkSpace [3]num.Buffer
+	queue     num.Queue
+	classes   *num.Array
+	diffs     *num.Array
+	total     *num.Array
+	workSize  []int
+	inputSize []int
 }
 
 // New function creates a new network with the given layers. If bprop is true then allocate memory for back propagation.
 func New(queue num.Queue, conf Config, batchSize int, inShape []int, bprop bool, rng *rand.Rand) *Network {
+	debug = conf.DebugLevel
 	n := &Network{Config: conf, queue: queue}
 	n.allocArrays(batchSize)
-	n.inShape = append(inShape, batchSize)
-	shape := n.inShape
+	n.InShape = append(inShape, batchSize)
+	shape := n.InShape
 	n.workSize = make([]int, len(conf.Layers)+1)
 	n.inputSize = make([]int, len(conf.Layers)+1)
 	opts := num.FpropOnly
@@ -118,19 +119,16 @@ func New(queue num.Queue, conf Config, batchSize int, inShape []int, bprop bool,
 		if opts&num.BpropData != 0 {
 			n.inputSize[i] = num.Prod(layer.InShape())
 		}
-		if conf.DebugLevel >= 1 {
-			log.Printf("init layer %d: %s opts=%s work=%d insize=%d\n", i, l.Type, opts, n.workSize[i], n.inputSize[i])
+		if debug >= 1 {
+			log.Printf("init layer %d: %s %v => %v opts=%s work=%d insize=%d\n",
+				i, l.Type, shape, layer.OutShape(), opts, n.workSize[i], n.inputSize[i])
 		}
 		shape = layer.OutShape()
 		if l.Type != "flatten" && bprop {
 			opts |= num.BpropData
 		}
 		if lp, ok := layer.(ParamLayer); ok && bprop && conf.Nesterov {
-			size := num.Prod(lp.FilterShape())
-			if lp.BiasShape() != nil {
-				size += num.Prod(lp.BiasShape())
-			}
-			if size > weightSize {
+			if size := lp.NumWeights(); size > weightSize {
 				weightSize = size
 			}
 		}
@@ -141,15 +139,15 @@ func New(queue num.Queue, conf Config, batchSize int, inShape []int, bprop bool,
 	n.workSize[len(n.Layers)] = weightSize
 	wsize := max(n.workSize...)
 	insize := max(n.inputSize...)
-	if conf.DebugLevel >= 1 {
+	if debug >= 1 {
 		log.Printf("maxWorkSize=%d  maxInSize=%d  maxWeightSize=%d\n", wsize, insize, weightSize)
 	}
 	if wsize > 0 {
-		n.WorkSpace = queue.NewBuffer(wsize)
+		n.WorkSpace[0] = queue.NewBuffer(wsize)
 	}
 	if insize > 0 {
-		n.bpropPool1 = queue.NewBuffer(insize)
-		n.bpropPool2 = queue.NewBuffer(insize)
+		n.WorkSpace[1] = queue.NewBuffer(insize)
+		n.WorkSpace[2] = queue.NewBuffer(insize)
 	}
 	return n
 }
@@ -160,35 +158,17 @@ func (n *Network) Release() {
 	for _, layer := range n.Layers {
 		layer.Release()
 	}
-	num.Release(n.classes, n.diffs, n.total, n.WorkSpace, n.bpropPool1, n.bpropPool2)
+	num.Release(n.classes, n.diffs, n.total, n.WorkSpace[0], n.WorkSpace[1], n.WorkSpace[2])
 }
 
 // Initialise network weights using a linear or normal distribution.
 // Weights for each layer are scaled by 1/sqrt(nin)
 func (n *Network) InitWeights(rng *rand.Rand) {
-	for i, layer := range n.Layers {
-		if l, ok := layer.(ParamLayer); ok {
-			dims := l.FilterShape()
-			if n.DebugLevel >= 1 {
-				log.Printf("layer %d: %s %v set weights init=%s bias=%.3g\n", i, l.Type(), dims, n.WeightInit, n.Bias)
-			}
-			l.InitParams(n.queue, n.WeightInit.WeightFunc(dims, rng), float32(n.Bias))
-		}
-	}
-	if n.DebugLevel >= 2 {
+	ParamLayers("", n.Layers, func(desc string, l ParamLayer) {
+		l.InitParams(n.queue, n.WeightInit, n.Bias, rng)
+	})
+	if debug >= 2 {
 		n.PrintWeights()
-	}
-}
-
-// Copy weights and bias arrays to destination net
-func (n *Network) CopyTo(net *Network, sync bool) {
-	for i, layer := range n.Layers {
-		if l, ok := net.Layers[i].(ParamLayer); ok {
-			l.Copy(n.queue, layer)
-		}
-	}
-	if sync {
-		n.queue.Finish()
 	}
 }
 
@@ -197,60 +177,11 @@ func (n *Network) OutLayer() OutputLayer {
 	return n.Layers[len(n.Layers)-1].(OutputLayer)
 }
 
-// Feed forward the input to get the predicted output
-func (n *Network) Fprop(input *num.Array, trainMode bool) *num.Array {
-	pred := input
-	for i, layer := range n.Layers {
-		if n.DebugLevel >= 2 && pred != nil {
-			log.Printf("layer %d input\n%s", i, pred.String(n.queue))
-		}
-		pred = layer.Fprop(n.queue, pred, n.WorkSpace, trainMode)
-	}
-	return pred
-}
-
-// Get difference at output, back propagate gradient and update weights
-func (n *Network) Bprop(batch int, yPred, yOneHot *num.Array, opt Optimiser) {
-	q := n.queue
-	pool1, pool2 := n.bpropPool1, n.bpropPool2
-	grad := num.NewArray(pool1, num.Float32, yOneHot.Dims...)
-	q.Call(
-		num.Copy(yPred, grad),
-		num.Axpy(-1, yOneHot, grad),
-	)
-	if n.DebugLevel >= 2 || (n.DebugLevel == 1 && batch == 0) {
-		log.Printf("input grad:\n%s", grad.String(q))
-	}
-	for i := len(n.Layers) - 1; i >= 0; i-- {
-		layer := n.Layers[i]
-		var dsrc *num.Array
-		if n.inputSize[i] > 0 {
-			dsrc = num.NewArray(pool2, num.Float32, layer.InShape()...)
-		}
-		grad = layer.Bprop(q, grad, dsrc, n.WorkSpace)
-		if n.DebugLevel >= 3 && grad != nil {
-			log.Printf("layer %d bprop output:\n%s", i, grad.String(q))
-		}
-		pool1, pool2 = pool2, pool1
-	}
-	for _, layer := range n.Layers {
-		if l, ok := layer.(ParamLayer); ok {
-			W, B := l.Params()
-			dW, dB := l.ParamGrads()
-			vW, vB := l.ParamVelocity()
-			opt.Update(q, l.Type() != "batchNorm", W, dW, vW, n.WorkSpace)
-			if B != nil {
-				opt.Update(q, false, B, dB, vB, n.WorkSpace)
-			}
-		}
-	}
-}
-
 // get the average loss for this batch
 func (n *Network) BatchLoss(yOneHot, yPred *num.Array) float64 {
 	q := n.queue
 	losses := n.OutLayer().Loss(q, yOneHot, yPred)
-	if n.DebugLevel >= 2 {
+	if debug >= 2 {
 		log.Printf("loss:\n%s", losses.String(q))
 	}
 	var total = []float32{0}
@@ -269,8 +200,8 @@ func (n *Network) BatchError(batch int, dset *Dataset, y, yPred *num.Array, pred
 		num.Neq(n.classes, y, n.diffs),
 		num.Sum(n.diffs, n.total),
 	)
-	if n.DebugLevel >= 2 || (n.DebugLevel == 1 && batch == 0) {
-		log.Printf("batch error = %s\n", batch, n.total.String(q))
+	if debug >= 2 || (debug == 1 && batch == 0) {
+		log.Printf("batch error = %s\n", n.total.String(q))
 		log.Println(y.String(q))
 		log.Println(n.classes.String(q))
 		log.Println(n.diffs.String(q))
@@ -300,10 +231,7 @@ func (n *Network) Error(dset *Dataset, pred []int32) float64 {
 	for batch := 0; batch < dset.Batches; batch++ {
 		n.queue.Finish()
 		x, y, _ := dset.NextBatch()
-		yPred := n.Fprop(x, false)
-		if n.DebugLevel >= 2 {
-			log.Printf("yPred\n%s", yPred.String(n.queue))
-		}
+		yPred := Fprop(n.queue, n.Layers, x, n.WorkSpace[0], false)
 		totalErr += n.BatchError(batch, dset, y, yPred, p)
 	}
 	if pred != nil {
@@ -317,81 +245,161 @@ func (n *Network) Error(dset *Dataset, pred []int32) float64 {
 // Print network description
 func (n *Network) String() string {
 	s := n.configString()
-	if n.Layers != nil {
-		s += fmt.Sprintf("\n== Network ==\n    %-12s input", fmt.Sprint(n.inShape[:len(n.inShape)-1]))
-		for i, layer := range n.Layers {
-			dims := layer.OutShape()
-			weights := ""
-			if l, ok := layer.(ParamLayer); ok {
-				n := num.Prod(l.FilterShape())
-				if l.BiasShape() != nil {
-					n += num.Prod(l.BiasShape())
-				}
-				weights = fmt.Sprint(n)
+	if n.Layers == nil {
+		return s
+	}
+	s += fmt.Sprintf("\n== Network ==\n    %-12s input", fmt.Sprint(n.InShape[:len(n.InShape)-1]))
+	for i, layer := range n.Layers {
+		s += fmt.Sprintf("\n%2d: %s", i, layer.ToString())
+		if group, ok := layer.(LayerGroup); ok {
+			desc := group.LayerDesc()
+			for j, l := range group.Layers() {
+				s += fmt.Sprintf("\n     %s %s", desc[j], l.ToString())
 			}
-			s += fmt.Sprintf("\n%2d: %-12s %s %s", i, fmt.Sprint(dims[:len(dims)-1]), layer.ToString(), weights)
 		}
 	}
-	return s
+	totalWeights := 0
+	ParamLayers("", n.Layers, func(desc string, l ParamLayer) {
+		totalWeights += l.NumWeights()
+	})
+	return s + fmt.Sprintf("\ntotal weights %d", totalWeights)
 }
 
 // Get total allocated memory in bytes
 func (n *Network) Memory() int {
-	_, total := n.meminfo()
-	return total[3]
+	m := new(memInfo)
+	m.update(n.Layers, -1, n.inputSize, n.workSize)
+	return m.total[3]
 }
 
 // Print profile of allocated memory
 func (n *Network) MemoryProfile() string {
-	mem, total := n.meminfo()
+	m := new(memInfo)
+	m.update(n.Layers, -1, n.inputSize, n.workSize)
 	s := fmt.Sprintf("== memory profile ==                weights  outputs     temp    total (%d)\n",
-		n.inShape[len(n.inShape)-1])
-	for i, layer := range n.Layers {
-		if mem[i][3] > 0 {
-			input := n.inputSize[i] * 4
-			work := n.workSize[i] * 4
-			s += fmt.Sprintf("%2d: %-30s %8s %8s %8s %8s\n", i, layer.ToString(),
-				FormatBytes(mem[i][0]), FormatBytes(mem[i][1]+input), FormatBytes(mem[i][2]+work),
-				FormatBytes(mem[i][3]+input+work))
+		n.InShape[len(n.InShape)-1])
+	for i, mem := range m.bytes {
+		if mem[3] > 0 {
+			s += fmt.Sprintf("%-34s %8s %8s %8s %8s\n", m.name[i],
+				FormatBytes(mem[0]), FormatBytes(mem[1]), FormatBytes(mem[2]), FormatBytes(mem[3]))
 		}
 	}
 	s += fmt.Sprintf("--- TOTAL --- %20s %8s %8s %8s %8s\n", "",
-		FormatBytes(total[0]), FormatBytes(total[1]), FormatBytes(total[2]), FormatBytes(total[3]))
+		FormatBytes(m.total[0]), FormatBytes(m.total[1]), FormatBytes(m.total[2]), FormatBytes(m.total[3]))
 	return s
-}
-
-func (n *Network) meminfo() (mem [][4]int, total [4]int) {
-	var r [4]int
-	for _, layer := range n.Layers {
-		r[0], r[1], r[2] = layer.Memory()
-		r[3] = r[0] + r[1] + r[2]
-		for i, val := range r {
-			total[i] += val
-		}
-		mem = append(mem, r)
-	}
-	totalInput := max(n.inputSize...) * 8
-	totalWork := max(n.workSize...) * 4
-	total[1] += totalInput
-	total[2] += totalWork
-	total[3] += totalInput + totalWork
-	return
 }
 
 // Print network weights
 func (n *Network) PrintWeights() {
-	for i, layer := range n.Layers {
-		if l, ok := layer.(ParamLayer); ok {
-			W, B := l.Params()
-			log.Printf("== Layer %d weights ==\n%s %s\n", i, W.String(n.queue), B.String(n.queue))
+	ParamLayers("", n.Layers, func(desc string, l ParamLayer) {
+		W, B := l.Params()
+		log.Printf("== Layer %s weights ==\n%s", desc, W.String(n.queue))
+		if B != nil {
+			log.Printf(" %s", B.String(n.queue))
 		}
-	}
+		log.Println()
+	})
 }
 
 func (n *Network) allocArrays(size int) {
 	n.classes = n.queue.NewArray(num.Int32, size)
 	n.diffs = n.queue.NewArray(num.Int32, size)
 	n.total = n.queue.NewArray(num.Float32)
+}
+
+type memInfo struct {
+	name  []string
+	bytes [][4]int
+	total [4]int
+}
+
+func (m *memInfo) update(layers []Layer, layerId int, inputSize, workSize []int) {
+	var r [4]int
+	for i, layer := range layers {
+		r[0], r[1], r[2] = layer.Memory()
+		r[3] = r[0] + r[1] + r[2]
+		for i, val := range r {
+			m.total[i] += val
+		}
+		if layerId < 0 {
+			input := inputSize[i] * 4
+			work := workSize[i] * 4
+			r[1] += input
+			r[2] += work
+			r[3] += input + work
+			m.name = append(m.name, fmt.Sprintf("%2d: %s", i, layer))
+		} else {
+			m.name = append(m.name, fmt.Sprintf("      %s", layer))
+		}
+		m.bytes = append(m.bytes, r)
+		if l, ok := layer.(LayerGroup); ok {
+			m.update(l.Layers(), i, inputSize, workSize)
+		}
+	}
+	if layerId < 0 {
+		totalInput := max(inputSize...) * 8
+		totalWork := max(workSize...) * 4
+		m.total[1] += totalInput
+		m.total[2] += totalWork
+		m.total[3] += totalInput + totalWork
+	}
+}
+
+// Call function on each of the ParamLayers in the network
+func ParamLayers(desc string, layers []Layer, callback func(desc string, l ParamLayer)) {
+	for i, layer := range layers {
+		if l, ok := layer.(ParamLayer); ok {
+			callback(fmt.Sprintf("%s%d", desc, i), l)
+		}
+		if l, ok := layer.(LayerGroup); ok {
+			ParamLayers(fmt.Sprintf("%d.", i), l.Layers(), callback)
+		}
+	}
+}
+
+// Copy weights and bias arrays from src to dst
+func CopyParams(q num.Queue, src, dst []Layer, sync bool) {
+	for i, layer := range dst {
+		if l, ok := layer.(ParamLayer); ok {
+			l.Copy(q, src[i])
+		}
+		if l, ok := layer.(LayerGroup); ok {
+			CopyParams(q, src[i].(LayerGroup).Layers(), l.Layers(), false)
+		}
+	}
+	if sync {
+		q.Finish()
+	}
+}
+
+// Feed forward the input to get the predicted output
+func Fprop(q num.Queue, layers []Layer, input *num.Array, work num.Buffer, trainMode bool) *num.Array {
+	pred := input
+	for i, layer := range layers {
+		if debug >= 2 && pred != nil {
+			log.Printf("layer %d input\n%s", i, pred.String(q))
+		}
+		pred = layer.Fprop(q, pred, work, trainMode)
+	}
+	return pred
+}
+
+// Back propagate gradient through the layers
+func Bprop(q num.Queue, layers []Layer, grad *num.Array, work [3]num.Buffer) *num.Array {
+	tmp1, tmp2 := work[1], work[2]
+	for i := len(layers) - 1; i >= 0; i-- {
+		layer := layers[i]
+		var dsrc *num.Array
+		if layer.BpropData() {
+			dsrc = num.NewArray(tmp2, num.Float32, layer.InShape()...)
+		}
+		grad = layer.Bprop(q, grad, dsrc, work)
+		if debug >= 3 && grad != nil {
+			log.Printf("layer %d bprop output:\n%s", i, grad.String(q))
+		}
+		tmp1, tmp2 = tmp2, tmp1
+	}
+	return grad
 }
 
 // Set random number seed, or random seed if seed <= 0

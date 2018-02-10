@@ -55,7 +55,12 @@
         {{ range .Layers -}}
         <div class="pure-control-group read-only">
           <label for="layer-{{.Index}}">{{.Shape}}</label>
-          <input id="layer-{{.Index}}" type="text" size="32" value="{{.Desc}}" readonly>
+          {{ if .Prefix }}
+            <span class="indent">{{.Prefix}}</span>
+            <input id="layer-{{.Index}}" type="text" size="28" value="{{.Desc}}" readonly>
+          {{ else -}}       
+            <input id="layer-{{.Index}}" type="text" size="32" value="{{.Desc}}" readonly>
+          {{ end -}}
           <span class="error-text"></span>
         </div>
         {{ end -}}

@@ -135,12 +135,12 @@ func (t *TestBase) Init(dev num.Device, conf Config, data map[string]Data, rng *
 	t.Headers = StatsHeaders(data)
 	t.Pred = nil
 	t.epilogue = false
-	if conf.DebugLevel >= 1 {
+	if debug >= 1 {
 		log.Printf("init tester: samples=%d batch size=%d\n", opts.MaxSamples, opts.BatchSize)
 	}
 	for key, d := range data {
 		if key != "train" {
-			if conf.DebugLevel >= 1 {
+			if debug >= 1 {
 				log.Println("dataset =>", key)
 			}
 			t.Data[key] = NewDataset(dev, d, opts, rng)
@@ -149,7 +149,7 @@ func (t *TestBase) Init(dev num.Device, conf Config, data map[string]Data, rng *
 	}
 	if opts.BatchSize != conf.TrainBatch {
 		t.Net = New(dev.NewQueue(), conf, t.Data["test"].BatchSize, t.Data["test"].Shape(), false, rng)
-		log.Println("allocate test network: input shape ", t.Net.inShape)
+		log.Println("allocate test network: input shape ", t.Net.InShape)
 	}
 	return t
 }
@@ -185,10 +185,10 @@ func (t *TestBase) Test(net *Network, epoch int, batchLoss []float64, trainError
 	s.AvgLoss /= float64(len(batchLoss))
 	if t.Net != nil {
 		// copy the weights to net with different input shape
-		net.CopyTo(t.Net, true)
+		CopyParams(net.queue, net.Layers, t.Net.Layers, true)
 		net = t.Net
 	}
-	if net.DebugLevel >= 1 {
+	if debug >= 1 {
 		log.Printf("== TEST EPOCH %d ==\n", epoch)
 	}
 	for ix, key := range DataTypes {
@@ -319,23 +319,34 @@ func TrainEpoch(net *Network, dset *Dataset, epoch int, pred []int32) (batchLoss
 	}
 	batchLoss = make([]float64, nloss)
 	for batch := 0; batch < dset.Batches; batch++ {
-		if net.DebugLevel >= 2 || (net.DebugLevel == 1 && batch == 0) {
+		if debug >= 2 || (debug == 1 && batch == 0) {
 			log.Printf("== train batch %d ==\n", batch)
 		}
 		q.Finish()
 		x, y, yOneHot := dset.NextBatch()
 		// forward propagation
-		yPred := net.Fprop(x, true)
-		if net.DebugLevel >= 2 {
+		yPred := Fprop(q, net.Layers, x, net.WorkSpace[0], true)
+		if debug >= 2 {
 			log.Printf("yOneHot:\n%s", yOneHot.String(q))
-			log.Printf("yPred:\n%s", yPred.String(q))
+			log.Printf("yPred\n%s", yPred.String(q))
 		}
 		// sum average loss and error over batches
 		batchLoss[batch/lossBatches] += net.BatchLoss(yOneHot, yPred) / float64(lossBatches)
 		trainError += net.BatchError(batch, dset, y, yPred, p)
-		// get difference at output, back propagate gradient and update weights
-		net.Bprop(batch, yPred, yOneHot, optimiser)
-		if net.DebugLevel >= 2 || (batch == dset.Batches-1 && net.DebugLevel >= 1) {
+		// get difference at output and  back propagate gradient and update weights
+		grad := num.NewArray(net.WorkSpace[1], num.Float32, yOneHot.Dims...)
+		q.Call(
+			num.Copy(yPred, grad),
+			num.Axpy(-1, yOneHot, grad),
+		)
+		if debug >= 2 {
+			log.Printf("input grad:\n%s", grad.String(q))
+		}
+		Bprop(q, net.Layers, grad, net.WorkSpace)
+		ParamLayers("", net.Layers, func(desc string, l ParamLayer) {
+			l.UpdateParams(q, optimiser, net.WorkSpace[0])
+		})
+		if debug >= 2 || (batch == dset.Batches-1 && debug >= 1) {
 			net.PrintWeights()
 		}
 	}

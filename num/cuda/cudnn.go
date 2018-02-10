@@ -74,14 +74,8 @@ type ConvLayer struct {
 // Create new convolution layer
 func Convolution(n, c, h, w, nFeats, filtSize, stride int, padding, noBias bool) *ConvLayer {
 	l := &ConvLayer{}
-	wOut, wPad, err := getOutSize(w, filtSize, stride, padding)
-	if err != nil {
-		panic(err)
-	}
-	hOut, hPad, err := getOutSize(h, filtSize, stride, padding)
-	if err != nil {
-		panic(err)
-	}
+	wOut, wPad := getOutSize(w, filtSize, stride, padding)
+	hOut, hPad := getOutSize(h, filtSize, stride, padding)
 	l.Src = NewLayout(n, c, h, w)
 	l.Dst = NewLayout(n, nFeats, hOut, wOut)
 	l.Filter = NewFilterLayout(nFeats, c, filtSize, filtSize)
@@ -163,8 +157,8 @@ type PoolLayer struct {
 // Setup new max pooling or average pooling layer
 func Pooling(n, c, h, w, size, stride int, padding, average bool) *PoolLayer {
 	l := &PoolLayer{}
-	wOut, wPad, _ := getOutSize(w, size, stride, padding)
-	hOut, hPad, _ := getOutSize(h, size, stride, padding)
+	wOut, wPad := getOutSize(w, size, stride, padding)
+	hOut, hPad := getOutSize(h, size, stride, padding)
 	l.Src = NewLayout(n, c, h, w)
 	l.Dst = NewLayout(n, c, hOut, wOut)
 	var mode C.cudnnPoolingMode_t
@@ -370,27 +364,24 @@ func (l *FilterLayout) Release() {
 	}
 }
 
-func getOutSize(in, filter, stride int, padding bool) (out, pad int, err error) {
-	var end int
+// utilities
+func getOutSize(in, filter, stride int, padding bool) (out, pad int) {
 	if padding {
-		out = in / stride
-		end = filter + (out-1)*stride
-		if end < in {
-			out++
-			end += stride
-		}
-		pad = (end - in) / 2
-		if (end-in)%2 != 0 {
+		out = ciel(in, stride)
+		for out > 1+(in-filter+2*pad)/stride {
 			pad++
 		}
 	} else {
 		out = 1 + (in-filter)/stride
-		end = filter + (out-1)*stride
-		if end != in {
-			err = fmt.Errorf("filter %d and stride %d does not divide input %d", filter, stride, in)
-		}
 	}
 	return
+}
+
+func ciel(a, b int) int {
+	if a%b == 0 {
+		return a / b
+	}
+	return 1 + a/b
 }
 
 type DnnStatus C.cudnnStatus_t

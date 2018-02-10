@@ -84,9 +84,7 @@ func (d *Data) Image(ix int, channel string) *Image {
 		return src
 	}
 	dst := NewImageLike(src)
-	for i := 0; i < src.Channels; i++ {
-		copy(dst.Pixels(i), src.Pixels(ch))
-	}
+	copy(dst.Pixels(ch), src.Pixels(ch))
 	return dst
 }
 
