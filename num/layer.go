@@ -21,6 +21,7 @@ const (
 	BpropData      LayerOpts = 2
 	BpropWeights   LayerOpts = 4
 	MomentumUpdate LayerOpts = 8
+	FastConvLayer  LayerOpts = 16
 )
 
 func (l LayerOpts) String() string {
@@ -53,6 +54,12 @@ type ParamLayer interface {
 	SetParamData(W, B, dW, dB *Array)
 }
 
+// Convolutional network layer type
+type ConvLayer interface {
+	ParamLayer
+	Algorithm() string
+}
+
 // BatchNorm layer has extra parameters
 type BatchNormLayer interface {
 	ParamLayer
@@ -61,7 +68,7 @@ type BatchNormLayer interface {
 }
 
 // Create new convolution layer, input shape is nBatch x depth x h x w, returns workspace needed in 32 bit words
-func NewConvLayer(q Queue, opts LayerOpts, inShape []int, nFeats, size, stride int, pad bool) (ParamLayer, int) {
+func NewConvLayer(q Queue, opts LayerOpts, inShape []int, nFeats, size, stride int, pad bool) (ConvLayer, int) {
 	if len(inShape) != 4 {
 		panic("ConvLayer: expect 4 dimensional input")
 	}
@@ -72,11 +79,11 @@ func NewConvLayer(q Queue, opts LayerOpts, inShape []int, nFeats, size, stride i
 		return newLayerMKL(layer, opts&BpropData != 0), 0
 	case gpuDevice:
 		layer := cuda.Convolution(n, c, h, w, nFeats, size, stride, pad, opts&NoBias != 0)
-		workSize := layer.Init(q.(*gpuQueue).stream, opts&BpropWeights != 0, opts&BpropData != 0)
+		workSize := layer.Init(q.(*gpuQueue).stream, opts&BpropWeights != 0, opts&BpropData != 0, opts&FastConvLayer != 0)
 		l := &convCuda{
 			ConvLayer: layer,
 			layerBase: newLayerBase(d, layer.OutShape()),
-			bpropData: opts&BpropData != 0,
+			opts:      opts,
 		}
 		return l, workSize
 	default:
@@ -87,12 +94,23 @@ func NewConvLayer(q Queue, opts LayerOpts, inShape []int, nFeats, size, stride i
 type convCuda struct {
 	*cuda.ConvLayer
 	*layerBase
-	w, b      unsafe.Pointer
-	dw, db    unsafe.Pointer
-	bpropData bool
+	w, b   unsafe.Pointer
+	dw, db unsafe.Pointer
+	opts   LayerOpts
 }
 
-func (l *convCuda) BpropData() bool { return l.bpropData }
+func (l *convCuda) Algorithm() string {
+	s := l.AlgoName(cuda.FwdAlgo)
+	if l.opts&BpropWeights != 0 {
+		s += " " + l.AlgoName(cuda.BwdFilterAlgo)
+	}
+	if l.opts&BpropData != 0 {
+		s += " " + l.AlgoName(cuda.BwdDataAlgo)
+	}
+	return s
+}
+
+func (l *convCuda) BpropData() bool { return l.opts&BpropData != 0 }
 
 func (l *convCuda) Release() {
 	l.ConvLayer.Release()
@@ -138,7 +156,7 @@ func (l *convCuda) Bprop(que Queue, grad, dsrc *Array, work [3]Buffer) *Array {
 		args(C.CUDNN_EXECUTE+cuda.ConvBpropFilter, l.Algo[cuda.BwdFilterAlgo], work[0].Capacity()*4, l.Ptr(), work[0].Data(),
 			l.Src.Ptr(), l.Dst.Ptr(), l.Filter.Ptr(), l.src.Data(), grad.Data(), l.dw),
 	)
-	if l.bpropData {
+	if l.BpropData() {
 		q.Call(
 			args(C.CUDNN_EXECUTE+cuda.ConvBpropData, l.Algo[cuda.BwdDataAlgo], work[0].Capacity()*4, l.Ptr(), work[0].Data(),
 				l.Filter.Ptr(), l.Dst.Ptr(), l.Src.Ptr(), l.w, grad.Data(), dsrc.Data()),
@@ -543,6 +561,8 @@ func newLayerMKL(layer *mkl.Layer, bpropData bool) layerMKL {
 		bpropData: bpropData,
 	}
 }
+
+func (l layerMKL) Algorithm() string { return "IntelMKL" }
 
 func (l layerMKL) BpropData() bool { return l.bpropData }
 

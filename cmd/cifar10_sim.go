@@ -6,18 +6,18 @@ import (
 	"github.com/jnb666/deepthought2/nnet"
 )
 
-func block1(nfeat, size int) []nnet.ConfigLayer {
+func block1(nfeat int) []nnet.ConfigLayer {
 	return []nnet.ConfigLayer{
-		nnet.Conv{Nfeats: nfeat, Size: size, Pad: true, NoBias: true},
+		nnet.Conv{Nfeats: nfeat, Size: 3, Pad: true, NoBias: true},
 		nnet.BatchNorm{AvgFactor: 0.05},
 		nnet.Activation{Atype: "relu"},
 		nnet.Dropout{Ratio: 0.2},
 	}
 }
 
-func block2(nfeat, size int) []nnet.ConfigLayer {
+func block2(nfeat int) []nnet.ConfigLayer {
 	return []nnet.ConfigLayer{
-		nnet.Conv{Nfeats: nfeat, Size: size, Pad: true, NoBias: true},
+		nnet.Conv{Nfeats: nfeat, Size: 3, Pad: true, NoBias: true},
 		nnet.BatchNorm{AvgFactor: 0.05},
 		nnet.Activation{Atype: "relu"},
 		nnet.Pool{Size: 2},
@@ -43,24 +43,19 @@ func main() {
 		UseGPU:       true,
 		Normalise:    true,
 		Distort:      true,
+		FastConv:     true,
 		WeightInit:   nnet.GlorotUniform,
 	}
-	// 1
-	conf = conf.AddLayers(block1(64, 3)...)
-	// 2
-	conf = conf.AddLayers(block1(128, 3)...)
-	conf = conf.AddLayers(block1(128, 3)...)
-	conf = conf.AddLayers(block2(128, 3)...)
-	// 5
-	conf = conf.AddLayers(block1(128, 3)...)
-	conf = conf.AddLayers(block1(128, 3)...)
-	conf = conf.AddLayers(block2(256, 3)...)
-	// 8
-	conf = conf.AddLayers(block1(256, 3)...)
-	conf = conf.AddLayers(block2(256, 3)...)
-	// 10
-	conf = conf.AddLayers(block1(512, 3)...)
-
+	conf = conf.AddLayers(block1(64)...)
+	conf = conf.AddLayers(block1(128)...)
+	conf = conf.AddLayers(block1(128)...)
+	conf = conf.AddLayers(block2(128)...)
+	conf = conf.AddLayers(block1(128)...)
+	conf = conf.AddLayers(block1(128)...)
+	conf = conf.AddLayers(block2(256)...)
+	conf = conf.AddLayers(block1(256)...)
+	conf = conf.AddLayers(block2(256)...)
+	conf = conf.AddLayers(block1(512)...)
 	conf = conf.AddLayers(
 		nnet.Conv{Nfeats: 2048, Size: 1, Pad: true},
 		nnet.Activation{Atype: "relu"},

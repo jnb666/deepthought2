@@ -42,6 +42,7 @@ func main() {
 	conf.ValidEMA = 10
 	conf.StopAfter = 2
 	conf.ExtraEpochs = 3
+	conf.FastConv = true
 	fmt.Println(conf)
 	err = conf.Save("mnist_cnn2d.conf")
 	nnet.CheckErr(err)

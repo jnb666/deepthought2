@@ -4,7 +4,7 @@ package num
 /*
 #cgo CFLAGS: -g -O2 -std=c99 -I/opt/intel/mkl/include -I/usr/local/cuda/include
 #cgo LDFLAGS: -L. -l kernels -L/usr/local/cuda/lib64 -lcublas -lcudnn -lcudart
-#cgo LDFLAGS: -L/opt/intel/mkl/lib/intel64 -L/opt/intel/tbb/lib/intel64/gcc4.7 -Wl,--no-as-needed -lmkl_intel_lp64 -lmkl_tbb_thread -lmkl_core -ltbb -lstdc++ -lpthread -lm -ldl
+#cgo LDFLAGS: -L/opt/intel/mkl/lib/intel64 -L/opt/intel/tbb/lib/intel64/gcc4.7 -lmkl_intel_lp64 -lmkl_tbb_thread -lmkl_core -ltbb -lstdc++ -lpthread -lm -ldl
 #include "num.h"
 */
 import "C"

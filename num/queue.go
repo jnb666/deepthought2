@@ -109,9 +109,6 @@ func (q *cpuQueue) Finish() {
 
 func (q *cpuQueue) Shutdown() {
 	q.Finish()
-	if q.profile.enabled {
-		fmt.Print(q.Profile())
-	}
 }
 
 // GPU queue corresponds to a Cuda stream

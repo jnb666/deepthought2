@@ -257,8 +257,10 @@ func (n *Network) Train(restart bool) error {
 		n.Lock()
 		n.running = false
 		n.stop = false
-		log.Printf("memory used: %s\n", nnet.FormatBytes(n.Memory()+n.test.Memory()+n.view.Memory()))
-
+		nnet.MemoryProfile(n.Conf.MemProfile, n.Network, n.test.Network())
+		if n.Conf.Profile {
+			log.Print(n.queue.Profile())
+		}
 		// save state to disk
 		n.Export()
 		err := SaveNetwork(n.NetworkData, false)

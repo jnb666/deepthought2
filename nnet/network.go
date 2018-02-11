@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -104,6 +105,7 @@ func New(queue num.Queue, conf Config, batchSize int, inShape []int, bprop bool,
 	shape := n.InShape
 	n.workSize = make([]int, len(conf.Layers)+1)
 	n.inputSize = make([]int, len(conf.Layers)+1)
+	maxWeights := 0
 	opts := num.FpropOnly
 	if bprop {
 		opts |= num.BpropWeights
@@ -111,14 +113,14 @@ func New(queue num.Queue, conf Config, batchSize int, inShape []int, bprop bool,
 	if conf.Momentum != 0 {
 		opts |= num.MomentumUpdate
 	}
-	weightSize := 0
+	if conf.FastConv {
+		opts |= num.FastConvLayer
+	}
 	for i, l := range conf.Layers {
 		layer := l.Unmarshal()
-		n.workSize[i] = layer.Init(queue, shape, opts, rng)
+		var weights int
+		n.workSize[i], n.inputSize[i], weights = layer.Init(queue, shape, opts, rng)
 		n.Layers = append(n.Layers, layer)
-		if opts&num.BpropData != 0 {
-			n.inputSize[i] = num.Prod(layer.InShape())
-		}
 		if debug >= 1 {
 			log.Printf("init layer %d: %s %v => %v opts=%s work=%d insize=%d\n",
 				i, l.Type, shape, layer.OutShape(), opts, n.workSize[i], n.inputSize[i])
@@ -127,20 +129,18 @@ func New(queue num.Queue, conf Config, batchSize int, inShape []int, bprop bool,
 		if l.Type != "flatten" && bprop {
 			opts |= num.BpropData
 		}
-		if lp, ok := layer.(ParamLayer); ok && bprop && conf.Nesterov {
-			if size := lp.NumWeights(); size > weightSize {
-				weightSize = size
-			}
+		if bprop && conf.Momentum != 0 && conf.Nesterov {
+			maxWeights = max(maxWeights, weights)
 		}
 	}
-	if opts&num.BpropData != 0 {
+	if bprop {
 		n.inputSize[len(n.Layers)] = num.Prod(shape)
 	}
-	n.workSize[len(n.Layers)] = weightSize
+	n.workSize[len(n.Layers)] = maxWeights
 	wsize := max(n.workSize...)
 	insize := max(n.inputSize...)
 	if debug >= 1 {
-		log.Printf("maxWorkSize=%d  maxInSize=%d  maxWeightSize=%d\n", wsize, insize, weightSize)
+		log.Printf("maxWorkSize=%d  maxInSize=%d  maxWeights=%d\n", wsize, insize, maxWeights)
 	}
 	if wsize > 0 {
 		n.WorkSpace[0] = queue.NewBuffer(wsize)
@@ -248,43 +248,75 @@ func (n *Network) String() string {
 	if n.Layers == nil {
 		return s
 	}
-	s += fmt.Sprintf("\n== Network ==\n    %-12s input", fmt.Sprint(n.InShape[:len(n.InShape)-1]))
+	s += fmt.Sprintf("\n== Network ==")
+	totalWeights := 0
+	desc := []layerDesc{{desc: "input", shape: fmt.Sprint(n.InShape[:len(n.InShape)-1])}}
 	for i, layer := range n.Layers {
-		s += fmt.Sprintf("\n%2d: %s", i, layer.ToString())
+		d, weights := formatLayer(layer, "")
+		d.index = fmt.Sprintf("%2d:", i)
+		desc = append(desc, d)
+		totalWeights += weights
 		if group, ok := layer.(LayerGroup); ok {
-			desc := group.LayerDesc()
+			prefix := group.LayerDesc()
 			for j, l := range group.Layers() {
-				s += fmt.Sprintf("\n     %s %s", desc[j], l.ToString())
+				d, weights := formatLayer(l, prefix[j])
+				desc = append(desc, d)
+				totalWeights += weights
 			}
 		}
 	}
-	totalWeights := 0
-	ParamLayers("", n.Layers, func(desc string, l ParamLayer) {
-		totalWeights += l.NumWeights()
-	})
-	return s + fmt.Sprintf("\ntotal weights %d", totalWeights)
+	desc = append(desc, layerDesc{shape: "weights", weights: strconv.Itoa(totalWeights)})
+	shapeLen := 0
+	weightLen := 0
+	for _, d := range desc {
+		shapeLen = max(shapeLen, len(d.shape))
+		weightLen = max(weightLen, len(d.weights))
+	}
+	format := "\n%3s %-" + strconv.Itoa(shapeLen) + "s  %" + strconv.Itoa(weightLen) + "s  %s"
+	for _, d := range desc {
+		s += fmt.Sprintf(format, d.index, d.shape, d.weights, d.desc)
+	}
+	return s
+}
+
+type layerDesc struct {
+	index, desc, shape, weights string
+}
+
+func formatLayer(l Layer, prefix string) (d layerDesc, weights int) {
+	dims := l.OutShape()
+	d = layerDesc{
+		desc:  l.String(),
+		shape: prefix + fmt.Sprint(dims[:len(dims)-1]),
+	}
+	if p, ok := l.(ParamLayer); ok {
+		w := p.NumWeights()
+		d.weights = fmt.Sprint(w)
+		weights += w
+	}
+	return
 }
 
 // Get total allocated memory in bytes
 func (n *Network) Memory() int {
 	m := new(memInfo)
-	m.update(n.Layers, -1, n.inputSize, n.workSize)
+	m.update(n.Layers, n.inputSize, n.workSize, nil)
 	return m.total[3]
 }
 
 // Print profile of allocated memory
-func (n *Network) MemoryProfile() string {
+func (n *Network) MemoryProfile(name string) string {
 	m := new(memInfo)
-	m.update(n.Layers, -1, n.inputSize, n.workSize)
-	s := fmt.Sprintf("== memory profile ==                weights  outputs     temp    total (%d)\n",
-		n.InShape[len(n.InShape)-1])
+	m.update(n.Layers, n.inputSize, n.workSize, nil)
+	s := fmt.Sprintf("== %s memory profile ==\n%35s  weights  outputs     temp    total (%d)\n",
+		name, "", n.InShape[len(n.InShape)-1])
 	for i, mem := range m.bytes {
 		if mem[3] > 0 {
-			s += fmt.Sprintf("%-34s %8s %8s %8s %8s\n", m.name[i],
+			s += fmt.Sprintf("%-35s %8s %8s %8s %8s\n", m.name[i],
 				FormatBytes(mem[0]), FormatBytes(mem[1]), FormatBytes(mem[2]), FormatBytes(mem[3]))
 		}
 	}
-	s += fmt.Sprintf("--- TOTAL --- %20s %8s %8s %8s %8s\n", "",
+	s += fmt.Sprintf("--- TOTAL --- %21s %8s %8s %8s %8s\n", "",
 		FormatBytes(m.total[0]), FormatBytes(m.total[1]), FormatBytes(m.total[2]), FormatBytes(m.total[3]))
 	return s
 }
@@ -307,13 +339,28 @@ func (n *Network) allocArrays(size int) {
 	n.total = n.queue.NewArray(num.Float32)
 }
 
+// Print memory profile
+func MemoryProfile(verbose bool, train, test *Network) {
+	bytes := 0
+	name := []string{"train net", "test net"}
+	for i, net := range []*Network{train, test} {
+		if net != nil {
+			bytes += net.Memory()
+			if verbose {
+				log.Print(net.MemoryProfile(name[i]))
+			}
+		}
+	}
+	log.Printf("total memory used: %s\n", FormatBytes(bytes))
+}
+
 type memInfo struct {
 	name  []string
 	bytes [][4]int
 	total [4]int
 }
 
-func (m *memInfo) update(layers []Layer, layerId int, inputSize, workSize []int) {
+func (m *memInfo) update(layers []Layer, inputSize, workSize []int, desc []string) {
 	var r [4]int
 	for i, layer := range layers {
 		r[0], r[1], r[2] = layer.Memory()
@@ -321,7 +368,7 @@ func (m *memInfo) update(layers []Layer, layerId int, inputSize, workSize []int)
 		for i, val := range r {
 			m.total[i] += val
 		}
-		if layerId < 0 {
+		if desc == nil {
 			input := inputSize[i] * 4
 			work := workSize[i] * 4
 			r[1] += input
@@ -329,14 +376,14 @@ func (m *memInfo) update(layers []Layer, layerId int, inputSize, workSize []int)
 			r[3] += input + work
 			m.name = append(m.name, fmt.Sprintf("%2d: %s", i, layer))
 		} else {
-			m.name = append(m.name, fmt.Sprintf("      %s", layer))
+			m.name = append(m.name, fmt.Sprintf("  %s%s", desc[i], layer))
 		}
 		m.bytes = append(m.bytes, r)
 		if l, ok := layer.(LayerGroup); ok {
-			m.update(l.Layers(), i, inputSize, workSize)
+			m.update(l.Layers(), inputSize, workSize, l.LayerDesc())
 		}
 	}
-	if layerId < 0 {
+	if desc == nil {
 		totalInput := max(inputSize...) * 8
 		totalWork := max(workSize...) * 4
 		m.total[1] += totalInput
@@ -425,7 +472,7 @@ func FormatBytes(n int) string {
 	if n <= 0 {
 		return ""
 	}
-	if n < 1024*1024 {
+	if n < 4*1024*1024 {
 		return fmt.Sprintf("%dK", 1+(n-1)/1024)
 	}
 	return fmt.Sprintf("%dM", 1+(n-1)/(1024*1024))

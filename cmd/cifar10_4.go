@@ -18,6 +18,7 @@ func main() {
 		Distort:    true,
 		UseGPU:     true,
 		Normalise:  true,
+		FastConv:   true,
 		WeightInit: nnet.GlorotUniform,
 	}.AddLayers(
 		nnet.Conv{Nfeats: 32, Size: 3, Pad: true},

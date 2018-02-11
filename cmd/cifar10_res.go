@@ -21,10 +21,10 @@ func block(nfeat, stride int) []nnet.ConfigLayer {
 	return []nnet.ConfigLayer{
 		nnet.BatchNorm{},
 		nnet.Activation{Atype: "relu"},
-		nnet.Conv{Nfeats: nfeat, Size: 3, Stride: stride, Pad: true},
+		nnet.Conv{Nfeats: nfeat, Size: 3, Stride: stride, Pad: true, NoBias: true},
 		nnet.BatchNorm{},
 		nnet.Activation{Atype: "relu"},
-		nnet.Conv{Nfeats: nfeat, Size: 3, Pad: true},
+		nnet.Conv{Nfeats: nfeat, Size: 3, Pad: true, NoBias: true},
 	}
 }
 
@@ -33,7 +33,7 @@ func resBlock(nin, nout, stride int) nnet.ConfigLayer {
 		return nnet.AddLayer(block(nout, 1), nil)
 	}
 	project := []nnet.ConfigLayer{
-		nnet.Conv{Nfeats: nout, Size: 1, Stride: stride, Pad: true},
+		nnet.Conv{Nfeats: nout, Size: 1, Stride: stride, Pad: true, NoBias: true},
 	}
 	return nnet.AddLayer(block(nout, stride), project)
 }
@@ -48,19 +48,20 @@ func main() {
 		Momentum:     0.9,
 		Nesterov:     true,
 		MaxEpoch:     200,
-		ValidEMA:     20,
-		StopAfter:    3,
-		ExtraEpochs:  5,
+		ValidEMA:     15,
+		StopAfter:    2,
+		ExtraEpochs:  4,
 		TrainBatch:   125,
 		Shuffle:      true,
 		UseGPU:       true,
 		Normalise:    true,
 		Distort:      true,
+		FastConv:     true,
 		WeightInit:   nnet.GlorotUniform,
 	}
 
 	for _, opt := range options {
-		c := conf.AddLayers(nnet.Conv{Nfeats: 16, Size: 3, Pad: true})
+		c := conf.AddLayers(nnet.Conv{Nfeats: 16, Size: 3, Pad: true, NoBias: true})
 		// [32,32,16] => [32,32,16k]
 		k := 16 * opt.width
 		c = c.AddLayers(resBlock(16, k, 1))

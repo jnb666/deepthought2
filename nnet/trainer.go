@@ -82,9 +82,8 @@ func FormatDuration(d time.Duration) string {
 type Tester interface {
 	Test(net *Network, epoch int, batchLoss []float64, trainError float64, start time.Time) bool
 	Epilogue() bool
-	Memory() int
-	MemoryProfile() string
 	Release()
+	Network() *Network
 }
 
 // Tester which evaluates the loss and error for each of the data sets and updates the stats.
@@ -114,18 +113,8 @@ func (t *TestBase) Release() {
 	t.Data = nil
 }
 
-func (t *TestBase) Memory() int {
-	if t.Net == nil {
-		return 0
-	}
-	return t.Net.Memory()
-}
-
-func (t *TestBase) MemoryProfile() string {
-	if t.Net == nil {
-		return ""
-	}
-	return t.Net.MemoryProfile()
+func (t *TestBase) Network() *Network {
+	return t.Net
 }
 
 // Initialise the test dataset, network and other configuration.
@@ -144,12 +133,13 @@ func (t *TestBase) Init(dev num.Device, conf Config, data map[string]Data, rng *
 				log.Println("dataset =>", key)
 			}
 			t.Data[key] = NewDataset(dev, d, opts, rng)
-			t.Data[key].Profiling(conf.Profile, "tester:"+key)
 		}
 	}
 	if opts.BatchSize != conf.TrainBatch {
 		t.Net = New(dev.NewQueue(), conf, t.Data["test"].BatchSize, t.Data["test"].Shape(), false, rng)
-		log.Println("allocate test network: input shape ", t.Net.InShape)
+		if debug >= 1 {
+			log.Println("allocate test network: input shape ", t.Net.InShape)
+		}
 	}
 	return t
 }
@@ -346,7 +336,7 @@ func TrainEpoch(net *Network, dset *Dataset, epoch int, pred []int32) (batchLoss
 		ParamLayers("", net.Layers, func(desc string, l ParamLayer) {
 			l.UpdateParams(q, optimiser, net.WorkSpace[0])
 		})
-		if debug >= 2 || (batch == dset.Batches-1 && debug >= 1) {
+		if debug >= 3 || (batch == dset.Batches-1 && debug >= 2) {
 			net.PrintWeights()
 		}
 	}

@@ -18,7 +18,7 @@ func main() {
 		TrainRuns:  1,
 		MaxEpoch:   500,
 		LogEvery:   25,
-		MinLoss:    0.05,
+		MinLoss:    0.01,
 		WeightInit: nnet.RandomUniform,
 	}.AddLayers(
 		nnet.Linear{Nout: 2},

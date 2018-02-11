@@ -13,12 +13,11 @@ import (
 // Layer interface type represents one layer of the neural net.
 type Layer interface {
 	ConfigLayer
-	Init(q num.Queue, inShape []int, opts num.LayerOpts, rng *rand.Rand) int
+	Init(q num.Queue, inShape []int, opts num.LayerOpts, rng *rand.Rand) (workSize, inSize, weights int)
 	InShape() []int
 	OutShape() []int
 	Fprop(q num.Queue, in *num.Array, work num.Buffer, trainMode bool) *num.Array
 	Bprop(q num.Queue, grad, dsrc *num.Array, work [3]num.Buffer) *num.Array
-	ToString() string
 	Output() *num.Array
 	Memory() (weights, outputs, temp int)
 	BpropData() bool
@@ -120,7 +119,11 @@ func (c Conv) Marshal() LayerConfig {
 func (c Conv) Type() string { return "conv" }
 
 func (c Conv) String() string {
-	return structToString("conv", c, convDefault)
+	if c.NoBias {
+		c.NoBias = false
+		return structToString("conv", c, convDefault)
+	}
+	return structToString("convBias", c, convDefault)
 }
 
 func (c *Conv) unmarshal(data json.RawMessage) Layer {
@@ -275,13 +278,13 @@ func (c *Add) unmarshal(data json.RawMessage) Layer {
 	unmarshal(data, c)
 	block := &add{Add: *c}
 	for _, l := range c.X {
-		block.x = append(block.x, l.Unmarshal())
+		block.layers[0] = append(block.layers[0], l.Unmarshal())
 	}
 	if c.Y == nil {
-		block.y = []Layer{}
+		block.layers[1] = []Layer{}
 	} else {
 		for _, l := range c.Y {
-			block.y = append(block.y, l.Unmarshal())
+			block.layers[1] = append(block.layers[1], l.Unmarshal())
 		}
 	}
 	return block
@@ -303,19 +306,21 @@ func (l *linear) OutShape() []int { return []int{l.Nout, l.inShape[1]} }
 
 func (l *linear) BpropData() bool { return l.bpropData }
 
-func (l *linear) Init(q num.Queue, inShape []int, opts num.LayerOpts, rng *rand.Rand) int {
+func (l *linear) Init(q num.Queue, inShape []int, opts num.LayerOpts, rng *rand.Rand) (workSize, inSize, weights int) {
 	if len(inShape) != 2 {
 		panic("Linear: expect 2 dimensional input")
 	}
 	l.inShape = inShape
 	l.paramBase = newParams(q, []int{inShape[0], l.Nout}, []int{l.Nout}, opts&num.MomentumUpdate != 0)
 	l.dst = q.NewArray(num.Float32, l.Nout, inShape[1])
-	wsize := inShape[1] * l.Nout
+	workSize = inShape[1] * l.Nout
 	if opts&num.BpropData != 0 {
 		l.bpropData = true
-		wsize = max(wsize, inShape[1]*inShape[0])
+		inSize = num.Prod(inShape)
+		workSize = max(workSize, inShape[1]*inShape[0])
 	}
-	return wsize
+	weights = l.NumWeights()
+	return
 }
 
 func (l *linear) Memory() (weights, outputs, temp int) {
@@ -359,40 +364,38 @@ func (l *linear) Bprop(q num.Queue, grad, dsrc *num.Array, work [3]num.Buffer) *
 	return dsrc
 }
 
-func (l *linear) ToString() string {
-	return toString(l.String(), l.OutShape(), l.NumWeights())
-}
-
 // convolutional layer implementation
 type convDNN struct {
 	Conv
 	paramBase
-	num.ParamLayer
+	num.ConvLayer
 }
 
-func (l *convDNN) Init(q num.Queue, inShape []int, opts num.LayerOpts, rng *rand.Rand) int {
+func (l *convDNN) Init(q num.Queue, inShape []int, opts num.LayerOpts, rng *rand.Rand) (workSize, inSize, weights int) {
 	if l.NoBias {
 		opts |= num.NoBias
 	}
-	layer, workSize := num.NewConvLayer(q, opts, inShape, l.Nfeats, l.Size, l.Stride, l.Pad)
-	l.paramBase = newParams(q, layer.FilterShape(), layer.BiasShape(), opts&num.MomentumUpdate != 0)
-	layer.SetParamData(l.w, l.b, l.dw, l.db)
-	l.ParamLayer = layer
-	return workSize
+	l.ConvLayer, workSize = num.NewConvLayer(q, opts, inShape, l.Nfeats, l.Size, l.Stride, l.Pad)
+	if debug >= 1 {
+		log.Printf("    conv algorithm=%s\n", l.Algorithm())
+	}
+	l.paramBase = newParams(q, l.FilterShape(), l.BiasShape(), opts&num.MomentumUpdate != 0)
+	l.SetParamData(l.w, l.b, l.dw, l.db)
+	if opts&num.BpropData != 0 {
+		inSize = num.Prod(inShape)
+	}
+	weights = l.NumWeights()
+	return
 }
 
 func (l *convDNN) Memory() (weights, outputs, temp int) {
-	_, outputs, temp = l.ParamLayer.Memory()
+	_, outputs, temp = l.ConvLayer.Memory()
 	return l.paramBase.memory(), outputs, temp
 }
 
 func (l *convDNN) Release() {
 	l.paramBase.release()
-	l.ParamLayer.Release()
-}
-
-func (l *convDNN) ToString() string {
-	return toString(l.String(), l.OutShape(), l.NumWeights())
+	l.ConvLayer.Release()
 }
 
 // pool layer implentation
@@ -401,13 +404,12 @@ type poolDNN struct {
 	num.Layer
 }
 
-func (l *poolDNN) Init(q num.Queue, inShape []int, opts num.LayerOpts, rng *rand.Rand) int {
+func (l *poolDNN) Init(q num.Queue, inShape []int, opts num.LayerOpts, rng *rand.Rand) (workSize, inSize, weights int) {
 	l.Layer = num.NewPoolLayer(q, opts, inShape, l.Size, l.Stride, l.Pad, l.Average)
-	return 0
-}
-
-func (l *poolDNN) ToString() string {
-	return toString(l.String(), l.OutShape(), 0)
+	if opts&num.BpropData != 0 {
+		inSize = num.Prod(inShape)
+	}
+	return
 }
 
 // activation layers
@@ -417,9 +419,12 @@ type activation struct {
 	loss *num.Array
 }
 
-func (l *activation) Init(q num.Queue, inShape []int, opts num.LayerOpts, rng *rand.Rand) int {
+func (l *activation) Init(q num.Queue, inShape []int, opts num.LayerOpts, rng *rand.Rand) (workSize, inSize, weights int) {
 	l.Layer = num.NewActivationLayer(q, l.Atype, inShape)
-	return 0
+	if opts&num.BpropData != 0 {
+		inSize = num.Prod(inShape)
+	}
+	return
 }
 
 func (l *activation) Memory() (weights, outputs, temp int) {
@@ -444,23 +449,18 @@ func (l *activation) Loss(q num.Queue, yOneHot, yPred *num.Array) *num.Array {
 	return l.loss
 }
 
-func (l *activation) ToString() string {
-	return toString(l.String(), l.OutShape(), 0)
-}
-
 // dropout layer implementation
 type dropout struct {
 	Dropout
 	num.Layer
 }
 
-func (l *dropout) Init(q num.Queue, inShape []int, opts num.LayerOpts, rng *rand.Rand) int {
+func (l *dropout) Init(q num.Queue, inShape []int, opts num.LayerOpts, rng *rand.Rand) (workSize, inSize, weights int) {
 	l.Layer = num.NewDropoutLayer(q, l.Ratio, inShape, rng.Int63())
-	return 0
-}
-
-func (l *dropout) ToString() string {
-	return toString(l.String(), l.OutShape(), 0)
+	if opts&num.BpropData != 0 {
+		inSize = num.Prod(inShape)
+	}
+	return
 }
 
 // batch normalisation layer implementation
@@ -470,12 +470,15 @@ type batchNorm struct {
 	num.BatchNormLayer
 }
 
-func (l *batchNorm) Init(q num.Queue, inShape []int, opts num.LayerOpts, rng *rand.Rand) int {
-	layer := num.NewBatchNormLayer(q, opts, l.AvgFactor, l.Epsilon, inShape)
-	l.paramBase = newParams(q, layer.FilterShape(), layer.BiasShape(), opts&num.MomentumUpdate != 0)
-	layer.SetParamData(l.w, l.b, l.dw, l.db)
-	l.BatchNormLayer = layer
-	return 0
+func (l *batchNorm) Init(q num.Queue, inShape []int, opts num.LayerOpts, rng *rand.Rand) (workSize, inSize, weights int) {
+	l.BatchNormLayer = num.NewBatchNormLayer(q, opts, l.AvgFactor, l.Epsilon, inShape)
+	l.paramBase = newParams(q, l.FilterShape(), l.BiasShape(), opts&num.MomentumUpdate != 0)
+	l.SetParamData(l.w, l.b, l.dw, l.db)
+	if opts&num.BpropData != 0 {
+		inSize = num.Prod(inShape)
+	}
+	weights = l.NumWeights()
+	return
 }
 
 func (l *batchNorm) InitParams(q num.Queue, init InitType, bias float64, rng *rand.Rand) {
@@ -541,10 +544,6 @@ func (l *batchNorm) Import(q num.Queue, vec []uint32) {
 	}
 }
 
-func (l *batchNorm) ToString() string {
-	return toString(l.String(), l.OutShape(), l.NumWeights())
-}
-
 // flatten layer implementation
 type flatten struct {
 	Flatten
@@ -560,11 +559,14 @@ func (l *flatten) OutShape() []int { return l.outShape }
 
 func (l *flatten) BpropData() bool { return l.bpropData }
 
-func (l *flatten) Init(q num.Queue, inShape []int, opts num.LayerOpts, rng *rand.Rand) int {
+func (l *flatten) Init(q num.Queue, inShape []int, opts num.LayerOpts, rng *rand.Rand) (workSize, inSize, weights int) {
 	l.inShape = inShape
 	l.outShape = []int{num.Prod(l.inShape[:3]), l.inShape[3]}
-	l.bpropData = opts&num.BpropData != 0
-	return 0
+	if opts&num.BpropData != 0 {
+		l.bpropData = true
+		inSize = num.Prod(inShape)
+	}
+	return
 }
 
 func (l *flatten) Memory() (weights, outputs, temp int) {
@@ -587,24 +589,23 @@ func (l *flatten) Bprop(q num.Queue, grad, dsrc *num.Array, work [3]num.Buffer) 
 	return dsrc
 }
 
-func (l *flatten) ToString() string {
-	return toString(l.String(), l.OutShape(), 0)
-}
-
 // add layer implentation
 type add struct {
 	Add
-	x, y []Layer
-	dst  *num.Array
-	dsrc *num.Array
+	layers    [2][]Layer
+	dst       *num.Array
+	dsrc      *num.Array
+	bpropData bool
 }
 
-func (l *add) Layers() []Layer { return append(l.x, l.y...) }
+func (l *add) Layers() []Layer {
+	return append(l.layers[0], l.layers[1]...)
+}
 
 func (l *add) LayerDesc() []string {
 	desc := make([]string, len(l.Layers()))
 	for i := range desc {
-		if i == 0 || i == len(l.x) {
+		if i == 0 || i == len(l.layers[0]) {
 			desc[i] = "->"
 		} else {
 			desc[i] = "  "
@@ -613,44 +614,36 @@ func (l *add) LayerDesc() []string {
 	return desc
 }
 
-func (l *add) InShape() []int { return l.x[0].InShape() }
+func (l *add) InShape() []int { return l.layers[0][0].InShape() }
 
-func (l *add) OutShape() []int { return l.x[len(l.x)-1].OutShape() }
+func (l *add) OutShape() []int { return l.layers[0][len(l.layers[0])-1].OutShape() }
 
-func (l *add) BpropData() bool { return true }
+func (l *add) BpropData() bool { return l.bpropData }
 
-func (l *add) Init(q num.Queue, inShape []int, opts num.LayerOpts, rng *rand.Rand) int {
-	xShape := inShape
-	workSize := 0
-	for i, layer := range l.x {
-		wSize := layer.Init(q, xShape, opts, rng)
-		if wSize > workSize {
-			workSize = wSize
+func (l *add) Init(q num.Queue, inShape []int, opts num.LayerOpts, rng *rand.Rand) (workSize, inSize, weights int) {
+	var shape [2][]int
+	for i, group := range l.layers {
+		shape[i] = inShape
+		for j, layer := range group {
+			wSize, iSize, nWeight := layer.Init(q, shape[i], opts, rng)
+			if debug >= 1 {
+				log.Printf("  add layer %d:%d: %s %v => %v work=%d\n", i, j, layer.Type(), shape[i], layer.OutShape(), wSize)
+			}
+			workSize = max(workSize, wSize)
+			inSize = max(inSize, iSize)
+			weights = max(weights, nWeight)
+			shape[i] = layer.OutShape()
 		}
-		if debug >= 1 {
-			log.Printf("  add layer x:%d: %s %v => %v work=%d\n", i, layer.Type(), xShape, layer.OutShape(), wSize)
-		}
-		xShape = layer.OutShape()
 	}
-	yShape := inShape
-	for i, layer := range l.y {
-		wSize := layer.Init(q, yShape, opts, rng)
-		if wSize > workSize {
-			workSize = wSize
-		}
-		if debug >= 1 {
-			log.Printf("  add layer y:%d: %s %v => %v work=%d\n", i, layer.Type(), yShape, layer.OutShape(), wSize)
-		}
-		yShape = layer.OutShape()
+	if !num.SameShape(shape[0], shape[1]) {
+		panic(fmt.Errorf("add block output shapes should match: have %v %v", shape[0], shape[1]))
 	}
-	if !num.SameShape(xShape, yShape) {
-		panic(fmt.Errorf("add block output shapes should match: have %v %v", xShape, yShape))
-	}
-	l.dst = q.NewArray(num.Float32, xShape...)
+	l.dst = q.NewArray(num.Float32, shape[0]...)
 	if opts&num.BpropData != 0 {
 		l.dsrc = q.NewArray(num.Float32, inShape...)
+		l.bpropData = true
 	}
-	return workSize
+	return
 }
 
 func (l *add) Memory() (weights, outputs, temp int) {
@@ -667,10 +660,10 @@ func (l *add) Release() {
 func (l *add) Output() *num.Array { return l.dst }
 
 func (l *add) Fprop(q num.Queue, in *num.Array, work num.Buffer, trainMode bool) *num.Array {
-	d1 := Fprop(q, l.x, in, work, trainMode)
+	d1 := Fprop(q, l.layers[0], in, work, trainMode)
 	d2 := in
-	if len(l.y) > 0 {
-		d2 = Fprop(q, l.y, in, work, trainMode)
+	if len(l.layers[1]) > 0 {
+		d2 = Fprop(q, l.layers[1], in, work, trainMode)
 	}
 	q.Call(
 		num.Copy(d1, l.dst),
@@ -680,20 +673,16 @@ func (l *add) Fprop(q num.Queue, in *num.Array, work num.Buffer, trainMode bool)
 }
 
 func (l *add) Bprop(q num.Queue, grad, dsrc *num.Array, work [3]num.Buffer) *num.Array {
-	g1 := Bprop(q, l.x, grad, work)
+	g1 := Bprop(q, l.layers[0], grad, work)
 	g2 := grad
-	if len(l.y) > 0 {
-		g2 = Bprop(q, l.y, grad, work)
+	if len(l.layers[1]) > 0 {
+		g2 = Bprop(q, l.layers[1], grad, work)
 	}
 	q.Call(
 		num.Copy(g1, l.dsrc),
 		num.Axpy(1, g2, l.dsrc),
 	)
 	return l.dsrc
-}
-
-func (l *add) ToString() string {
-	return toString("add", l.OutShape(), 0)
 }
 
 // weight and bias parameters
@@ -826,14 +815,6 @@ func unmarshal(data json.RawMessage, v interface{}) {
 	if err != nil {
 		panic(err)
 	}
-}
-
-func toString(str string, dims []int, weights int) string {
-	s := fmt.Sprintf("%-12s %s", fmt.Sprint(dims[:len(dims)-1]), str)
-	if weights > 0 {
-		s += fmt.Sprintf(" %d", weights)
-	}
-	return s
 }
 
 func structToString(name string, val, defVal interface{}) string {

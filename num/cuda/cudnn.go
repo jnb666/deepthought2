@@ -88,32 +88,122 @@ func Convolution(n, c, h, w, nFeats, filtSize, stride int, padding, noBias bool)
 	return l
 }
 
-// Initialise the layer, returns work space size needed
-func (l *ConvLayer) Init(s *Stream, bpropWeights, bpropData bool) int {
-	size := []C.size_t{0}
-	var fwdAlgo C.cudnnConvolutionFwdAlgo_t
-	chkDnn(C.cudnnGetConvolutionForwardAlgorithm(s.cudnn, l.Src.desc, l.Filter.desc, l.desc, l.Dst.desc,
-		C.CUDNN_CONVOLUTION_FWD_PREFER_FASTEST, 0, &fwdAlgo))
-	chkDnn(C.cudnnGetConvolutionForwardWorkspaceSize(s.cudnn, l.Src.desc, l.Filter.desc, l.desc, l.Dst.desc, fwdAlgo, &size[0]))
+// Initialise the layer, returns work space size needed, if fast flag is set then do an exhaustive seach for fastest algo
+func (l *ConvLayer) Init(s *Stream, bpropWeights, bpropData, fast bool) int {
+	size := [3]C.size_t{}
+	fwdAlgo := l.getFwdAlgo(s, fast)
+	chkDnn(C.cudnnGetConvolutionForwardWorkspaceSize(s.cudnn, l.Src.desc, l.Filter.desc, l.desc, l.Dst.desc, fwdAlgo, &size[FwdAlgo]))
 	l.Algo[FwdAlgo] = int(fwdAlgo)
-	var sz C.size_t
 	if bpropWeights {
-		var bFiltAlgo C.cudnnConvolutionBwdFilterAlgo_t
-		chkDnn(C.cudnnGetConvolutionBackwardFilterAlgorithm(s.cudnn, l.Src.desc, l.Dst.desc, l.desc, l.Filter.desc,
-			C.CUDNN_CONVOLUTION_BWD_FILTER_PREFER_FASTEST, 0, &bFiltAlgo))
-		chkDnn(C.cudnnGetConvolutionBackwardFilterWorkspaceSize(s.cudnn, l.Src.desc, l.Dst.desc, l.desc, l.Filter.desc, bFiltAlgo, &sz))
+		bFiltAlgo := l.getBwdFilterAlgo(s, fast)
+		chkDnn(C.cudnnGetConvolutionBackwardFilterWorkspaceSize(s.cudnn, l.Src.desc, l.Dst.desc, l.desc, l.Filter.desc, bFiltAlgo, &size[BwdFilterAlgo]))
 		l.Algo[BwdFilterAlgo] = int(BwdFilterAlgo)
-		size = append(size, sz)
 	}
 	if bpropData {
-		var bDataAlgo C.cudnnConvolutionBwdDataAlgo_t
-		chkDnn(C.cudnnGetConvolutionBackwardDataAlgorithm(s.cudnn, l.Filter.desc, l.Dst.desc, l.desc, l.Src.desc,
-			C.CUDNN_CONVOLUTION_BWD_DATA_PREFER_FASTEST, 0, &bDataAlgo))
-		chkDnn(C.cudnnGetConvolutionBackwardDataWorkspaceSize(s.cudnn, l.Filter.desc, l.Dst.desc, l.desc, l.Src.desc, bDataAlgo, &sz))
+		bDataAlgo := l.getBwdDataAlgo(s, fast)
+		chkDnn(C.cudnnGetConvolutionBackwardDataWorkspaceSize(s.cudnn, l.Filter.desc, l.Dst.desc, l.desc, l.Src.desc, bDataAlgo, &size[BwdDataAlgo]))
 		l.Algo[BwdDataAlgo] = int(bDataAlgo)
-		size = append(size, sz)
 	}
 	return maxWords(size[:])
+}
+
+func (l *ConvLayer) getFwdAlgo(s *Stream, fast bool) (algo C.cudnnConvolutionFwdAlgo_t) {
+	if !fast {
+		chkDnn(C.cudnnGetConvolutionForwardAlgorithm(s.cudnn, l.Src.desc, l.Filter.desc, l.desc, l.Dst.desc,
+			C.CUDNN_CONVOLUTION_FWD_PREFER_FASTEST, 0, &algo))
+		return
+	}
+	var count C.int
+	var perf [C.CUDNN_CONVOLUTION_FWD_ALGO_COUNT]C.cudnnConvolutionFwdAlgoPerf_t
+	chkDnn(C.cudnnFindConvolutionForwardAlgorithm(s.cudnn, l.Src.desc, l.Filter.desc, l.desc, l.Dst.desc,
+		C.CUDNN_CONVOLUTION_FWD_ALGO_COUNT, &count, &perf[0]))
+	chkDnn(perf[0].status)
+	return perf[0].algo
+}
+
+func (l *ConvLayer) getBwdFilterAlgo(s *Stream, fast bool) (algo C.cudnnConvolutionBwdFilterAlgo_t) {
+	if !fast {
+		chkDnn(C.cudnnGetConvolutionBackwardFilterAlgorithm(s.cudnn, l.Src.desc, l.Dst.desc, l.desc, l.Filter.desc,
+			C.CUDNN_CONVOLUTION_BWD_FILTER_PREFER_FASTEST, 0, &algo))
+		return
+	}
+	var count C.int
+	var perf [C.CUDNN_CONVOLUTION_BWD_FILTER_ALGO_COUNT]C.cudnnConvolutionBwdFilterAlgoPerf_t
+	chkDnn(C.cudnnFindConvolutionBackwardFilterAlgorithm(s.cudnn, l.Src.desc, l.Dst.desc, l.desc, l.Filter.desc,
+		C.CUDNN_CONVOLUTION_BWD_FILTER_ALGO_COUNT, &count, &perf[0]))
+	chkDnn(perf[0].status)
+	return perf[0].algo
+}
+
+func (l *ConvLayer) getBwdDataAlgo(s *Stream, fast bool) (algo C.cudnnConvolutionBwdDataAlgo_t) {
+	if !fast {
+		chkDnn(C.cudnnGetConvolutionBackwardDataAlgorithm(s.cudnn, l.Filter.desc, l.Dst.desc, l.desc, l.Src.desc,
+			C.CUDNN_CONVOLUTION_BWD_DATA_PREFER_FASTEST, 0, &algo))
+		return
+	}
+	var count C.int
+	var perf [C.CUDNN_CONVOLUTION_BWD_DATA_ALGO_COUNT]C.cudnnConvolutionBwdDataAlgoPerf_t
+	chkDnn(C.cudnnFindConvolutionBackwardDataAlgorithm(s.cudnn, l.Filter.desc, l.Dst.desc, l.desc, l.Src.desc,
+		C.CUDNN_CONVOLUTION_BWD_DATA_ALGO_COUNT, &count, &perf[0]))
+	chkDnn(perf[0].status)
+	return perf[0].algo
+}
+
+func (l *ConvLayer) AlgoName(algo int) string {
+	switch algo {
+	case FwdAlgo:
+		switch l.Algo[algo] {
+		case C.CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_GEMM:
+			return "FWD_ALGO_IMPLICIT_GEMM"
+		case C.CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM:
+			return "FWD_ALGO_IMPLICIT_PRECOMP_GEMM"
+		case C.CUDNN_CONVOLUTION_FWD_ALGO_GEMM:
+			return "FWD_ALGO_GEMM"
+		case C.CUDNN_CONVOLUTION_FWD_ALGO_DIRECT:
+			return "FWD_ALGO_DIRECT"
+		case C.CUDNN_CONVOLUTION_FWD_ALGO_FFT:
+			return "FWD_ALGO_FFT"
+		case C.CUDNN_CONVOLUTION_FWD_ALGO_FFT_TILING:
+			return "FWD_ALGO_FFT_TILING"
+		case C.CUDNN_CONVOLUTION_FWD_ALGO_WINOGRAD:
+			return "FWD_ALGO_WINOGRAD"
+		case C.CUDNN_CONVOLUTION_FWD_ALGO_WINOGRAD_NONFUSED:
+			return "FWD_ALGO_WINOGRAD_NONFUSED"
+		}
+	case BwdFilterAlgo:
+		switch l.Algo[algo] {
+		case C.CUDNN_CONVOLUTION_BWD_FILTER_ALGO_0:
+			return "BWD_FILTER_ALGO_0"
+		case C.CUDNN_CONVOLUTION_BWD_FILTER_ALGO_1:
+			return "BWD_FILTER_ALGO_1"
+		case C.CUDNN_CONVOLUTION_BWD_FILTER_ALGO_FFT:
+			return "BWD_FILTER_ALGO_FFT"
+		case C.CUDNN_CONVOLUTION_BWD_FILTER_ALGO_3:
+			return "BWD_FILTER_ALGO_3"
+		case C.CUDNN_CONVOLUTION_BWD_FILTER_ALGO_WINOGRAD:
+			return "BWD_FILTER_ALGO_WINOGRAD"
+		case C.CUDNN_CONVOLUTION_BWD_FILTER_ALGO_WINOGRAD_NONFUSED:
+			return "BWD_FILTER_ALGO_WINOGRAD_NONFUSED"
+		case C.CUDNN_CONVOLUTION_BWD_FILTER_ALGO_FFT_TILING:
+			return "BWD_FILTER_ALGO_FFT_TILING"
+		}
+	case BwdDataAlgo:
+		switch l.Algo[algo] {
+		case C.CUDNN_CONVOLUTION_BWD_DATA_ALGO_0:
+			return "BWD_DATA_ALGO_0"
+		case C.CUDNN_CONVOLUTION_BWD_DATA_ALGO_1:
+			return "BWD_DATA_ALGO_1"
+		case C.CUDNN_CONVOLUTION_BWD_DATA_ALGO_FFT:
+			return "BWD_DATA_ALGO_FFT"
+		case C.CUDNN_CONVOLUTION_BWD_DATA_ALGO_FFT_TILING:
+			return "BWD_DATA_ALGO_FFT_TILING"
+		case C.CUDNN_CONVOLUTION_BWD_DATA_ALGO_WINOGRAD:
+			return "BWD_DATA_ALGO_WINOGRAD"
+		case C.CUDNN_CONVOLUTION_BWD_DATA_ALGO_WINOGRAD_NONFUSED:
+			return "BWD_DATA_ALGO_WINOGRAD_NONFUSED"
+		}
+	}
+	panic("invalid algo type")
 }
 
 func (l *ConvLayer) InShape() []int { return l.Src.Dims }

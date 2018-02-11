@@ -56,6 +56,7 @@ func main() {
 		UseGPU:       true,
 		Normalise:    true,
 		Distort:      true,
+		FastConv:     true,
 		WeightInit:   nnet.GlorotUniform,
 	}
 	c := conf.AddLayers(block(32, 0.2)...)

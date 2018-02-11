@@ -47,6 +47,7 @@ type Config struct {
 	RandSeed     int64
 	DebugLevel   int
 	UseGPU       bool
+	FastConv     bool
 	Profile      bool
 	MemProfile   bool
 	Layers       []LayerConfig
