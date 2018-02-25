@@ -200,12 +200,12 @@ void callCPU(Args* a, dnnError_t* error) {
 			a->i[0], FP(a->p[1]), a->i[1]);
 		break;
 	case GEMV:
-		cblas_sgemv(CblasColMajor, a->i[0], a->i[1], a->i[2], 1.0f,
+		cblas_sgemv(CblasColMajor, a->i[0], a->i[1], a->i[2], a->f[0],
 			FP(a->p[0]), a->i[1], FP(a->p[1]), 1, 0.0f, FP(a->p[2]), 1);
 		break;
 	case GEMM:
-		cblas_sgemm(CblasColMajor, a->i[0], a->i[1], a->i[2], a->i[3], a->i[4], 1.0f, 
-			FP(a->p[0]), a->i[5], FP(a->p[1]), a->i[6], a->f[0], FP(a->p[2]), a->i[7]);
+		cblas_sgemm(CblasColMajor, a->i[0], a->i[1], a->i[2], a->i[3], a->i[4], a->f[0], 
+			FP(a->p[0]), a->i[5], FP(a->p[1]), a->i[6], a->f[1], FP(a->p[2]), a->i[7]);
 		break;
 	case MUL_ELEM:
 		array_mul(FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0]);

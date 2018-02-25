@@ -39,7 +39,7 @@ func main() {
 	conf.DataSet = "mnist2"
 	conf.Distort = true
 	conf.MaxEpoch = 40
-	conf.ValidEMA = 10
+	conf.ValidEMA = 15
 	conf.StopAfter = 2
 	conf.ExtraEpochs = 3
 	conf.FastConv = true

@@ -69,8 +69,11 @@ func setupNetwork(q num.Queue, W, B *num.Array) (l1, l2 Layer, dW, dB *num.Array
 	return lin, relu, lin.dw, lin.db, temp
 }
 
-func compareArray(t *testing.T, q num.Queue, title string, A *num.Array, expect []float32) {
+func compareArray(t *testing.T, q num.Queue, title string, A *num.Array, expect []float32, scale float32) {
 	t.Logf("== %s DNN ==\n%s", title, A.String(q))
+	for i := range expect {
+		expect[i] *= scale
+	}
 	arr := make([]float32, num.Prod(A.Dims))
 	q.Call(num.Read(A, arr)).Finish()
 	if len(arr) != len(expect) {
@@ -100,7 +103,7 @@ func TestFprop(t *testing.T) {
 			0, 0.3471108, 0.013840735, 0.3113696,
 			0, 0.3044004, 0, 0.48620278}
 
-		compareArray(t, q, "output", output, expect)
+		compareArray(t, q, "output", output, expect, 1)
 		q.Shutdown()
 	}
 }
@@ -145,9 +148,9 @@ func TestDNNBprop(t *testing.T) {
 			0.009336092, 0.10726756, -0.06394093, -0.27729696, 0.36944908, 0.31641093,
 			-0.8669185, -0.6640028, -0.3048705, -0.31535587, -1.0578532, -0.94342196,
 			0.063568585, 0.052299034, -0.0022429964, 0.14734498, 0.09623108, 0.12843394}
-		compareArray(t, q, "dW", dW, expect)
+		compareArray(t, q, "dW", dW, expect, 1.0/batch)
 		expect = []float32{0, 0.096598804, -1.27191, 0.18208665}
-		compareArray(t, q, "dB", dB, expect)
+		compareArray(t, q, "dB", dB, expect, 1.0/batch)
 
 		q.Shutdown()
 	}

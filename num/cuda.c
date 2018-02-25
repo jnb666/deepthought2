@@ -54,12 +54,12 @@ void callGPU(Args* a, Stream* s, cublasStatus_t* blasStatus, cudnnStatus_t* dnnS
 			&one, FP(a->p[0]), a->i[0], &zero, FP(a->p[1]), a->i[1], FP(a->p[1]), a->i[1]);
 		break;
 	case GEMV:
-		*blasStatus = cublasSgemv(s->blas, CU_TRANS(a->i[0]), a->i[1], a->i[2], &one,
+		*blasStatus = cublasSgemv(s->blas, CU_TRANS(a->i[0]), a->i[1], a->i[2], &(a->f[0]),
 			FP(a->p[0]), a->i[1], FP(a->p[1]), 1, &zero, FP(a->p[2]), 1);
 		break;
 	case GEMM:
-		*blasStatus = cublasSgemm(s->blas, CU_TRANS(a->i[0]), CU_TRANS(a->i[1]), a->i[2], a->i[3], a->i[4], &one, 
-			FP(a->p[0]), a->i[5], FP(a->p[1]), a->i[6], &(a->f[0]), FP(a->p[2]), a->i[7]);
+		*blasStatus = cublasSgemm(s->blas, CU_TRANS(a->i[0]), CU_TRANS(a->i[1]), a->i[2], a->i[3], a->i[4], &(a->f[0]), 
+			FP(a->p[0]), a->i[5], FP(a->p[1]), a->i[6], &(a->f[1]), FP(a->p[2]), a->i[7]);
 		break;
 	case MUL_ELEM:
 		cuda_mul_elem(s->stream, FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0]);
@@ -120,7 +120,7 @@ void callGPU(Args* a, Stream* s, cublasStatus_t* blasStatus, cudnnStatus_t* dnnS
 		break;
 	case CUDNN_BNORM_BPROP:
 		*dnnStatus = cudnnBatchNormalizationBackward(s->cudnn, CUDNN_BATCHNORM_SPATIAL, 
-			&one, &zero, &one, &zero,
+			&one, &zero, &(a->f[1]), &zero,
 			(cudnnTensorDescriptor_t)(a->p[0]), a->p[1], 					// src
 			(cudnnTensorDescriptor_t)(a->p[0]), a->p[2],					// diffDst
 			(cudnnTensorDescriptor_t)(a->p[0]), a->p[3],					// diffSrc			
@@ -152,7 +152,7 @@ void callGPU(Args* a, Stream* s, cublasStatus_t* blasStatus, cudnnStatus_t* dnnS
 		break;
 	case CUDNN_CONV_BPROP_FILTER:
 		*dnnStatus = cudnnConvolutionBackwardFilter(s->cudnn,
-			&one, (cudnnTensorDescriptor_t)(a->p[2]), a->p[5],			// src
+			&(a->f[0]), (cudnnTensorDescriptor_t)(a->p[2]), a->p[5],	// src
 			(cudnnTensorDescriptor_t)(a->p[3]), a->p[6], 				// diffDst
 			(cudnnConvolutionDescriptor_t)(a->p[0]), 
 			(cudnnConvolutionBwdFilterAlgo_t)(a->i[0]),
@@ -161,7 +161,7 @@ void callGPU(Args* a, Stream* s, cublasStatus_t* blasStatus, cudnnStatus_t* dnnS
 		break;
 	case CUDNN_CONV_BPROP_BIAS:
 		*dnnStatus = cudnnConvolutionBackwardBias(s->cudnn,
-			&one, (cudnnTensorDescriptor_t)(a->p[0]), a->p[2], 			// diffDst
+			&(a->f[0]), (cudnnTensorDescriptor_t)(a->p[0]), a->p[2], 	// diffDst
 			&zero, (cudnnTensorDescriptor_t)(a->p[1]), a->p[3]);		// dBias
 		break;
 	case CUDNN_POOL_FPROP:

@@ -28,9 +28,9 @@ func block2(nfeat int) []nnet.ConfigLayer {
 func main() {
 	conf := nnet.Config{
 		DataSet:      "cifar10_2",
-		Eta:          0.01,
+		Eta:          0.02,
 		EtaDecay:     0.2,
-		EtaDecayStep: 30,
+		EtaDecayStep: 25,
 		Lambda:       50,
 		Momentum:     0.9,
 		Nesterov:     true,

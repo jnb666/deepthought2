@@ -147,14 +147,15 @@ func (l *convCuda) Bprop(que Queue, grad, dsrc *Array, work [3]Buffer) *Array {
 		panic(fmt.Errorf("bprop conv: invalid input shape: have %v, expect %v", grad.Dims, l.OutShape()))
 	}
 	q := que.(*gpuQueue)
+	scale := 1.0 / float32(l.InShape()[3])
 	if l.Bias != nil {
 		q.Call(
-			args(C.CUDNN_EXECUTE+cuda.ConvBpropBias, l.Dst.Ptr(), l.Bias.Ptr(), grad.Data(), l.db),
+			args(C.CUDNN_EXECUTE+cuda.ConvBpropBias, l.Dst.Ptr(), l.Bias.Ptr(), grad.Data(), l.db, scale),
 		)
 	}
 	q.Call(
 		args(C.CUDNN_EXECUTE+cuda.ConvBpropFilter, l.Algo[cuda.BwdFilterAlgo], work[0].Capacity()*4, l.Ptr(), work[0].Data(),
-			l.Src.Ptr(), l.Dst.Ptr(), l.Filter.Ptr(), l.src.Data(), grad.Data(), l.dw),
+			l.Src.Ptr(), l.Dst.Ptr(), l.Filter.Ptr(), l.src.Data(), grad.Data(), l.dw, scale),
 	)
 	if l.BpropData() {
 		q.Call(
@@ -471,7 +472,7 @@ func (l *batchNormCuda) InitParams(q Queue) {
 		Fill(l.w, 1),
 		Fill(l.b, 0),
 		Fill(l.runMean, 0),
-		Fill(l.runVar, 1),
+		Fill(l.runVar, 0),
 	)
 }
 
@@ -500,17 +501,18 @@ func (l *batchNormCuda) Fprop(q Queue, in *Array, work Buffer, trainMode bool) *
 }
 
 func (l *batchNormCuda) Bprop(q Queue, grad, dsrc *Array, work [3]Buffer) *Array {
+	scale := 1.0 / float32(l.InShape()[3])
 	q.Call(
 		args(C.CUDNN_EXECUTE+cuda.BnormBprop, l.Src.Ptr(), l.src.Data(), grad.Data(), dsrc.Data(),
 			l.Shape.Ptr(), l.w.Data(), l.dw.Data(), l.db.Data(), l.mean.Data(), l.variance.Data(),
-			l.epsilon),
+			l.epsilon, scale),
 	)
 	return dsrc
 }
 
 type batchNormMkl struct {
 	batchNorm
-	layerMKL
+	*layerMKL
 }
 
 func (l *batchNormMkl) SetParamData(W, B, dW, dB *Array) {
@@ -523,7 +525,7 @@ func (l *batchNormMkl) InitParams(q Queue) {
 		Fill(l.w, 0),
 		WriteCol(l.w, 0, ones(l.w.Dims[0])),
 		Fill(l.runMean, 0),
-		Fill(l.runVar, 1),
+		Fill(l.runVar, 0),
 	)
 }
 
@@ -550,37 +552,40 @@ func (l *batchNormMkl) Bprop(q Queue, grad, dsrc *Array, work [3]Buffer) *Array 
 // layer which wraps Intel MKL DNN layer
 type layerMKL struct {
 	*mkl.Layer
-	dst       *Array
-	bpropData bool
+	dst        *Array
+	delw, delb *Array
+	bpropData  bool
 }
 
-func newLayerMKL(layer *mkl.Layer, bpropData bool) layerMKL {
-	return layerMKL{
+func newLayerMKL(layer *mkl.Layer, bpropData bool) *layerMKL {
+	return &layerMKL{
 		Layer:     layer,
 		dst:       NewArray(layer.Dst(), Float32, layer.OutShape()...),
 		bpropData: bpropData,
 	}
 }
 
-func (l layerMKL) Algorithm() string { return "IntelMKL" }
+func (l *layerMKL) Algorithm() string { return "IntelMKL" }
 
-func (l layerMKL) BpropData() bool { return l.bpropData }
+func (l *layerMKL) BpropData() bool { return l.bpropData }
 
-func (l layerMKL) Memory() (weights, output, temp int) {
+func (l *layerMKL) Memory() (weights, output, temp int) {
 	return 0, Bytes(l.dst), l.Worksize() * 4
 }
 
-func (l layerMKL) SetParamData(W, B, dW, dB *Array) {
+func (l *layerMKL) SetParamData(W, B, dW, dB *Array) {
 	if l.BiasShape() != nil {
 		l.Layer.SetParams(W.Data(), B.Data(), dW.Data(), dB.Data())
+		l.delw, l.delb = dW, dB
 	} else {
 		l.Layer.SetParams(W.Data(), nil, dW.Data(), nil)
+		l.delw = dW
 	}
 }
 
-func (l layerMKL) Output() *Array { return l.dst }
+func (l *layerMKL) Output() *Array { return l.dst }
 
-func (l layerMKL) Fprop(q Queue, in *Array, work Buffer, trainMode bool) *Array {
+func (l *layerMKL) Fprop(q Queue, in *Array, work Buffer, trainMode bool) *Array {
 	if !SameShape(in.Dims, l.InShape()) {
 		panic(fmt.Errorf("fprop: invalid input shape: have %v, expect %v", in.Dims, l.InShape()))
 	}
@@ -589,16 +594,24 @@ func (l layerMKL) Fprop(q Queue, in *Array, work Buffer, trainMode bool) *Array 
 	return l.dst
 }
 
-func (l layerMKL) Bprop(q Queue, grad, dsrc *Array, work [3]Buffer) *Array {
+func (l *layerMKL) Bprop(q Queue, grad, dsrc *Array, work [3]Buffer) *Array {
 	if !SameShape(grad.Dims, l.OutShape()) {
 		panic(fmt.Errorf("bprop: invalid input shape: have %v, expect %v", grad.Dims, l.OutShape()))
 	}
 	l.SetDiffDst(grad.Data())
+	dims := l.InShape()
+	scale := 1.0 / float32(dims[len(dims)-1])
 	if l.BBias != nil {
-		q.Call(dnnExecute(l.BBias, l.ResPtr(), l.Type()+"_bprop_bias"))
+		q.Call(
+			dnnExecute(l.BBias, l.ResPtr(), l.Type()+"_bprop_bias"),
+			Scale(scale, l.delb),
+		)
 	}
 	if l.BFilter != nil {
-		q.Call(dnnExecute(l.BFilter, l.ResPtr(), l.Type()+"_bprop_filter"))
+		q.Call(
+			dnnExecute(l.BFilter, l.ResPtr(), l.Type()+"_bprop_filter"),
+			Scale(scale, l.delw),
+		)
 	}
 	if l.bpropData {
 		l.SetDiffSrc(dsrc.Data())

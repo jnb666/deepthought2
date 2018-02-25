@@ -1,7 +1,7 @@
 all: libkernels.a
 
 libkernels.a: kernels.o
-	ar cru libkernels.a kernels.o
+	ar cr libkernels.a kernels.o
 	ranlib libkernels.a
 
 kernels.o: kernels.cu cuda.h

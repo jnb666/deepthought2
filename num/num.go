@@ -206,8 +206,8 @@ func Mul(a, b, c *Array) Function {
 	return args(C.MUL_ELEM, asize, a.Data(), b.Data(), c.Data())
 }
 
-// Matrix vector multiplication: y <- dot(mA,x)
-func Gemv(mA, x, y *Array, aTrans TransType) Function {
+// Matrix vector multiplication: y <- alpha * dot(mA,x)
+func Gemv(alpha float32, mA, x, y *Array, aTrans TransType) Function {
 	if mA.Dtype != Float32 || x.Dtype != Float32 || y.Dtype != Float32 {
 		panic("Gemv: dtype must by Float32")
 	}
@@ -225,11 +225,11 @@ func Gemv(mA, x, y *Array, aTrans TransType) Function {
 			panic("Gemv: incorrect vector size")
 		}
 	}
-	return args(C.GEMV, int(aTrans), m, n, mA.Data(), x.Data(), y.Data())
+	return args(C.GEMV, int(aTrans), m, n, alpha, mA.Data(), x.Data(), y.Data())
 }
 
-// Matrix matrix multiplication: mC <- dot(mA, mB) or mC <- dot(mA, mB) + mC if incr = true
-func Gemm(mA, mB, mC *Array, aTrans, bTrans TransType, incr bool) Function {
+// Matrix matrix multiplication: mC <- alpha*dot(mA, mB) or mC <- alpha*dot(mA, mB) + mC if incr = true
+func Gemm(alpha float32, mA, mB, mC *Array, aTrans, bTrans TransType, incr bool) Function {
 	if mA.Dtype != Float32 || mB.Dtype != Float32 || mC.Dtype != Float32 {
 		panic("Gemm: dtype must by Float32")
 	}
@@ -256,7 +256,7 @@ func Gemm(mA, mB, mC *Array, aTrans, bTrans TransType, incr bool) Function {
 		beta = 1
 	}
 	return args(C.GEMM, int(aTrans), int(bTrans), m, n, k, adim[0], bdim[0], cdim[0],
-		beta, mA.Data(), mB.Data(), mC.Data())
+		alpha, beta, mA.Data(), mB.Data(), mC.Data())
 }
 
 // Quadratic loss function: (x-y)**2

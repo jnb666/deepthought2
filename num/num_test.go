@@ -197,7 +197,7 @@ func TestSum(t *testing.T) {
 		ones := dev.NewArray(Float32, 2)
 		q.Call(
 			Fill(ones, 1),
-			Gemv(x, ones, sum, Trans),
+			Gemv(1, x, ones, sum, Trans),
 			Read(sum, res),
 		).Finish()
 		t.Log("column sum", res)
@@ -227,7 +227,7 @@ func TestGemm(t *testing.T) {
 				q.Call(Write(y, []float32{7, 9, 11, 8, 10, 12}))
 			}
 			q.Call(
-				Gemm(x, y, z, NoTrans, trans, false),
+				Gemm(1.0, x, y, z, NoTrans, trans, false),
 				Read(z, res),
 			).Finish()
 			t.Logf("gemm z=\n%s", z.String(q))
@@ -280,7 +280,7 @@ func benchGemm(b *testing.B, dev Device) {
 		Write(y, randSlice(size*size)),
 	).Finish()
 	for i := 0; i < b.N; i++ {
-		q.Call(Gemm(x, y, z, NoTrans, NoTrans, false)).Finish()
+		q.Call(Gemm(1.0, x, y, z, NoTrans, NoTrans, false)).Finish()
 	}
 }
 

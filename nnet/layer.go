@@ -215,7 +215,7 @@ func (c *Dropout) unmarshal(data json.RawMessage) Layer {
 // Batch normalisation layer.
 type BatchNorm struct{ AvgFactor, Epsilon float64 }
 
-var batchNormDefault = BatchNorm{Epsilon: 0.001, AvgFactor: 0.1}
+var batchNormDefault = BatchNorm{Epsilon: 1e-4, AvgFactor: 0.1}
 
 func (c BatchNorm) Marshal() LayerConfig {
 	if c.Epsilon == 0 {
@@ -339,7 +339,7 @@ func (l *linear) Fprop(q num.Queue, in *num.Array, work num.Buffer, trainMode bo
 	l.src = in
 	q.Call(
 		num.Copy(l.b, temp),
-		num.Gemm(l.src, l.w, temp, num.Trans, num.NoTrans, true),
+		num.Gemm(1, l.src, l.w, temp, num.Trans, num.NoTrans, true),
 		num.Transpose(temp, l.dst),
 	)
 	return l.dst
@@ -350,14 +350,15 @@ func (l *linear) Bprop(q num.Queue, grad, dsrc *num.Array, work [3]num.Buffer) *
 		l.ones = q.NewArray(num.Float32, grad.Dims[1])
 		q.Call(num.Fill(l.ones, 1))
 	}
+	scale := 1.0 / float32(l.inShape[1])
 	q.Call(
-		num.Gemv(grad, l.ones, l.db, num.NoTrans),
-		num.Gemm(l.src, grad, l.dw, num.NoTrans, num.Trans, false),
+		num.Gemv(scale, grad, l.ones, l.db, num.NoTrans),
+		num.Gemm(scale, l.src, grad, l.dw, num.NoTrans, num.Trans, false),
 	)
 	if l.bpropData {
 		temp := num.NewArray(work[0], num.Float32, l.inShape[1], l.inShape[0])
 		q.Call(
-			num.Gemm(grad, l.w, temp, num.Trans, num.Trans, false),
+			num.Gemm(1, grad, l.w, temp, num.Trans, num.Trans, false),
 			num.Transpose(temp, dsrc),
 		)
 	}
@@ -456,7 +457,11 @@ type dropout struct {
 }
 
 func (l *dropout) Init(q num.Queue, inShape []int, opts num.LayerOpts, rng *rand.Rand) (workSize, inSize, weights int) {
-	l.Layer = num.NewDropoutLayer(q, l.Ratio, inShape, rng.Int63())
+	seed := rng.Int63()
+	if debug >= 1 {
+		log.Printf("dropout: seed = %d\n", seed)
+	}
+	l.Layer = num.NewDropoutLayer(q, l.Ratio, inShape, seed)
 	if opts&num.BpropData != 0 {
 		inSize = num.Prod(inShape)
 	}
@@ -483,13 +488,22 @@ func (l *batchNorm) Init(q num.Queue, inShape []int, opts num.LayerOpts, rng *ra
 
 func (l *batchNorm) InitParams(q num.Queue, init InitType, bias float64, rng *rand.Rand) {
 	l.BatchNormLayer.InitParams(q)
+	if l.vw != nil {
+		q.Call(num.Fill(l.vw, 0))
+	}
+	if l.vb != nil {
+		q.Call(num.Fill(l.vb, 0))
+	}
 }
 
 func (l *batchNorm) UpdateParams(q num.Queue, opt Optimiser, work num.Buffer) {
 	if l.b != nil {
+		//fmt.Printf("batchnorm w: %s\n", l.w.String(q))
+		//fmt.Printf("batchnorm b: %s\n", l.b.String(q))
 		opt.Update(q, true, l.w, l.dw, l.vw, work)
 		opt.Update(q, false, l.b, l.db, l.vb, work)
 	} else {
+		//fmt.Printf("batchnorm w: %s\n", l.w.String(q))
 		opt.Update(q, false, l.w, l.dw, l.vw, work)
 	}
 }

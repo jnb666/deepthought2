@@ -187,7 +187,7 @@ func (t *TestBase) Test(net *Network, epoch int, batchLoss []float64, trainError
 				dset.Shuffle()
 			}
 			var pred []int32
-			if t.Predict != nil {
+			if t.Pred != nil {
 				pred = t.Pred[key]
 			}
 			errVal := net.Error(dset, pred)
@@ -287,7 +287,7 @@ func TrainEpoch(net *Network, dset *Dataset, epoch int, pred []int32) (batchLoss
 	}
 	learningRate, weightDecay := net.OptimiserParams(epoch, dset.Samples)
 	optimiser := SGD{
-		LearningRate: float32(learningRate / float64(dset.BatchSize)),
+		LearningRate: float32(learningRate),
 		WeightDecay:  float32(weightDecay),
 		Momentum:     float32(net.Momentum),
 		Nesterov:     net.Nesterov,
@@ -362,30 +362,32 @@ type SGD struct {
 }
 
 func (o SGD) Update(q num.Queue, decay bool, x, dx, v *num.Array, work num.Buffer) {
-	q.Call(num.Scale(-o.LearningRate, dx))
 	if decay && o.WeightDecay != 0 {
-		q.Call(num.Axpy(-o.WeightDecay, x, dx))
+		// X *= 1 - weightDecay
+		q.Call(num.Scale(1-o.WeightDecay, x))
 	}
 	switch {
 	case o.Momentum != 0 && o.Nesterov:
-		// v = dx + mom*v; x += -mom*vPrev + (1 + mom)*v
+		// v = momentum*v - learningRate*dx
+		// x += -momentum*vPrev + (1 + momentum)*v
 		vPrev := num.NewArray(work, num.Float32, v.Dims...)
 		q.Call(
 			num.Copy(v, vPrev),
 			num.Scale(o.Momentum, v),
-			num.Axpy(1, dx, v),
+			num.Axpy(-o.LearningRate, dx, v),
 			num.Axpy(1+o.Momentum, v, x),
 			num.Axpy(-o.Momentum, vPrev, x),
 		)
 	case o.Momentum != 0 && !o.Nesterov:
-		// v = mom*v + dx; x += v
+		// v = momentum*v - learningRate*dx; x += v
 		q.Call(
 			num.Scale(o.Momentum, v),
-			num.Axpy(1, dx, v),
+			num.Axpy(-o.LearningRate, dx, v),
 			num.Axpy(1, v, x),
 		)
 	default:
-		q.Call(num.Axpy(1, dx, x))
+		// x -= learningRate*dx
+		q.Call(num.Axpy(-o.LearningRate, dx, x))
 	}
 }
 
