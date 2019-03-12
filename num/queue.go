@@ -7,11 +7,12 @@ import "C"
 
 import (
 	"fmt"
-	"github.com/jnb666/deepthought2/num/cuda"
-	"github.com/jnb666/deepthought2/num/mkl"
 	"runtime"
 	"sort"
 	"unsafe"
+
+	"github.com/jnb666/deepthought2/num/cuda"
+	"github.com/jnb666/deepthought2/num/mkl"
 )
 
 // Device interface type
@@ -58,7 +59,7 @@ type cpuDevice struct {
 
 type cpuQueue struct {
 	cpuDevice
-	buffer [C.QUEUE_SIZE]Function
+	buffer []Function
 	queued int
 	*profile
 }
@@ -66,6 +67,7 @@ type cpuQueue struct {
 func (d cpuDevice) NewQueue() Queue {
 	return &cpuQueue{
 		cpuDevice: d,
+		buffer:    newBuffer(),
 		profile:   newProfile(false),
 	}
 }
@@ -74,7 +76,7 @@ func (q *cpuQueue) Dev() Device { return q.cpuDevice }
 
 func (q *cpuQueue) exec() {
 	bsize := C.int(q.queued)
-	ptr := (**C.struct_args)(unsafe.Pointer(&q.buffer[0]))
+	ptr := &q.buffer[0].args
 	var err C.dnnError_t
 	var ix C.int
 	if q.profile.enabled {
@@ -116,28 +118,29 @@ type gpuDevice struct {
 	dev cuda.Device
 }
 
-func (d gpuDevice) NewQueue() Queue {
-	return &gpuQueue{
-		gpuDevice: d,
-		profile:   newProfile(true),
-		stream:    cuda.NewStream(),
-	}
-}
-
 type gpuQueue struct {
 	gpuDevice
-	buffer [C.QUEUE_SIZE]Function
+	buffer []Function
 	queued int
 	*profile
 	stream *cuda.Stream
+}
+
+func (d gpuDevice) NewQueue() Queue {
+	return &gpuQueue{
+		gpuDevice: d,
+		buffer:    newBuffer(),
+		profile:   newProfile(true),
+		stream:    cuda.NewStream(),
+	}
 }
 
 func (q *gpuQueue) Dev() Device { return q.gpuDevice }
 
 func (q *gpuQueue) exec() {
 	bsize := C.int(q.queued)
-	ptr := (**C.struct_args)(unsafe.Pointer(&q.buffer[0]))
-	stream := (*C.struct_stream)(unsafe.Pointer(q.stream))
+	ptr := &q.buffer[0].args
+	stream := (*C.Stream)(unsafe.Pointer(q.stream))
 	var err C.cudaError_t
 	var blasErr C.cublasStatus_t
 	var dnnErr C.cudnnStatus_t

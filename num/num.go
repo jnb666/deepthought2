@@ -11,9 +11,10 @@ import "C"
 
 import (
 	"fmt"
-	"github.com/jnb666/deepthought2/num/cuda"
 	"reflect"
 	"unsafe"
+
+	"github.com/jnb666/deepthought2/num/cuda"
 )
 
 var opName = map[C.int]string{
@@ -296,11 +297,20 @@ func SoftmaxLoss(x, y, res *Array) Function {
 
 // Function which may be called via the queue
 type Function struct {
-	args *C.struct_args
+	args *C.Args
+}
+
+func newBuffer() []Function {
+	sh := &reflect.SliceHeader{
+		Data: uintptr(unsafe.Pointer(C.newBuffer())),
+		Len:  C.QUEUE_SIZE,
+		Cap:  C.QUEUE_SIZE,
+	}
+	return *(*[]Function)(unsafe.Pointer(sh))
 }
 
 func args(op int, arg ...interface{}) Function {
-	a := &C.struct_args{op: C.int(op)}
+	a := &C.Args{op: C.int(op)}
 	ni, nf, np := 0, 0, 0
 	for _, val := range arg {
 		switch v := val.(type) {

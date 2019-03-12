@@ -350,7 +350,6 @@ func (l *dropoutCuda) Fprop(q Queue, in *Array, work Buffer, trainMode bool) *Ar
 	if !trainMode {
 		return in
 	}
-	l.src = in
 	q.Call(
 		args(C.CUDNN_EXECUTE+cuda.DropoutFprop, l.Ptr(), l.Src.Ptr(), in.Data(), l.dst.Data(), l.Reserve.Data(), l.Reserve.Capacity()*4),
 	)
@@ -384,11 +383,12 @@ func (l *dropout) Fprop(q Queue, in *Array, work Buffer, trainMode bool) *Array 
 	if !trainMode {
 		return in
 	}
+	scale := float32(1.0 / l.ratio)
 	for i := range l.mask {
 		if l.rng.Float64() < l.ratio {
 			l.mask[i] = 0
 		} else {
-			l.mask[i] = 1
+			l.mask[i] = scale
 		}
 	}
 	q.Call(

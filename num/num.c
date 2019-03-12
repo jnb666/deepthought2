@@ -1,6 +1,10 @@
 // Cgo interface routines
 #include "num.h"
 
+Args** newBuffer() {
+	return (Args**) malloc(QUEUE_SIZE * sizeof(Args *));
+}
+
 void array_fill_f(float* a, float val, int n) {
 	for (int i = 0; i < n; ++i) a[i] = val;
 }

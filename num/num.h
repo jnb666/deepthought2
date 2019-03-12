@@ -55,6 +55,8 @@ typedef struct events {
 	cudaEvent_t end[QUEUE_SIZE];
 } Events;
 
+Args** newBuffer();
+
 void initEvents(Events* e);
 
 int execCPU(int nargs, Args** buffer, dnnError_t* error);

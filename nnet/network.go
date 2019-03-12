@@ -116,10 +116,11 @@ func New(queue num.Queue, conf Config, batchSize int, inShape []int, bprop bool,
 	if conf.FastConv {
 		opts |= num.FastConvLayer
 	}
+	seed := rng.Int63()
 	for i, l := range conf.Layers {
 		layer := l.Unmarshal()
 		var weights int
-		n.workSize[i], n.inputSize[i], weights = layer.Init(queue, shape, opts, rng)
+		n.workSize[i], n.inputSize[i], weights = layer.Init(queue, shape, opts, seed)
 		n.Layers = append(n.Layers, layer)
 		if debug >= 1 {
 			log.Printf("init layer %d: %s %v => %v opts=%s work=%d insize=%d\n",

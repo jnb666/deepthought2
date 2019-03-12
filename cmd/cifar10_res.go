@@ -18,9 +18,9 @@ var options = []opts{
 	{name: "res20", stack: 3, width: 1},
 	{name: "res32", stack: 5, width: 1},
 	{name: "wide16_8", stack: 2, width: 8},
-	{name: "wide16_8d", stack: 2, width: 8, dropout: 0.1},
+	{name: "wide16_8d", stack: 2, width: 8, dropout: 0.3},
 	{name: "wide28_10", stack: 4, width: 10},
-	{name: "wide28_10d", stack: 4, width: 10, dropout: 0.1},
+	{name: "wide28_10d", stack: 4, width: 10, dropout: 0.3},
 }
 
 func block(nfeat, stride int, dropout float64, prefix bool) []nnet.ConfigLayer {

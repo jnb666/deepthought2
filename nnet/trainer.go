@@ -2,11 +2,12 @@ package nnet
 
 import (
 	"fmt"
-	"github.com/jnb666/deepthought2/num"
-	"github.com/jnb666/deepthought2/stats"
 	"log"
 	"math/rand"
 	"time"
+
+	"github.com/jnb666/deepthought2/num"
+	"github.com/jnb666/deepthought2/stats"
 )
 
 // Training statistics
@@ -264,7 +265,9 @@ func (t testLogger) Test(net *Network, epoch int, batchLoss []float64, trainErr 
 func Train(net *Network, dset *Dataset, test Tester) {
 	done := false
 	epilogue := false
-	for epoch := 1; epoch <= net.MaxEpoch && !done; epoch++ {
+	epoch := 0
+	for !done {
+		epoch++
 		if test.Epilogue() && !epilogue {
 			log.Printf("training for %d extra epochs\n", net.ExtraEpochs)
 			dset.SetTrans(net.Normalise, false)

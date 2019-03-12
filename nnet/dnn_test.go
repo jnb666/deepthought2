@@ -4,6 +4,7 @@ import (
 	"github.com/jnb666/deepthought2/num"
 	"math/rand"
 	"testing"
+	"time"
 )
 
 const (
@@ -57,14 +58,14 @@ func getInputs(t *testing.T, q num.Queue) (input, W, B *num.Array) {
 
 func setupNetwork(q num.Queue, W, B *num.Array) (l1, l2 Layer, dW, dB *num.Array, temp [3]num.Buffer) {
 	lin := &linear{Linear: Linear{Nout: nOut}}
-	work1, _, _ := lin.Init(q, []int{nIn, batch}, num.BpropWeights, nil)
+	work1, _, _ := lin.Init(q, []int{nIn, batch}, num.BpropWeights, 0)
 	layerW, layerB := lin.Params()
 	q.Call(
 		num.Copy(W, layerW),
 		num.Copy(B, layerB),
 	)
 	relu := &activation{Activation: Activation{Atype: "relu"}}
-	work2, _, _ := relu.Init(q, []int{nOut, batch}, num.BpropData, nil)
+	work2, _, _ := relu.Init(q, []int{nOut, batch}, num.BpropData, 0)
 	temp[0] = q.NewBuffer(max(work1, work2))
 	return lin, relu, lin.dw, lin.db, temp
 }
@@ -151,6 +152,41 @@ func TestDNNBprop(t *testing.T) {
 		compareArray(t, q, "dW", dW, expect, 1.0/batch)
 		expect = []float32{0, 0.096598804, -1.27191, 0.18208665}
 		compareArray(t, q, "dB", dB, expect, 1.0/batch)
+
+		q.Shutdown()
+	}
+}
+
+func TestDropout(t *testing.T) {
+	indata := []float32{1, 4, 7, 2, 5, 8, 3, 6, 9}
+	rand.Seed(time.Now().UTC().UnixNano())
+	seed := rand.Int63()
+
+	for _, dev := range devices {
+		q := dev.NewQueue()
+
+		in := q.NewArray(num.Float32, 3, 3)
+		q.Call(num.Write(in, indata))
+		t.Logf("input\n%s\n", in.String(q))
+
+		dropout1 := &dropout{Dropout: Dropout{Ratio: 0.5}}
+		dropout1.Init(q, in.Dims, num.BpropData, seed)
+
+		dropout2 := &dropout{Dropout: Dropout{Ratio: 0.5}}
+		dropout2.Init(q, in.Dims, num.BpropData, seed)
+
+		out1 := dropout1.Fprop(q, in, nil, true)
+		t.Logf("fprop output 1\n%s\n", out1.String(q))
+
+		out2 := dropout2.Fprop(q, in, nil, true)
+		t.Logf("fprop output 2\n%s\n", out2.String(q))
+
+		dsrc := q.NewArray(num.Float32, 3, 3)
+		dropout1.Bprop(q, out1, dsrc, [3]num.Buffer{})
+		t.Logf("bprop output 1\n%s\n", dsrc.String(q))
+
+		dropout2.Bprop(q, out2, dsrc, [3]num.Buffer{})
+		t.Logf("bprop output 2\n%s\n", dsrc.String(q))
 
 		q.Shutdown()
 	}
