@@ -3,6 +3,7 @@ package main
 
 import (
 	"fmt"
+
 	"github.com/jnb666/deepthought2/nnet"
 )
 
@@ -78,7 +79,6 @@ func main() {
 		UseGPU:       true,
 		Normalise:    true,
 		Distort:      true,
-		FastConv:     true,
 		WeightInit:   nnet.HeNormal,
 	}
 

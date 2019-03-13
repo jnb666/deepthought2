@@ -19,6 +19,12 @@ void cuda_neq(cudaStream_t stream, int* a, int* b, int* res, int n);
 
 void cuda_mul_elem(cudaStream_t stream, float* a, float* b, float* res, int n);
 
+void cuda_div_elem(cudaStream_t stream, float* a, float* b, float* res, float eps, int n);
+
+void cuda_square(cudaStream_t stream, float* x, float* y, int n);
+
+void cuda_sqrt(cudaStream_t stream, float* x, float* y, int n);
+
 void cuda_onehot(cudaStream_t stream, int* y, float* y_one_hot, int n, int classes);
 
 void cuda_unhot(cudaStream_t stream, float* y_one_hot, int* y, int n, int classes);

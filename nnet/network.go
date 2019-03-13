@@ -3,13 +3,14 @@ package nnet
 
 import (
 	"fmt"
-	"github.com/jnb666/deepthought2/num"
 	"log"
 	"math"
 	"math/rand"
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/jnb666/deepthought2/num"
 )
 
 var debug int
@@ -103,24 +104,16 @@ func New(queue num.Queue, conf Config, batchSize int, inShape []int, bprop bool,
 	n.allocArrays(batchSize)
 	n.InShape = append(inShape, batchSize)
 	shape := n.InShape
-	n.workSize = make([]int, len(conf.Layers)+1)
+	n.workSize = make([]int, len(conf.Layers))
 	n.inputSize = make([]int, len(conf.Layers)+1)
-	maxWeights := 0
 	opts := num.FpropOnly
 	if bprop {
 		opts |= num.BpropWeights
 	}
-	if conf.Momentum != 0 {
-		opts |= num.MomentumUpdate
-	}
-	if conf.FastConv {
-		opts |= num.FastConvLayer
-	}
 	seed := rng.Int63()
 	for i, l := range conf.Layers {
 		layer := l.Unmarshal()
-		var weights int
-		n.workSize[i], n.inputSize[i], weights = layer.Init(queue, shape, opts, seed)
+		n.workSize[i], n.inputSize[i] = layer.Init(queue, shape, opts, seed, &conf)
 		n.Layers = append(n.Layers, layer)
 		if debug >= 1 {
 			log.Printf("init layer %d: %s %v => %v opts=%s work=%d insize=%d\n",
@@ -130,18 +123,14 @@ func New(queue num.Queue, conf Config, batchSize int, inShape []int, bprop bool,
 		if l.Type != "flatten" && bprop {
 			opts |= num.BpropData
 		}
-		if bprop && conf.Momentum != 0 && conf.Nesterov {
-			maxWeights = max(maxWeights, weights)
-		}
 	}
 	if bprop {
 		n.inputSize[len(n.Layers)] = num.Prod(shape)
 	}
-	n.workSize[len(n.Layers)] = maxWeights
 	wsize := max(n.workSize...)
 	insize := max(n.inputSize...)
 	if debug >= 1 {
-		log.Printf("maxWorkSize=%d  maxInSize=%d  maxWeights=%d\n", wsize, insize, maxWeights)
+		log.Printf("maxWorkSize=%d  maxInSize=%d\n", wsize, insize)
 	}
 	if wsize > 0 {
 		n.WorkSpace[0] = queue.NewBuffer(wsize)

@@ -3,17 +3,18 @@ package nnet
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/jnb666/deepthought2/num"
 	"log"
 	"math/rand"
 	"reflect"
 	"strings"
+
+	"github.com/jnb666/deepthought2/num"
 )
 
 // Layer interface type represents one layer of the neural net.
 type Layer interface {
 	ConfigLayer
-	Init(q num.Queue, inShape []int, opts num.LayerOpts, seed int64) (workSize, inSize, weights int)
+	Init(q num.Queue, inShape []int, opts num.LayerOpts, seed int64, cfg *Config) (workSize, inSize int)
 	InShape() []int
 	OutShape() []int
 	Fprop(q num.Queue, in *num.Array, work num.Buffer, trainMode bool) *num.Array
@@ -29,7 +30,8 @@ type ParamLayer interface {
 	Layer
 	Params() (W, B *num.Array)
 	InitParams(q num.Queue, init InitType, bias float64, rng *rand.Rand)
-	UpdateParams(q num.Queue, opt Optimiser, work num.Buffer)
+	WeightDecay(q num.Queue, decay float32)
+	UpdateParams(q num.Queue, opt Optimiser)
 	Copy(q num.Queue, layer Layer)
 	Export(q num.Queue) []uint32
 	Import(q num.Queue, vec []uint32)
@@ -306,12 +308,12 @@ func (l *linear) OutShape() []int { return []int{l.Nout, l.inShape[1]} }
 
 func (l *linear) BpropData() bool { return l.bpropData }
 
-func (l *linear) Init(q num.Queue, inShape []int, opts num.LayerOpts, seed int64) (workSize, inSize, weights int) {
+func (l *linear) Init(q num.Queue, inShape []int, opts num.LayerOpts, seed int64, cfg *Config) (workSize, inSize int) {
 	if len(inShape) != 2 {
 		panic("Linear: expect 2 dimensional input")
 	}
 	l.inShape = inShape
-	l.paramBase = newParams(q, []int{inShape[0], l.Nout}, []int{l.Nout}, opts&num.MomentumUpdate != 0)
+	l.paramBase = newParams(q, []int{inShape[0], l.Nout}, []int{l.Nout}, cfg)
 	l.dst = q.NewArray(num.Float32, l.Nout, inShape[1])
 	workSize = inShape[1] * l.Nout
 	if opts&num.BpropData != 0 {
@@ -319,7 +321,6 @@ func (l *linear) Init(q num.Queue, inShape []int, opts num.LayerOpts, seed int64
 		inSize = num.Prod(inShape)
 		workSize = max(workSize, inShape[1]*inShape[0])
 	}
-	weights = l.NumWeights()
 	return
 }
 
@@ -372,7 +373,7 @@ type convDNN struct {
 	num.ConvLayer
 }
 
-func (l *convDNN) Init(q num.Queue, inShape []int, opts num.LayerOpts, seed int64) (workSize, inSize, weights int) {
+func (l *convDNN) Init(q num.Queue, inShape []int, opts num.LayerOpts, seed int64, cfg *Config) (workSize, inSize int) {
 	if l.NoBias {
 		opts |= num.NoBias
 	}
@@ -380,12 +381,11 @@ func (l *convDNN) Init(q num.Queue, inShape []int, opts num.LayerOpts, seed int6
 	if debug >= 1 {
 		log.Printf("    conv algorithm=%s\n", l.Algorithm())
 	}
-	l.paramBase = newParams(q, l.FilterShape(), l.BiasShape(), opts&num.MomentumUpdate != 0)
+	l.paramBase = newParams(q, l.FilterShape(), l.BiasShape(), cfg)
 	l.SetParamData(l.w, l.b, l.dw, l.db)
 	if opts&num.BpropData != 0 {
 		inSize = num.Prod(inShape)
 	}
-	weights = l.NumWeights()
 	return
 }
 
@@ -405,7 +405,7 @@ type poolDNN struct {
 	num.Layer
 }
 
-func (l *poolDNN) Init(q num.Queue, inShape []int, opts num.LayerOpts, seed int64) (workSize, inSize, weights int) {
+func (l *poolDNN) Init(q num.Queue, inShape []int, opts num.LayerOpts, seed int64, cfg *Config) (workSize, inSize int) {
 	l.Layer = num.NewPoolLayer(q, opts, inShape, l.Size, l.Stride, l.Pad, l.Average)
 	if opts&num.BpropData != 0 {
 		inSize = num.Prod(inShape)
@@ -420,7 +420,7 @@ type activation struct {
 	loss *num.Array
 }
 
-func (l *activation) Init(q num.Queue, inShape []int, opts num.LayerOpts, seed int64) (workSize, inSize, weights int) {
+func (l *activation) Init(q num.Queue, inShape []int, opts num.LayerOpts, seed int64, cfg *Config) (workSize, inSize int) {
 	l.Layer = num.NewActivationLayer(q, l.Atype, inShape)
 	if opts&num.BpropData != 0 {
 		inSize = num.Prod(inShape)
@@ -456,7 +456,7 @@ type dropout struct {
 	num.Layer
 }
 
-func (l *dropout) Init(q num.Queue, inShape []int, opts num.LayerOpts, seed int64) (workSize, inSize, weights int) {
+func (l *dropout) Init(q num.Queue, inShape []int, opts num.LayerOpts, seed int64, cfg *Config) (workSize, inSize int) {
 	l.Layer = num.NewDropoutLayer(q, l.Ratio, inShape, seed)
 	if opts&num.BpropData != 0 {
 		inSize = num.Prod(inShape)
@@ -471,14 +471,13 @@ type batchNorm struct {
 	num.BatchNormLayer
 }
 
-func (l *batchNorm) Init(q num.Queue, inShape []int, opts num.LayerOpts, seed int64) (workSize, inSize, weights int) {
+func (l *batchNorm) Init(q num.Queue, inShape []int, opts num.LayerOpts, seed int64, cfg *Config) (workSize, inSize int) {
 	l.BatchNormLayer = num.NewBatchNormLayer(q, opts, l.AvgFactor, l.Epsilon, inShape)
-	l.paramBase = newParams(q, l.FilterShape(), l.BiasShape(), opts&num.MomentumUpdate != 0)
+	l.paramBase = newParams(q, l.FilterShape(), l.BiasShape(), cfg)
 	l.SetParamData(l.w, l.b, l.dw, l.db)
 	if opts&num.BpropData != 0 {
 		inSize = num.Prod(inShape)
 	}
-	weights = l.NumWeights()
 	return
 }
 
@@ -492,12 +491,16 @@ func (l *batchNorm) InitParams(q num.Queue, init InitType, bias float64, rng *ra
 	}
 }
 
-func (l *batchNorm) UpdateParams(q num.Queue, opt Optimiser, work num.Buffer) {
+func (l *batchNorm) WeightDecay(q num.Queue, decay float32) {
+	if decay != 0 && l.b != nil {
+		q.Call(num.Scale(1-decay, l.w))
+	}
+}
+
+func (l *batchNorm) UpdateParams(q num.Queue, opt Optimiser) {
+	opt.Update(q, l.w, l.dw, l.vw, l.vw2)
 	if l.b != nil {
-		opt.Update(q, true, l.w, l.dw, l.vw, work)
-		opt.Update(q, false, l.b, l.db, l.vb, work)
-	} else {
-		opt.Update(q, false, l.w, l.dw, l.vw, work)
+		opt.Update(q, l.b, l.db, l.vb, l.vb2)
 	}
 }
 
@@ -566,7 +569,7 @@ func (l *flatten) OutShape() []int { return l.outShape }
 
 func (l *flatten) BpropData() bool { return l.bpropData }
 
-func (l *flatten) Init(q num.Queue, inShape []int, opts num.LayerOpts, seed int64) (workSize, inSize, weights int) {
+func (l *flatten) Init(q num.Queue, inShape []int, opts num.LayerOpts, seed int64, cfg *Config) (workSize, inSize int) {
 	l.inShape = inShape
 	l.outShape = []int{num.Prod(l.inShape[:3]), l.inShape[3]}
 	if opts&num.BpropData != 0 {
@@ -627,18 +630,17 @@ func (l *add) OutShape() []int { return l.layers[0][len(l.layers[0])-1].OutShape
 
 func (l *add) BpropData() bool { return l.bpropData }
 
-func (l *add) Init(q num.Queue, inShape []int, opts num.LayerOpts, seed int64) (workSize, inSize, weights int) {
+func (l *add) Init(q num.Queue, inShape []int, opts num.LayerOpts, seed int64, cfg *Config) (workSize, inSize int) {
 	var shape [2][]int
 	for i, group := range l.layers {
 		shape[i] = inShape
 		for j, layer := range group {
-			wSize, iSize, nWeight := layer.Init(q, shape[i], opts, seed)
+			wSize, iSize := layer.Init(q, shape[i], opts, seed, cfg)
 			if debug >= 1 {
 				log.Printf("  add layer %d:%d: %s %v => %v work=%d\n", i, j, layer.Type(), shape[i], layer.OutShape(), wSize)
 			}
 			workSize = max(workSize, wSize)
 			inSize = max(inSize, iSize)
-			weights = max(weights, nWeight)
 			shape[i] = layer.OutShape()
 		}
 	}
@@ -694,23 +696,30 @@ func (l *add) Bprop(q num.Queue, grad, dsrc *num.Array, work [3]num.Buffer) *num
 
 // weight and bias parameters
 type paramBase struct {
-	w, b   *num.Array
-	dw, db *num.Array
-	vw, vb *num.Array
+	w, b     *num.Array
+	dw, db   *num.Array
+	vw, vb   *num.Array
+	vw2, vb2 *num.Array
 }
 
-func newParams(q num.Queue, filterShape, biasShape []int, momentum bool) paramBase {
+func newParams(q num.Queue, filterShape, biasShape []int, cfg *Config) paramBase {
 	var p paramBase
 	p.w = q.NewArray(num.Float32, filterShape...)
 	p.dw = q.NewArray(num.Float32, filterShape...)
-	if momentum {
+	if cfg.Momentum != 0 || cfg.RMSprop || cfg.Adam {
 		p.vw = q.NewArray(num.Float32, filterShape...)
+	}
+	if cfg.Adam {
+		p.vw2 = q.NewArray(num.Float32, filterShape...)
 	}
 	if biasShape != nil {
 		p.b = q.NewArray(num.Float32, biasShape...)
 		p.db = q.NewArray(num.Float32, biasShape...)
-		if momentum {
+		if cfg.Momentum != 0 || cfg.RMSprop || cfg.Adam {
 			p.vb = q.NewArray(num.Float32, biasShape...)
+		}
+		if cfg.Adam {
+			p.vb2 = q.NewArray(num.Float32, biasShape...)
 		}
 	}
 	return p
@@ -733,18 +742,30 @@ func (p paramBase) InitParams(q num.Queue, init InitType, bias float64, rng *ran
 	if p.vw != nil {
 		q.Call(num.Fill(p.vw, 0))
 	}
+	if p.vw2 != nil {
+		q.Call(num.Fill(p.vw2, 0))
+	}
 	if p.b != nil {
 		q.Call(num.Fill(p.b, float32(bias)))
-		if p.vb != nil {
-			q.Call(num.Fill(p.vb, 0))
-		}
+	}
+	if p.vb != nil {
+		q.Call(num.Fill(p.vb, 0))
+	}
+	if p.vb2 != nil {
+		q.Call(num.Fill(p.vb2, 0))
 	}
 }
 
-func (p paramBase) UpdateParams(q num.Queue, opt Optimiser, work num.Buffer) {
-	opt.Update(q, true, p.w, p.dw, p.vw, work)
+func (p paramBase) WeightDecay(q num.Queue, decay float32) {
+	if decay != 0 {
+		q.Call(num.Scale(1-decay, p.w))
+	}
+}
+
+func (p paramBase) UpdateParams(q num.Queue, opt Optimiser) {
+	opt.Update(q, p.w, p.dw, p.vw, p.vw2)
 	if p.b != nil {
-		opt.Update(q, false, p.b, p.db, p.vb, work)
+		opt.Update(q, p.b, p.db, p.vb, p.vb2)
 	}
 }
 
@@ -790,11 +811,11 @@ func (p paramBase) NumWeights() int {
 }
 
 func (p paramBase) memory() int {
-	return num.Bytes(p.w, p.b, p.dw, p.db, p.vw, p.vb)
+	return num.Bytes(p.w, p.b, p.dw, p.db, p.vw, p.vb, p.vw2, p.vb2)
 }
 
 func (p paramBase) release() {
-	num.Release(p.w, p.b, p.dw, p.db, p.vw, p.vb)
+	num.Release(p.w, p.b, p.dw, p.db, p.vw, p.vb, p.vw2, p.vb2)
 }
 
 func maxWeights(layers []Layer) int {

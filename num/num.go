@@ -200,11 +200,50 @@ func Sum(a, total *Array) Function {
 
 // Element wise array multiplication: c = a*b
 func Mul(a, b, c *Array) Function {
+	if a.Dtype != Float32 || b.Dtype != Float32 || c.Dtype != Float32 {
+		panic("Mul: dtype must by Float32")
+	}
 	asize, bsize, csize := Prod(a.Dims), Prod(b.Dims), Prod(c.Dims)
 	if asize != csize || bsize != csize {
 		panic("Mul: arrays must be same size")
 	}
 	return args(C.MUL_ELEM, asize, a.Data(), b.Data(), c.Data())
+}
+
+// Element wise array division: c = a / (b+epsilon)
+func Div(epsilon float32, a, b, c *Array) Function {
+	if a.Dtype != Float32 || b.Dtype != Float32 || c.Dtype != Float32 {
+		panic("Div: dtype must by Float32")
+	}
+	asize, bsize, csize := Prod(a.Dims), Prod(b.Dims), Prod(c.Dims)
+	if asize != csize || bsize != csize {
+		panic("Div: arrays must be same size")
+	}
+	return args(C.DIV_ELEM, asize, epsilon, a.Data(), b.Data(), c.Data())
+}
+
+// Element wise square of array: y <- x**2
+func Square(x, y *Array) Function {
+	if x.Dtype != Float32 || y.Dtype != Float32 {
+		panic("Square: dtype must by Float32")
+	}
+	if !SameShape(x.Dims, y.Dims) {
+		panic("Square: arrays must be same shape")
+	}
+	n := Prod(x.Dims)
+	return args(C.SQUARE, n, x.Data(), y.Data())
+}
+
+// Element wise square root: y <- sqrt(x)
+func Sqrt(x, y *Array) Function {
+	if x.Dtype != Float32 || y.Dtype != Float32 {
+		panic("Sqrt: dtype must by Float32")
+	}
+	if !SameShape(x.Dims, y.Dims) {
+		panic("Sqrt: arrays must be same shape")
+	}
+	n := Prod(x.Dims)
+	return args(C.SQRT, n, x.Data(), y.Data())
 }
 
 // Matrix vector multiplication: y <- alpha * dot(mA,x)

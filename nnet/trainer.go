@@ -3,6 +3,7 @@ package nnet
 import (
 	"fmt"
 	"log"
+	"math"
 	"math/rand"
 	"time"
 
@@ -289,12 +290,7 @@ func TrainEpoch(net *Network, dset *Dataset, epoch int, pred []int32) (batchLoss
 		dset.Shuffle()
 	}
 	learningRate, weightDecay := net.OptimiserParams(epoch, dset.Samples)
-	optimiser := SGD{
-		LearningRate: float32(learningRate),
-		WeightDecay:  float32(weightDecay),
-		Momentum:     float32(net.Momentum),
-		Nesterov:     net.Nesterov,
-	}
+	optimiser := NewOptimiser(net, (epoch-1)*dset.Batches, learningRate)
 	var p []int32
 	if pred != nil {
 		p = make([]int32, dset.Samples)
@@ -329,20 +325,23 @@ func TrainEpoch(net *Network, dset *Dataset, epoch int, pred []int32) (batchLoss
 		// get difference at output and  back propagate gradient and update weights
 		grad := num.NewArray(net.WorkSpace[1], num.Float32, yOneHot.Dims...)
 		q.Call(
-			num.Copy(yPred, grad),
-			num.Axpy(-1, yOneHot, grad),
+			num.Copy(yOneHot, grad),
+			num.Axpy(-1, yPred, grad),
 		)
 		if debug >= 2 {
 			log.Printf("input grad:\n%s", grad.String(q))
 		}
 		Bprop(q, net.Layers, grad, net.WorkSpace)
 		ParamLayers("", net.Layers, func(desc string, l ParamLayer) {
-			l.UpdateParams(q, optimiser, net.WorkSpace[0])
+			l.WeightDecay(q, weightDecay)
+			l.UpdateParams(q, optimiser)
 		})
 		if debug >= 3 || (batch == dset.Batches-1 && debug >= 2) {
 			net.PrintWeights()
 		}
 	}
+	q.Finish()
+	optimiser.Release()
 	if pred != nil {
 		for i, ix := range dset.indexes {
 			pred[ix] = p[i]
@@ -353,45 +352,156 @@ func TrainEpoch(net *Network, dset *Dataset, epoch int, pred []int32) (batchLoss
 
 // Optimiser updates the weights
 type Optimiser interface {
-	Update(q num.Queue, decay bool, x, dx, v *num.Array, work num.Buffer)
+	Update(q num.Queue, x, dx, v, v2 *num.Array)
+	Release()
+}
+
+// Create new optimiser with given config settings.
+func NewOptimiser(net *Network, iter int, eta float32) Optimiser {
+	mom := float32(net.Momentum)
+	d := net.queue.Dev()
+	nw := maxWeights(net.Layers)
+	switch {
+	case net.Adam:
+		return &Adam{LearningRate: eta, Beta1: 0.9, Beta2: 0.999, Epsilon: 1e-8,
+			Iter: iter, Work1: d.NewBuffer(nw), Work2: d.NewBuffer(nw)}
+	case net.RMSprop:
+		return &RMSprop{LearningRate: eta, Gamma: 0.9, Epsilon: 1e-8, Work: d.NewBuffer(nw)}
+	case net.Nesterov:
+		return &Nesterov{LearningRate: eta, Momentum: mom, Work: d.NewBuffer(nw)}
+	case mom != 0:
+		return Momentum{LearningRate: eta, Momentum: mom}
+	default:
+		return SGD{LearningRate: eta}
+	}
 }
 
 // Vanilla stockastic gradient descent
 type SGD struct {
 	LearningRate float32
-	WeightDecay  float32
-	Momentum     float32
-	Nesterov     bool
 }
 
-func (o SGD) Update(q num.Queue, decay bool, x, dx, v *num.Array, work num.Buffer) {
-	if decay && o.WeightDecay != 0 {
-		// X *= 1 - weightDecay
-		q.Call(num.Scale(1-o.WeightDecay, x))
-	}
-	switch {
-	case o.Momentum != 0 && o.Nesterov:
-		// v = momentum*v - learningRate*dx
-		// x += -momentum*vPrev + (1 + momentum)*v
-		vPrev := num.NewArray(work, num.Float32, v.Dims...)
-		q.Call(
-			num.Copy(v, vPrev),
-			num.Scale(o.Momentum, v),
-			num.Axpy(-o.LearningRate, dx, v),
-			num.Axpy(1+o.Momentum, v, x),
-			num.Axpy(-o.Momentum, vPrev, x),
-		)
-	case o.Momentum != 0 && !o.Nesterov:
-		// v = momentum*v - learningRate*dx; x += v
-		q.Call(
-			num.Scale(o.Momentum, v),
-			num.Axpy(-o.LearningRate, dx, v),
-			num.Axpy(1, v, x),
-		)
-	default:
-		// x -= learningRate*dx
-		q.Call(num.Axpy(-o.LearningRate, dx, x))
-	}
+// Update weights using SGD optimiser:
+//  x += learningRate*dx
+func (o SGD) Update(q num.Queue, x, dx, v, v2 *num.Array) {
+	q.Call(num.Axpy(o.LearningRate, dx, x))
+}
+
+func (o SGD) Release() {}
+
+// SGD with momentum
+type Momentum struct {
+	LearningRate float32
+	Momentum     float32
+}
+
+// Update weights using Momentum optimiser:
+//  v = momentum*v + learningRate*dx; x += v
+func (o Momentum) Update(q num.Queue, x, dx, v, v2 *num.Array) {
+	q.Call(
+		num.Scale(o.Momentum, v),
+		num.Axpy(o.LearningRate, dx, v),
+		num.Axpy(1, v, x),
+	)
+}
+
+func (o Momentum) Release() {}
+
+// SGD with Nesterov momentum
+type Nesterov struct {
+	LearningRate float32
+	Momentum     float32
+	Work         num.Buffer
+}
+
+// Update weights using Nesterov optimiser:
+//  v = momentum*v + learningRate*dx
+//  x += -momentum*vPrev + (1 + momentum)*v
+func (o *Nesterov) Update(q num.Queue, x, dx, v, v2 *num.Array) {
+	vPrev := num.NewArray(o.Work, num.Float32, v.Dims...)
+	q.Call(
+		num.Copy(v, vPrev),
+		num.Scale(o.Momentum, v),
+		num.Axpy(o.LearningRate, dx, v),
+		num.Axpy(1+o.Momentum, v, x),
+		num.Axpy(-o.Momentum, vPrev, x),
+	)
+}
+
+func (o *Nesterov) Release() {
+	o.Work.Release()
+}
+
+// RMSprop optimiser with adaptive learning rate
+type RMSprop struct {
+	LearningRate float32
+	Gamma        float32
+	Epsilon      float32
+	Work         num.Buffer
+}
+
+// Update weights using RMSProp optimiser:
+//  v = gamma*v + (1-gamma)*(dx**2)
+//  x += learningRate * dx / (sqrt(v) + epsilon)
+func (o *RMSprop) Update(q num.Queue, x, dx, v, v2 *num.Array) {
+	temp := num.NewArray(o.Work, num.Float32, dx.Dims...)
+	q.Call(
+		num.Scale(o.Gamma, v),
+		num.Square(dx, temp),
+		num.Axpy(1-o.Gamma, temp, v),
+		num.Sqrt(v, temp),
+		num.Div(o.Epsilon, dx, temp, temp),
+		num.Axpy(o.LearningRate, temp, x),
+	)
+}
+
+func (o *RMSprop) Release() {
+	o.Work.Release()
+}
+
+// Adam optimiser with adaptive learning rate
+type Adam struct {
+	LearningRate float32
+	Beta1        float32
+	Beta2        float32
+	Epsilon      float32
+	Iter         int
+	Work1        num.Buffer
+	Work2        num.Buffer
+}
+
+// Update weights using Adam optimiser:
+//  v1 = beta1*v1 + (1-beta1) * dx
+//  v2 = beta2*v2 + (1-beta2) * dx**2
+//  v1_hat = v1 / (1 - beta1**t)
+//  v2_hat = v2 / (1 - beta2**t)
+//  x -= alpha * v1_hat / (sqrt(v2_hat) + epsilon)
+func (o *Adam) Update(q num.Queue, x, dx, v1, v2 *num.Array) {
+	o.Iter++
+	t := float64(o.Iter)
+	beta1 := float64(o.Beta1)
+	beta2 := float64(o.Beta2)
+	temp1 := num.NewArray(o.Work1, num.Float32, dx.Dims...)
+	temp2 := num.NewArray(o.Work2, num.Float32, dx.Dims...)
+	q.Call(
+		num.Scale(o.Beta1, v1),
+		num.Axpy(1-o.Beta1, dx, v1),
+		num.Scale(o.Beta2, v2),
+		num.Square(dx, temp1),
+		num.Axpy(1-o.Beta2, temp1, v2),
+		num.Copy(v1, temp1),
+		num.Scale(float32(1/(1-math.Pow(beta1, t))), temp1),
+		num.Copy(v2, temp2),
+		num.Scale(float32(1/(1-math.Pow(beta2, t))), temp2),
+		num.Sqrt(temp2, temp2),
+		num.Div(o.Epsilon, temp1, temp2, temp1),
+		num.Axpy(o.LearningRate, temp1, x),
+	)
+}
+
+func (o *Adam) Release() {
+	o.Work1.Release()
+	o.Work2.Release()
 }
 
 func min(a, b int) int {

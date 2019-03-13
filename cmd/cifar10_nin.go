@@ -3,6 +3,7 @@ package main
 
 import (
 	"fmt"
+
 	"github.com/jnb666/deepthought2/nnet"
 )
 
@@ -17,12 +18,11 @@ func conv(nfeat, size int) []nnet.ConfigLayer {
 func main() {
 	conf := nnet.Config{
 		DataSet:      "cifar10_2",
-		Eta:          0.01,
+		Adam:         true,
+		Eta:          0.002,
 		EtaDecay:     0.2,
 		EtaDecayStep: 25,
 		Lambda:       50,
-		Momentum:     0.9,
-		Nesterov:     true,
 		MaxEpoch:     200,
 		StopAfter:    2,
 		ExtraEpochs:  4,
@@ -32,7 +32,6 @@ func main() {
 		UseGPU:       true,
 		Normalise:    true,
 		Distort:      true,
-		FastConv:     true,
 		WeightInit:   nnet.GlorotUniform,
 	}
 

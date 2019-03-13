@@ -3,6 +3,7 @@ package main
 
 import (
 	"fmt"
+
 	"github.com/jnb666/deepthought2/nnet"
 )
 
@@ -35,14 +36,16 @@ func main() {
 	err := conf.Save("mnist_cnn2.conf")
 	nnet.CheckErr(err)
 
-	// with image distortion
+	// with image distortion and adam optimser
 	conf.DataSet = "mnist2"
 	conf.Distort = true
+	conf.Adam = true
+	conf.Eta = 0.001
+	conf.TrainBatch = 100
 	conf.MaxEpoch = 40
-	conf.ValidEMA = 15
+	conf.ValidEMA = 10
 	conf.StopAfter = 2
-	conf.ExtraEpochs = 3
-	conf.FastConv = true
+	conf.ExtraEpochs = 1
 	fmt.Println(conf)
 	err = conf.Save("mnist_cnn2d.conf")
 	nnet.CheckErr(err)

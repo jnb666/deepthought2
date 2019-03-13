@@ -3,10 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/jnb666/deepthought2/nnet"
-	"github.com/jnb666/deepthought2/num"
 	"log"
 	"os"
+
+	"github.com/jnb666/deepthought2/nnet"
+	"github.com/jnb666/deepthought2/num"
 )
 
 func predict(q num.Queue, net *nnet.Network, d nnet.Data) {
@@ -39,6 +40,8 @@ func main() {
 	flag.Float64Var(&conf.Lambda, "lambda", conf.Lambda, "weight decay parameter")
 	flag.Float64Var(&conf.Momentum, "momentum", conf.Momentum, "momentum")
 	flag.BoolVar(&conf.Nesterov, "nesterov", conf.Nesterov, "nesterov momentum")
+	flag.BoolVar(&conf.RMSprop, "rmsprop", conf.RMSprop, "use rmsprop optimiser")
+	flag.BoolVar(&conf.Adam, "adam", conf.Adam, "use adam optimiser")
 	flag.Int64Var(&conf.RandSeed, "seed", conf.RandSeed, "random number seed")
 	flag.IntVar(&conf.MaxEpoch, "epochs", conf.MaxEpoch, "max epochs")
 	flag.IntVar(&conf.MaxSamples, "samples", conf.MaxSamples, "max samples")
@@ -50,7 +53,6 @@ func main() {
 	flag.BoolVar(&conf.UseGPU, "gpu", conf.UseGPU, "use Cuda GPU acceleration")
 	flag.BoolVar(&conf.Normalise, "norm", conf.Normalise, "normalise input data")
 	flag.BoolVar(&conf.Distort, "distort", conf.Distort, "apply image distortion")
-	flag.BoolVar(&conf.FastConv, "fast", conf.FastConv, "use fastest cudnn algo")
 	flag.Parse()
 
 	dev := num.NewDevice(conf.UseGPU)

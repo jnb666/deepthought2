@@ -28,6 +28,8 @@ type Config struct {
 	Lambda       float64
 	Momentum     float64
 	Nesterov     bool
+	RMSprop      bool
+	Adam         bool
 	Bias         float64
 	WeightInit   InitType
 	Shuffle      bool
@@ -47,7 +49,6 @@ type Config struct {
 	RandSeed     int64
 	DebugLevel   int
 	UseGPU       bool
-	FastConv     bool
 	Profile      bool
 	MemProfile   bool
 	Layers       []LayerConfig
@@ -84,7 +85,7 @@ func (c Config) DatasetConfig(test bool) DatasetOptions {
 }
 
 // Get learning rate and weight decay
-func (c Config) OptimiserParams(epoch, samples int) (learningRate, weightDecay float64) {
+func (c Config) OptimiserParams(epoch, samples int) (learningRate, weightDecay float32) {
 	if c.EtaDecay > 0 && c.EtaDecayStep > 0 {
 		c.Eta *= math.Pow(c.EtaDecay, float64((epoch-1)/c.EtaDecayStep))
 	}
@@ -92,7 +93,7 @@ func (c Config) OptimiserParams(epoch, samples int) (learningRate, weightDecay f
 	if epoch == 1 || (c.EtaDecay > 0 && c.EtaDecayStep > 0 && (epoch-1)%c.EtaDecayStep == 0) {
 		log.Printf("learning rate=%.4g weight decay=%.4g\n", c.Eta, decay)
 	}
-	return c.Eta, decay
+	return float32(c.Eta), float32(decay)
 }
 
 func (c Config) Copy() Config {

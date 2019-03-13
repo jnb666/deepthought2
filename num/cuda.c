@@ -49,6 +49,12 @@ void callGPU(Args* a, Stream* s, cublasStatus_t* blasStatus, cudnnStatus_t* dnnS
 	case AXPY:
 		*blasStatus = cublasSaxpy(s->blas, a->i[0], &(a->f[0]), FP(a->p[0]), 1, FP(a->p[1]), 1); 
 		break;
+	case SQUARE:
+		cuda_square(s->stream, FP(a->p[0]), FP(a->p[1]), a->i[0]);
+		break;
+	case SQRT:
+		cuda_sqrt(s->stream, FP(a->p[0]), FP(a->p[1]), a->i[0]);
+		break;
 	case TRANS:
 		*blasStatus = cublasSgeam(s->blas, CUBLAS_OP_T, CUBLAS_OP_N, a->i[1], a->i[0], 
 			&one, FP(a->p[0]), a->i[0], &zero, FP(a->p[1]), a->i[1], FP(a->p[1]), a->i[1]);
@@ -63,6 +69,9 @@ void callGPU(Args* a, Stream* s, cublasStatus_t* blasStatus, cudnnStatus_t* dnnS
 		break;
 	case MUL_ELEM:
 		cuda_mul_elem(s->stream, FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0]);
+		break;
+	case DIV_ELEM:
+		cuda_div_elem(s->stream, FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->f[0], a->i[0]);
 		break;
 	case ONEHOT:
 		cuda_onehot(s->stream, IP(a->p[0]), FP(a->p[1]), a->i[0], a->i[1]);

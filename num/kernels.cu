@@ -64,7 +64,22 @@ __global__ void neq(int* a, int* b, int* res, int n) {
 
 __global__ void mul_elem(float* a, float* b, float* res, int n) {
 	int i = blockIdx.x*blockDim.x + threadIdx.x;
-	if (i < n) res[i] = a[i]*b[i];	
+	if (i < n) res[i] = a[i]*b[i];
+}
+
+__global__ void div_elem(float* a, float* b, float* res, float eps, int n) {
+	int i = blockIdx.x*blockDim.x + threadIdx.x;
+	if (i < n) res[i] = a[i] / (b[i]+eps);
+}
+
+__global__ void square(float* a, float* res, int n) {
+	int i = blockIdx.x*blockDim.x + threadIdx.x;
+	if (i < n) res[i] = a[i]*a[i];
+}
+
+__global__ void square_root(float* a, float* res, int n) {
+	int i = blockIdx.x*blockDim.x + threadIdx.x;
+	if (i < n) res[i] = sqrtf(a[i]);
 }
 
 __global__ void onehot_1(int* y, float* y_one_hot, int n) {
@@ -180,8 +195,20 @@ void cuda_neq(cudaStream_t stream, int* a, int* b, int* res, int n) {
 	neq<<<(n+BLOCK-1)/BLOCK, BLOCK>>>(a, b, res, n);
 }
 
+void cuda_square(cudaStream_t stream, float* x, float* y, int n) {
+	square<<<(n+BLOCK-1)/BLOCK, BLOCK>>>(x, y, n);
+}
+
+void cuda_sqrt(cudaStream_t stream, float* x, float* y, int n) {
+	square_root<<<(n+BLOCK-1)/BLOCK, BLOCK>>>(x, y, n);
+}
+
 void cuda_mul_elem(cudaStream_t stream, float* a, float* b, float* res, int n) {
 	mul_elem<<<(n+BLOCK-1)/BLOCK, BLOCK>>>(a, b, res, n);
+}
+
+void cuda_div_elem(cudaStream_t stream, float* a, float* b, float* res, float eps, int n) {
+	div_elem<<<(n+BLOCK-1)/BLOCK, BLOCK>>>(a, b, res, eps, n);
 }
 
 void cuda_onehot(cudaStream_t stream, int* y, float* y_one_hot, int n, int classes) {

@@ -7,26 +7,25 @@ import "C"
 
 import (
 	"fmt"
-	"github.com/jnb666/deepthought2/num/cuda"
-	"github.com/jnb666/deepthought2/num/mkl"
 	"math/rand"
 	"unsafe"
+
+	"github.com/jnb666/deepthought2/num/cuda"
+	"github.com/jnb666/deepthought2/num/mkl"
 )
 
 type LayerOpts int
 
 const (
-	FpropOnly      LayerOpts = 0
-	NoBias         LayerOpts = 1
-	BpropData      LayerOpts = 2
-	BpropWeights   LayerOpts = 4
-	MomentumUpdate LayerOpts = 8
-	FastConvLayer  LayerOpts = 16
+	FpropOnly    LayerOpts = 0
+	NoBias       LayerOpts = 1
+	BpropData    LayerOpts = 2
+	BpropWeights LayerOpts = 4
 )
 
 func (l LayerOpts) String() string {
 	s := "Fprop"
-	for i, name := range []string{"NoBias", "BpropData", "BpropWeights", "Momentum"} {
+	for i, name := range []string{"NoBias", "BpropData", "BpropWeights"} {
 		if l&(1<<uint(i)) != 0 {
 			s += "|" + name
 		}
@@ -79,7 +78,7 @@ func NewConvLayer(q Queue, opts LayerOpts, inShape []int, nFeats, size, stride i
 		return newLayerMKL(layer, opts&BpropData != 0), 0
 	case gpuDevice:
 		layer := cuda.Convolution(n, c, h, w, nFeats, size, stride, pad, opts&NoBias != 0)
-		workSize := layer.Init(q.(*gpuQueue).stream, opts&BpropWeights != 0, opts&BpropData != 0, opts&FastConvLayer != 0)
+		workSize := layer.Init(q.(*gpuQueue).stream, opts&BpropWeights != 0, opts&BpropData != 0)
 		l := &convCuda{
 			ConvLayer: layer,
 			layerBase: newLayerBase(d, layer.OutShape()),

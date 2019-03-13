@@ -2,9 +2,10 @@ package num
 
 import (
 	"fmt"
+	"unsafe"
+
 	"github.com/jnb666/deepthought2/num/cuda"
 	"github.com/jnb666/deepthought2/num/mkl"
-	"unsafe"
 )
 
 // Parameters for array printing

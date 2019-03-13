@@ -1,10 +1,11 @@
 package nnet
 
 import (
-	"github.com/jnb666/deepthought2/num"
 	"math/rand"
 	"testing"
 	"time"
+
+	"github.com/jnb666/deepthought2/num"
 )
 
 const (
@@ -58,14 +59,14 @@ func getInputs(t *testing.T, q num.Queue) (input, W, B *num.Array) {
 
 func setupNetwork(q num.Queue, W, B *num.Array) (l1, l2 Layer, dW, dB *num.Array, temp [3]num.Buffer) {
 	lin := &linear{Linear: Linear{Nout: nOut}}
-	work1, _, _ := lin.Init(q, []int{nIn, batch}, num.BpropWeights, 0)
+	work1, _ := lin.Init(q, []int{nIn, batch}, num.BpropWeights, 0, &defaultConfig)
 	layerW, layerB := lin.Params()
 	q.Call(
 		num.Copy(W, layerW),
 		num.Copy(B, layerB),
 	)
 	relu := &activation{Activation: Activation{Atype: "relu"}}
-	work2, _, _ := relu.Init(q, []int{nOut, batch}, num.BpropData, 0)
+	work2, _ := relu.Init(q, []int{nOut, batch}, num.BpropData, 0, &defaultConfig)
 	temp[0] = q.NewBuffer(max(work1, work2))
 	return lin, relu, lin.dw, lin.db, temp
 }
@@ -170,10 +171,10 @@ func TestDropout(t *testing.T) {
 		t.Logf("input\n%s\n", in.String(q))
 
 		dropout1 := &dropout{Dropout: Dropout{Ratio: 0.5}}
-		dropout1.Init(q, in.Dims, num.BpropData, seed)
+		dropout1.Init(q, in.Dims, num.BpropData, seed, &defaultConfig)
 
 		dropout2 := &dropout{Dropout: Dropout{Ratio: 0.5}}
-		dropout2.Init(q, in.Dims, num.BpropData, seed)
+		dropout2.Init(q, in.Dims, num.BpropData, seed, &defaultConfig)
 
 		out1 := dropout1.Fprop(q, in, nil, true)
 		t.Logf("fprop output 1\n%s\n", out1.String(q))

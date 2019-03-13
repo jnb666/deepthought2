@@ -88,31 +88,26 @@ func Convolution(n, c, h, w, nFeats, filtSize, stride int, padding, noBias bool)
 	return l
 }
 
-// Initialise the layer, returns work space size needed, if fast flag is set then do an exhaustive seach for fastest algo
-func (l *ConvLayer) Init(s *Stream, bpropWeights, bpropData, fast bool) int {
+// Initialise the layer, returns work space size needed.
+func (l *ConvLayer) Init(s *Stream, bpropWeights, bpropData bool) int {
 	size := [3]C.size_t{}
-	fwdAlgo := l.getFwdAlgo(s, fast)
+	fwdAlgo := l.getFwdAlgo(s)
 	chkDnn(C.cudnnGetConvolutionForwardWorkspaceSize(s.cudnn, l.Src.desc, l.Filter.desc, l.desc, l.Dst.desc, fwdAlgo, &size[FwdAlgo]))
 	l.Algo[FwdAlgo] = int(fwdAlgo)
 	if bpropWeights {
-		bFiltAlgo := l.getBwdFilterAlgo(s, fast)
+		bFiltAlgo := l.getBwdFilterAlgo(s)
 		chkDnn(C.cudnnGetConvolutionBackwardFilterWorkspaceSize(s.cudnn, l.Src.desc, l.Dst.desc, l.desc, l.Filter.desc, bFiltAlgo, &size[BwdFilterAlgo]))
 		l.Algo[BwdFilterAlgo] = int(BwdFilterAlgo)
 	}
 	if bpropData {
-		bDataAlgo := l.getBwdDataAlgo(s, fast)
+		bDataAlgo := l.getBwdDataAlgo(s)
 		chkDnn(C.cudnnGetConvolutionBackwardDataWorkspaceSize(s.cudnn, l.Filter.desc, l.Dst.desc, l.desc, l.Src.desc, bDataAlgo, &size[BwdDataAlgo]))
 		l.Algo[BwdDataAlgo] = int(bDataAlgo)
 	}
 	return maxWords(size[:])
 }
 
-func (l *ConvLayer) getFwdAlgo(s *Stream, fast bool) (algo C.cudnnConvolutionFwdAlgo_t) {
-	if !fast {
-		chkDnn(C.cudnnGetConvolutionForwardAlgorithm(s.cudnn, l.Src.desc, l.Filter.desc, l.desc, l.Dst.desc,
-			C.CUDNN_CONVOLUTION_FWD_PREFER_FASTEST, 0, &algo))
-		return
-	}
+func (l *ConvLayer) getFwdAlgo(s *Stream) (algo C.cudnnConvolutionFwdAlgo_t) {
 	var count C.int
 	var perf [C.CUDNN_CONVOLUTION_FWD_ALGO_COUNT]C.cudnnConvolutionFwdAlgoPerf_t
 	chkDnn(C.cudnnFindConvolutionForwardAlgorithm(s.cudnn, l.Src.desc, l.Filter.desc, l.desc, l.Dst.desc,
@@ -121,12 +116,7 @@ func (l *ConvLayer) getFwdAlgo(s *Stream, fast bool) (algo C.cudnnConvolutionFwd
 	return perf[0].algo
 }
 
-func (l *ConvLayer) getBwdFilterAlgo(s *Stream, fast bool) (algo C.cudnnConvolutionBwdFilterAlgo_t) {
-	if !fast {
-		chkDnn(C.cudnnGetConvolutionBackwardFilterAlgorithm(s.cudnn, l.Src.desc, l.Dst.desc, l.desc, l.Filter.desc,
-			C.CUDNN_CONVOLUTION_BWD_FILTER_PREFER_FASTEST, 0, &algo))
-		return
-	}
+func (l *ConvLayer) getBwdFilterAlgo(s *Stream) (algo C.cudnnConvolutionBwdFilterAlgo_t) {
 	var count C.int
 	var perf [C.CUDNN_CONVOLUTION_BWD_FILTER_ALGO_COUNT]C.cudnnConvolutionBwdFilterAlgoPerf_t
 	chkDnn(C.cudnnFindConvolutionBackwardFilterAlgorithm(s.cudnn, l.Src.desc, l.Dst.desc, l.desc, l.Filter.desc,
@@ -135,12 +125,7 @@ func (l *ConvLayer) getBwdFilterAlgo(s *Stream, fast bool) (algo C.cudnnConvolut
 	return perf[0].algo
 }
 
-func (l *ConvLayer) getBwdDataAlgo(s *Stream, fast bool) (algo C.cudnnConvolutionBwdDataAlgo_t) {
-	if !fast {
-		chkDnn(C.cudnnGetConvolutionBackwardDataAlgorithm(s.cudnn, l.Filter.desc, l.Dst.desc, l.desc, l.Src.desc,
-			C.CUDNN_CONVOLUTION_BWD_DATA_PREFER_FASTEST, 0, &algo))
-		return
-	}
+func (l *ConvLayer) getBwdDataAlgo(s *Stream) (algo C.cudnnConvolutionBwdDataAlgo_t) {
 	var count C.int
 	var perf [C.CUDNN_CONVOLUTION_BWD_DATA_ALGO_COUNT]C.cudnnConvolutionBwdDataAlgoPerf_t
 	chkDnn(C.cudnnFindConvolutionBackwardDataAlgorithm(s.cudnn, l.Filter.desc, l.Dst.desc, l.desc, l.Src.desc,

@@ -43,7 +43,19 @@ void array_sum_i(int* a, int n, float* res) {
 }
 
 void array_mul(float* a, float* b, float *res, int n) {
-	for (int i = 0; i < n; ++i) res[i] = a[i]*b[i];	
+	for (int i = 0; i < n; ++i) res[i] = a[i]*b[i];
+}
+
+void array_div(float* a, float* b, float *res, float eps, int n) {
+	for (int i = 0; i < n; ++i) res[i] = a[i] / (b[i]+eps);
+}
+
+void array_square(float* x, float* y, int n) {
+	for (int i = 0; i < n; ++i) y[i] = x[i]*x[i];
+}
+
+void array_sqrt(float* x, float* y, int n) {
+	for (int i = 0; i < n; ++i) y[i] = sqrtf(x[i]);
 }
 
 void onehot(int* y, float* y_one_hot, int n, int classes) {
@@ -199,6 +211,12 @@ void callCPU(Args* a, dnnError_t* error) {
 	case AXPY:
 		cblas_saxpy(a->i[0], a->f[0], FP(a->p[0]), 1, FP(a->p[1]), 1);
 		break;
+	case SQUARE:
+		array_square(FP(a->p[0]), FP(a->p[1]), a->i[0]);
+		break;
+	case SQRT:
+		array_sqrt(FP(a->p[0]), FP(a->p[1]), a->i[0]);
+		break;
 	case TRANS:
 		mkl_somatcopy('c', 't', a->i[0], a->i[1], 1.0f, FP(a->p[0]), 
 			a->i[0], FP(a->p[1]), a->i[1]);
@@ -213,6 +231,9 @@ void callCPU(Args* a, dnnError_t* error) {
 		break;
 	case MUL_ELEM:
 		array_mul(FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0]);
+		break;
+	case DIV_ELEM:
+		array_div(FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->f[0], a->i[0]);
 		break;
 	case SIGMOID:
 		sigmoid_a(FP(a->p[0]), FP(a->p[1]), a->i[0]);

@@ -246,10 +246,12 @@ func TestMul(t *testing.T) {
 		x := dev.NewArray(Float32, 2, 3)
 		y := dev.NewArrayLike(x)
 		z := dev.NewArrayLike(x)
+		orig := []float32{1, 2, 3, 4, 5, 6}
+		scale := []float32{0.5, 0.1, 0.1, 0.1, 0.1, 0.5}
 		res := make([]float32, 6)
 		q.Call(
-			Write(x, []float32{1, 2, 3, 4, 5, 6}),
-			Write(y, []float32{0.5, 0.1, 0.1, 0.1, 0.1, 0.5}),
+			Write(x, orig),
+			Write(y, scale),
 			Mul(x, y, z),
 			Read(z, res),
 		).Finish()
@@ -257,6 +259,43 @@ func TestMul(t *testing.T) {
 		expect := []float32{0.5, 0.2, 0.3, 0.4, 0.5, 3}
 		if !reflect.DeepEqual(res, expect) {
 			t.Error("got", res, "expect", expect)
+		}
+		q.Call(
+			Fill(x, 0),
+			Div(0, z, y, x),
+			Read(x, res),
+		).Finish()
+		t.Logf("div x=\n%s", x.String(q))
+		if !reflect.DeepEqual(res, orig) {
+			t.Error("got", res, "expect", orig)
+		}
+	}
+}
+
+func TestSquare(t *testing.T) {
+	for _, dev := range devices {
+		q := dev.NewQueue()
+		x := dev.NewArray(Float32, 2, 3)
+		y := dev.NewArrayLike(x)
+		orig := []float32{1, 2, 3, 4, 5, 0.5}
+		res := make([]float32, 6)
+		q.Call(
+			Write(x, orig),
+			Square(x, y),
+			Read(y, res),
+		).Finish()
+		t.Logf("square y=\n%s", y.String(q))
+		expect := []float32{1, 4, 9, 16, 25, 0.25}
+		if !reflect.DeepEqual(res, expect) {
+			t.Error("got", res, "expect", expect)
+		}
+		q.Call(
+			Sqrt(y, x),
+			Read(x, res),
+		).Finish()
+		t.Logf("sqrt x=\n%s", x.String(q))
+		if !reflect.DeepEqual(res, orig) {
+			t.Error("got", res, "expect", orig)
 		}
 	}
 }

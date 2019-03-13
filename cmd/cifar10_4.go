@@ -3,22 +3,23 @@ package main
 
 import (
 	"fmt"
+
 	"github.com/jnb666/deepthought2/nnet"
 )
 
 func main() {
 	conf := nnet.Config{
 		DataSet:    "cifar10",
-		Eta:        0.05,
+		Eta:        0.001,
 		Lambda:     0.5,
 		MaxEpoch:   100,
 		MaxSeconds: 180,
-		TrainBatch: 40,
+		TrainBatch: 100,
+		Adam:       true,
 		Shuffle:    true,
 		Distort:    true,
 		UseGPU:     true,
 		Normalise:  true,
-		FastConv:   true,
 		WeightInit: nnet.GlorotUniform,
 	}.AddLayers(
 		nnet.Conv{Nfeats: 32, Size: 3, Pad: true},
