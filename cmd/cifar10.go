@@ -3,13 +3,15 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"github.com/jnb666/deepthought2/img"
-	"github.com/jnb666/deepthought2/nnet"
 	"image/color"
 	"io"
+	"log"
 	"os"
 	"path"
 	"strings"
+
+	"github.com/jnb666/deepthought2/img"
+	"github.com/jnb666/deepthought2/nnet"
 )
 
 const (
@@ -19,9 +21,13 @@ const (
 	imageSize   = imageWidth * imageHeight
 	imageBytes  = imageSize*3 + 1
 	testSplit   = 5000
+	urlBase     = "https://www.cs.toronto.edu/~kriz/"
+	archiveName = "cifar-10-binary.tar.gz"
 )
 
 func main() {
+	log.SetFlags(0)
+
 	classes, err := readClasses("batches.meta.txt")
 	nnet.CheckErr(err)
 
@@ -58,8 +64,7 @@ func main() {
 
 // load batch of cifar-10 images and labels in bindary format
 func loadBatch(name string, classes []string) (*img.Data, error) {
-	pathName := path.Join(nnet.DataDir, "cifar-10", name)
-	f, err := os.Open(pathName)
+	f, err := download(name)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +78,7 @@ func loadBatch(name string, classes []string) (*img.Data, error) {
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("error reading from %s: %s", pathName, err)
+			return nil, fmt.Errorf("error reading from %s: %s", name, err)
 		}
 		if n != imageBytes {
 			return nil, fmt.Errorf("incomplete read: expected %d bytes got %d", imageBytes, n)
@@ -93,8 +98,7 @@ func loadBatch(name string, classes []string) (*img.Data, error) {
 
 // load class descriptions from file
 func readClasses(name string) ([]string, error) {
-	pathName := path.Join(nnet.DataDir, "cifar-10", name)
-	f, err := os.Open(pathName)
+	f, err := download(name)
 	if err != nil {
 		return nil, err
 	}
@@ -108,4 +112,15 @@ func readClasses(name string) ([]string, error) {
 		}
 	}
 	return classes, s.Err()
+}
+
+// download and unpack archive is not already on disk.
+func download(name string) (*os.File, error) {
+	dir := path.Join(nnet.DataDir, "cifar-10")
+	pathName := path.Join(dir, name)
+	file, err := os.Open(pathName)
+	if err != nil && nnet.Download(urlBase+archiveName, dir) == nil {
+		file, err = os.Open(pathName)
+	}
+	return file, err
 }

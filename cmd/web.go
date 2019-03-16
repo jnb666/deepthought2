@@ -1,12 +1,16 @@
 package main
 
 import (
+	"flag"
 	"fmt"
+	"net/http"
+	"os"
+	"path"
+	"strconv"
+
 	"github.com/gorilla/mux"
 	"github.com/jnb666/deepthought2/nnet"
 	"github.com/jnb666/deepthought2/web"
-	"net/http"
-	"os"
 )
 
 const (
@@ -21,13 +25,21 @@ func main() {
 		fmt.Println("usage: web [opts] <model>")
 		os.Exit(1)
 	}
+	port := 8080
+	ssl := false
+	auth := false
+	flag.IntVar(&port, "port", port, "web server port number")
+	flag.BoolVar(&ssl, "ssl", ssl, "use https transport")
+	flag.BoolVar(&auth, "auth", auth, "authenticate using pam")
+	flag.Parse()
+
 	model := os.Args[len(os.Args)-1]
 	err := nnet.InitLogger(model, 0)
 	nnet.CheckErr(err)
 	net, err := web.NewNetwork(model)
 	nnet.CheckErr(err)
 
-	t, err := web.NewTemplates()
+	t, err := web.NewTemplates(ssl)
 	nnet.CheckErr(err)
 
 	t.AddMenuItem("", "view")
@@ -82,6 +94,20 @@ func main() {
 	r.Handle("/favicon.ico", http.NotFoundHandler())
 	r.NotFoundHandler = t.ErrorHandler(http.StatusNotFound, web.ErrNotFound)
 
-	fmt.Println("serving web page at http://localhost:8080")
-	http.ListenAndServe(":8080", r)
+	if auth {
+		auth := web.NewAuthMiddleware()
+		r.Use(auth.Middleware)
+	}
+	host, err := os.Hostname()
+	nnet.CheckErr(err)
+	bind := ":" + strconv.Itoa(port)
+	base := "//" + host + bind
+	if ssl {
+		fmt.Println("serving web page at https:" + base)
+		err = http.ListenAndServeTLS(bind, path.Join(web.AssetDir, "server.crt"), path.Join(web.AssetDir, "server.key"), r)
+	} else {
+		fmt.Println("serving web page at http:" + base)
+		err = http.ListenAndServe(bind, r)
+	}
+	nnet.CheckErr(err)
 }

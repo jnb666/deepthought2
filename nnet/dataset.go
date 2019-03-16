@@ -1,19 +1,24 @@
 package nnet
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"encoding/gob"
 	"fmt"
-	"github.com/jnb666/deepthought2/img"
-	"github.com/jnb666/deepthought2/num"
 	"io"
 	"log"
 	"math/rand"
+	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jnb666/deepthought2/img"
+	"github.com/jnb666/deepthought2/num"
 )
 
 const headerBytes = 16
@@ -316,4 +321,84 @@ func (d *data) Encode(w io.Writer) error {
 
 func (d *data) Decode(r io.Reader) error {
 	return gob.NewDecoder(r).Decode(d)
+}
+
+// Download data from url and save it to directory dir.
+// if file suffix is .gz then gunzip the data.
+// If file type is .tar then untar the files.
+func Download(rawurl, dir string) error {
+	log.Println("download", rawurl)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		if err = os.Mkdir(dir, 0775); err != nil {
+			return err
+		}
+	}
+	uri, err := url.Parse(rawurl)
+	if err != nil {
+		return err
+	}
+	fileName := path.Base(uri.Path)
+	unzip := false
+	if strings.HasSuffix(fileName, ".gz") {
+		unzip = true
+		fileName = fileName[:len(fileName)-3]
+	}
+	if strings.HasSuffix(fileName, ".tar") {
+		err = download(rawurl, unzip, func(r io.Reader) error {
+			archive := tar.NewReader(r)
+			for {
+				head, err := archive.Next()
+				if err == io.EOF {
+					return nil
+				}
+				if err != nil {
+					return err
+				}
+				info := head.FileInfo()
+				if info.IsDir() {
+					continue
+				}
+				log.Println("unpack", info.Name())
+				file, err := os.Create(path.Join(dir, info.Name()))
+				if err != nil {
+					return err
+				}
+				if _, err = io.Copy(file, archive); err != nil {
+					return err
+				}
+				file.Close()
+			}
+		})
+
+	} else {
+		file, err := os.Create(path.Join(dir, fileName))
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		err = download(rawurl, unzip, func(r io.Reader) error {
+			_, err := io.Copy(file, r)
+			return err
+		})
+	}
+	return err
+}
+
+func download(rawurl string, unzip bool, fn func(io.Reader) error) error {
+	resp, err := http.Get(rawurl)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	r := resp.Body
+	if unzip {
+		r, err = gzip.NewReader(r)
+		if err != nil {
+			return err
+		}
+	}
+	if err = fn(r); err == nil {
+		err = r.Close()
+	}
+	return err
 }

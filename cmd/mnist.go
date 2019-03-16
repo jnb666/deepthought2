@@ -2,8 +2,8 @@ package main
 
 import (
 	"encoding/binary"
-	"fmt"
 	"image/color"
+	"log"
 	"os"
 	"path"
 
@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	epochs = 25
-	split  = 50000
+	epochs  = 25
+	split   = 50000
+	urlBase = "http://yann.lecun.com/exdb/mnist/"
 )
 
 var classes = []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
@@ -23,6 +24,8 @@ type labelHeader struct{ Magic, Num uint32 }
 type imageHeader struct{ Magic, Num, Width, Height uint32 }
 
 func main() {
+	log.SetFlags(0)
+
 	// mnist dataset is 60000 train + 10000 test images
 	train, err := loadData("train-images-idx3-ubyte", "train-labels-idx1-ubyte")
 	nnet.CheckErr(err)
@@ -62,23 +65,22 @@ func loadData(imageFile, labelFile string) (*img.Data, error) {
 }
 
 func readImages(name string) (images []*img.Image, err error) {
-	var f *os.File
-	pathName := path.Join(nnet.DataDir, "mnist", name)
-	if f, err = os.Open(pathName); err != nil {
-		return
+	f, err := download(name)
+	if err != nil {
+		return nil, err
 	}
 	defer f.Close()
 	var head imageHeader
 	if err = binary.Read(f, binary.BigEndian, &head); err != nil {
-		return
+		return nil, err
 	}
 	n, h, w := int(head.Num), int(head.Height), int(head.Width)
-	fmt.Printf("read %d %dx%d images from %s\n", n, h, w, name)
+	log.Printf("read %d %dx%d images from %s", n, h, w, name)
 	images = make([]*img.Image, n)
 	pixels := make([]uint8, w*h)
 	for i := range images {
 		if _, err = f.Read(pixels); err != nil {
-			return
+			return nil, err
 		}
 		img := img.NewImage(w, h, 1)
 		for j, pix := range pixels {
@@ -86,28 +88,37 @@ func readImages(name string) (images []*img.Image, err error) {
 		}
 		images[i] = img
 	}
-	return
+	return images, nil
 }
 
 func readLabels(name string) (labels []int32, err error) {
-	var f *os.File
-	pathName := path.Join(nnet.DataDir, "mnist", name)
-	if f, err = os.Open(pathName); err != nil {
-		return
+	f, err := download(name)
+	if err != nil {
+		return nil, err
 	}
 	defer f.Close()
 	var head labelHeader
 	if err = binary.Read(f, binary.BigEndian, &head); err != nil {
-		return
+		return nil, err
 	}
-	fmt.Printf("read %d labels from %s\n", head.Num, name)
+	log.Printf("read %d labels from %s", head.Num, name)
 	bytes := make([]byte, head.Num)
 	if _, err = f.Read(bytes); err != nil {
-		return
+		return nil, err
 	}
 	labels = make([]int32, head.Num)
 	for i, label := range bytes {
 		labels[i] = int32(label)
 	}
-	return
+	return labels, nil
+}
+
+func download(name string) (*os.File, error) {
+	dir := path.Join(nnet.DataDir, "mnist")
+	pathName := path.Join(dir, name)
+	file, err := os.Open(pathName)
+	if err != nil && nnet.Download(urlBase+name+".gz", dir) == nil {
+		file, err = os.Open(pathName)
+	}
+	return file, err
 }

@@ -5,3 +5,5 @@ STATS
 *.a
 cmd/train
 cmd/web
+assets/server.key
+assets/server.crt

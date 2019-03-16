@@ -21,6 +21,7 @@ type Templates struct {
 	Options  []Link
 	Dropdown []Link
 	Toplevel bool
+	WSRoot   string
 	Heading  template.HTML
 	Frame    string
 	Error    string
@@ -34,9 +35,12 @@ type Link struct {
 }
 
 // Load and parse templates and initialise main menu
-func NewTemplates() (*Templates, error) {
+func NewTemplates(ssl bool) (*Templates, error) {
 	var err error
-	t := &Templates{Menu: []Link{}, Options: []Link{}}
+	t := &Templates{Menu: []Link{}, Options: []Link{}, WSRoot: "ws://"}
+	if ssl {
+		t.WSRoot = "wss://"
+	}
 	t.Template, err = template.ParseGlob(AssetDir + "/*.html")
 	return t, err
 }

@@ -6,7 +6,6 @@ import (
 	"log"
 	"math"
 	"math/rand"
-	"os"
 	"strconv"
 	"time"
 
@@ -452,8 +451,7 @@ func SetSeed(seed int64) *rand.Rand {
 // Exit in case of error
 func CheckErr(err error) {
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		log.Fatal(err)
 	}
 }
 
