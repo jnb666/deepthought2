@@ -21,6 +21,10 @@ void cuda_mul_elem(cudaStream_t stream, float* a, float* b, float* res, int n);
 
 void cuda_div_elem(cudaStream_t stream, float* a, float* b, float* res, float eps, int n);
 
+void cuda_min(cudaStream_t stream, float* a, float* b, float* res, int n);
+
+void cuda_max(cudaStream_t stream, float* a, float* b, float* res, int n);
+
 void cuda_square(cudaStream_t stream, float* x, float* y, int n);
 
 void cuda_sqrt(cudaStream_t stream, float* x, float* y, int n);

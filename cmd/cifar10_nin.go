@@ -18,11 +18,12 @@ func conv(nfeat, size int) []nnet.ConfigLayer {
 func main() {
 	conf := nnet.Config{
 		DataSet:      "cifar10_2",
-		Adam:         true,
-		Eta:          0.002,
+		Optimiser:    nnet.NesterovOpt,
+		Eta:          0.01,
 		EtaDecay:     0.2,
 		EtaDecayStep: 25,
 		Lambda:       50,
+		Momentum:     0.9,
 		MaxEpoch:     200,
 		StopAfter:    2,
 		ExtraEpochs:  4,

@@ -36,12 +36,11 @@ func main() {
 	nnet.CheckErr(err)
 
 	// override config settings from command line
+	optimiser := conf.Optimiser.String()
+	flag.StringVar(&optimiser, "opt", optimiser, "optimiser: sgd,nesterov,rmsprop,adam,amsgrad")
 	flag.Float64Var(&conf.Eta, "eta", conf.Eta, "learning rate")
 	flag.Float64Var(&conf.Lambda, "lambda", conf.Lambda, "weight decay parameter")
 	flag.Float64Var(&conf.Momentum, "momentum", conf.Momentum, "momentum")
-	flag.BoolVar(&conf.Nesterov, "nesterov", conf.Nesterov, "nesterov momentum")
-	flag.BoolVar(&conf.RMSprop, "rmsprop", conf.RMSprop, "use rmsprop optimiser")
-	flag.BoolVar(&conf.Adam, "adam", conf.Adam, "use adam optimiser")
 	flag.Int64Var(&conf.RandSeed, "seed", conf.RandSeed, "random number seed")
 	flag.IntVar(&conf.MaxEpoch, "epochs", conf.MaxEpoch, "max epochs")
 	flag.IntVar(&conf.MaxSamples, "samples", conf.MaxSamples, "max samples")
@@ -54,6 +53,10 @@ func main() {
 	flag.BoolVar(&conf.Normalise, "norm", conf.Normalise, "normalise input data")
 	flag.BoolVar(&conf.Distort, "distort", conf.Distort, "apply image distortion")
 	flag.Parse()
+	if conf.Optimiser, err = nnet.NewOptType(optimiser); err != nil {
+		fmt.Println(err)
+		return
+	}
 
 	dev := num.NewDevice(conf.UseGPU)
 	q := dev.NewQueue()

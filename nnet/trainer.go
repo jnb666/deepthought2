@@ -5,11 +5,45 @@ import (
 	"log"
 	"math"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/jnb666/deepthought2/num"
 	"github.com/jnb666/deepthought2/stats"
 )
+
+// Optimiser type
+type OptimiserType int
+
+const (
+	SGDOpt OptimiserType = iota
+	NesterovOpt
+	RMSpropOpt
+	AdamOpt
+	AMSGradOpt
+)
+
+func NewOptType(name string) (OptimiserType, error) {
+	name = strings.ToLower(name)
+	for i, opt := range OptimiserType(0).Options() {
+		if name == opt {
+			return OptimiserType(i), nil
+		}
+	}
+	return SGDOpt, fmt.Errorf("invalid optimiser: %s", name)
+}
+
+func (t OptimiserType) Options() []string {
+	return []string{"sgd", "nesterov", "rmsprop", "adam", "amsgrad"}
+}
+
+func (t OptimiserType) ExtraArrays() int {
+	return []int{1, 1, 1, 2, 3}[t]
+}
+
+func (t OptimiserType) String() string {
+	return t.Options()[t]
+}
 
 // Training statistics
 type Stats struct {
@@ -352,7 +386,7 @@ func TrainEpoch(net *Network, dset *Dataset, epoch int, pred []int32) (batchLoss
 
 // Optimiser updates the weights
 type Optimiser interface {
-	Update(q num.Queue, x, dx, v, v2 *num.Array)
+	Update(q num.Queue, x, dx *num.Array, v []*num.Array)
 	Release()
 }
 
@@ -361,51 +395,43 @@ func NewOptimiser(net *Network, iter int, eta float32) Optimiser {
 	mom := float32(net.Momentum)
 	d := net.queue.Dev()
 	nw := maxWeights(net.Layers)
-	switch {
-	case net.Adam:
+	switch net.Optimiser {
+	case AMSGradOpt:
+		return &AMSGrad{LearningRate: eta, Beta1: 0.9, Beta2: 0.999, Epsilon: 1e-8, Work: d.NewBuffer(nw)}
+	case AdamOpt:
 		return &Adam{LearningRate: eta, Beta1: 0.9, Beta2: 0.999, Epsilon: 1e-8,
 			Iter: iter, Work1: d.NewBuffer(nw), Work2: d.NewBuffer(nw)}
-	case net.RMSprop:
+	case RMSpropOpt:
 		return &RMSprop{LearningRate: eta, Gamma: 0.9, Epsilon: 1e-8, Work: d.NewBuffer(nw)}
-	case net.Nesterov:
+	case NesterovOpt:
 		return &Nesterov{LearningRate: eta, Momentum: mom, Work: d.NewBuffer(nw)}
-	case mom != 0:
-		return Momentum{LearningRate: eta, Momentum: mom}
 	default:
-		return SGD{LearningRate: eta}
+		return &SGD{LearningRate: eta, Momentum: mom}
 	}
 }
 
-// Vanilla stockastic gradient descent
+// Stochastic gradient descent with optional momentum.
 type SGD struct {
-	LearningRate float32
-}
-
-// Update weights using SGD optimiser:
-//  x += learningRate*dx
-func (o SGD) Update(q num.Queue, x, dx, v, v2 *num.Array) {
-	q.Call(num.Axpy(o.LearningRate, dx, x))
-}
-
-func (o SGD) Release() {}
-
-// SGD with momentum
-type Momentum struct {
 	LearningRate float32
 	Momentum     float32
 }
 
-// Update weights using Momentum optimiser:
+// Update weights using SGD optimiser:
+//  x += learningRate*dx , or
 //  v = momentum*v + learningRate*dx; x += v
-func (o Momentum) Update(q num.Queue, x, dx, v, v2 *num.Array) {
+func (o *SGD) Update(q num.Queue, x, dx *num.Array, v []*num.Array) {
+	if o.Momentum == 0 {
+		q.Call(num.Axpy(o.LearningRate, dx, x))
+		return
+	}
 	q.Call(
-		num.Scale(o.Momentum, v),
-		num.Axpy(o.LearningRate, dx, v),
-		num.Axpy(1, v, x),
+		num.Scale(o.Momentum, v[0]),
+		num.Axpy(o.LearningRate, dx, v[0]),
+		num.Axpy(1, v[0], x),
 	)
 }
 
-func (o Momentum) Release() {}
+func (o *SGD) Release() {}
 
 // SGD with Nesterov momentum
 type Nesterov struct {
@@ -417,13 +443,13 @@ type Nesterov struct {
 // Update weights using Nesterov optimiser:
 //  v = momentum*v + learningRate*dx
 //  x += -momentum*vPrev + (1 + momentum)*v
-func (o *Nesterov) Update(q num.Queue, x, dx, v, v2 *num.Array) {
-	vPrev := num.NewArray(o.Work, num.Float32, v.Dims...)
+func (o *Nesterov) Update(q num.Queue, x, dx *num.Array, v []*num.Array) {
+	vPrev := num.NewArray(o.Work, num.Float32, dx.Dims...)
 	q.Call(
-		num.Copy(v, vPrev),
-		num.Scale(o.Momentum, v),
-		num.Axpy(o.LearningRate, dx, v),
-		num.Axpy(1+o.Momentum, v, x),
+		num.Copy(v[0], vPrev),
+		num.Scale(o.Momentum, v[0]),
+		num.Axpy(o.LearningRate, dx, v[0]),
+		num.Axpy(1+o.Momentum, v[0], x),
 		num.Axpy(-o.Momentum, vPrev, x),
 	)
 }
@@ -443,13 +469,13 @@ type RMSprop struct {
 // Update weights using RMSProp optimiser:
 //  v = gamma*v + (1-gamma)*(dx**2)
 //  x += learningRate * dx / (sqrt(v) + epsilon)
-func (o *RMSprop) Update(q num.Queue, x, dx, v, v2 *num.Array) {
+func (o *RMSprop) Update(q num.Queue, x, dx *num.Array, v []*num.Array) {
 	temp := num.NewArray(o.Work, num.Float32, dx.Dims...)
 	q.Call(
-		num.Scale(o.Gamma, v),
+		num.Scale(o.Gamma, v[0]),
 		num.Square(dx, temp),
-		num.Axpy(1-o.Gamma, temp, v),
-		num.Sqrt(v, temp),
+		num.Axpy(1-o.Gamma, temp, v[0]),
+		num.Sqrt(v[0], temp),
 		num.Div(o.Epsilon, dx, temp, temp),
 		num.Axpy(o.LearningRate, temp, x),
 	)
@@ -475,8 +501,8 @@ type Adam struct {
 //  v2 = beta2*v2 + (1-beta2) * dx**2
 //  v1_hat = v1 / (1 - beta1**t)
 //  v2_hat = v2 / (1 - beta2**t)
-//  x -= alpha * v1_hat / (sqrt(v2_hat) + epsilon)
-func (o *Adam) Update(q num.Queue, x, dx, v1, v2 *num.Array) {
+//  x += alpha * v1_hat / (sqrt(v2_hat) + epsilon)
+func (o *Adam) Update(q num.Queue, x, dx *num.Array, v []*num.Array) {
 	o.Iter++
 	t := float64(o.Iter)
 	beta1 := float64(o.Beta1)
@@ -484,14 +510,14 @@ func (o *Adam) Update(q num.Queue, x, dx, v1, v2 *num.Array) {
 	temp1 := num.NewArray(o.Work1, num.Float32, dx.Dims...)
 	temp2 := num.NewArray(o.Work2, num.Float32, dx.Dims...)
 	q.Call(
-		num.Scale(o.Beta1, v1),
-		num.Axpy(1-o.Beta1, dx, v1),
-		num.Scale(o.Beta2, v2),
+		num.Scale(o.Beta1, v[0]),
+		num.Axpy(1-o.Beta1, dx, v[0]),
+		num.Scale(o.Beta2, v[1]),
 		num.Square(dx, temp1),
-		num.Axpy(1-o.Beta2, temp1, v2),
-		num.Copy(v1, temp1),
+		num.Axpy(1-o.Beta2, temp1, v[1]),
+		num.Copy(v[0], temp1),
 		num.Scale(float32(1/(1-math.Pow(beta1, t))), temp1),
-		num.Copy(v2, temp2),
+		num.Copy(v[1], temp2),
 		num.Scale(float32(1/(1-math.Pow(beta2, t))), temp2),
 		num.Sqrt(temp2, temp2),
 		num.Div(o.Epsilon, temp1, temp2, temp1),
@@ -502,6 +528,39 @@ func (o *Adam) Update(q num.Queue, x, dx, v1, v2 *num.Array) {
 func (o *Adam) Release() {
 	o.Work1.Release()
 	o.Work2.Release()
+}
+
+// AMSGrad optimiser with adaptive learning rate
+type AMSGrad struct {
+	LearningRate float32
+	Beta1        float32
+	Beta2        float32
+	Epsilon      float32
+	Work         num.Buffer
+}
+
+// Update weights using AMSGrad optimiser:
+//  v1 = beta1*v1 + (1-beta1) * dx
+//  v2 = beta2*v2 + (1-beta2) * dx**2
+//  v3 = max(v3, v2)
+//  x += alpha * v1 / (sqrt(v3) + epsilon)
+func (o *AMSGrad) Update(q num.Queue, x, dx *num.Array, v []*num.Array) {
+	temp := num.NewArray(o.Work, num.Float32, dx.Dims...)
+	q.Call(
+		num.Scale(o.Beta1, v[0]),
+		num.Axpy(1-o.Beta1, dx, v[0]),
+		num.Scale(o.Beta2, v[1]),
+		num.Square(dx, temp),
+		num.Axpy(1-o.Beta2, temp, v[1]),
+		num.Max(v[1], v[2], v[2]),
+		num.Sqrt(v[2], temp),
+		num.Div(o.Epsilon, v[0], temp, temp),
+		num.Axpy(o.LearningRate, temp, x),
+	)
+}
+
+func (o *AMSGrad) Release() {
+	o.Work.Release()
 }
 
 func min(a, b int) int {

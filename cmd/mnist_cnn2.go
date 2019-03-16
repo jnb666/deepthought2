@@ -38,12 +38,13 @@ func main() {
 
 	// with image distortion and adam optimser
 	conf.DataSet = "mnist2"
-	conf.Distort = true
-	conf.Adam = true
+	conf.Optimiser = nnet.AdamOpt
 	conf.Eta = 0.001
+	conf.Lambda = 5
+	conf.Distort = true
 	conf.TrainBatch = 100
 	conf.MaxEpoch = 40
-	conf.ValidEMA = 10
+	conf.ValidEMA = 15
 	conf.StopAfter = 2
 	conf.ExtraEpochs = 1
 	fmt.Println(conf)

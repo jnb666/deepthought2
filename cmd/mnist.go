@@ -3,11 +3,12 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/jnb666/deepthought2/img"
-	"github.com/jnb666/deepthought2/nnet"
 	"image/color"
 	"os"
 	"path"
+
+	"github.com/jnb666/deepthought2/img"
+	"github.com/jnb666/deepthought2/nnet"
 )
 
 const (

@@ -29,12 +29,12 @@ func block2(nfeat int) []nnet.ConfigLayer {
 func main() {
 	conf := nnet.Config{
 		DataSet:      "cifar10_2",
+		Optimiser:    nnet.NesterovOpt,
 		Eta:          0.02,
 		EtaDecay:     0.2,
 		EtaDecayStep: 25,
 		Lambda:       50,
 		Momentum:     0.9,
-		Nesterov:     true,
 		MaxEpoch:     200,
 		StopAfter:    3,
 		ExtraEpochs:  5,

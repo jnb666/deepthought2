@@ -50,6 +50,14 @@ void array_div(float* a, float* b, float *res, float eps, int n) {
 	for (int i = 0; i < n; ++i) res[i] = a[i] / (b[i]+eps);
 }
 
+void array_min(float* a, float* b, float *res, int n) {
+	for (int i = 0; i < n; ++i) res[i] = fminf(a[i], b[i]);
+}
+
+void array_max(float* a, float* b, float *res, int n) {
+	for (int i = 0; i < n; ++i) res[i] = fmaxf(a[i], b[i]);
+}
+
 void array_square(float* x, float* y, int n) {
 	for (int i = 0; i < n; ++i) y[i] = x[i]*x[i];
 }
@@ -234,6 +242,12 @@ void callCPU(Args* a, dnnError_t* error) {
 		break;
 	case DIV_ELEM:
 		array_div(FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->f[0], a->i[0]);
+		break;
+	case MIN:
+		array_min(FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0]);
+		break;
+	case MAX:
+		array_max(FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0]);
 		break;
 	case SIGMOID:
 		sigmoid_a(FP(a->p[0]), FP(a->p[1]), a->i[0]);

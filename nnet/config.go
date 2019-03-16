@@ -22,16 +22,14 @@ type OptionList interface {
 // Training configuration settings
 type Config struct {
 	DataSet      string
+	Optimiser    OptimiserType
 	Eta          float64
 	EtaDecay     float64
 	EtaDecayStep int
 	Lambda       float64
 	Momentum     float64
-	Nesterov     bool
-	RMSprop      bool
-	Adam         bool
-	Bias         float64
 	WeightInit   InitType
+	Bias         float64
 	Shuffle      bool
 	Normalise    bool
 	Distort      bool

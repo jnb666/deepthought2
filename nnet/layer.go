@@ -483,11 +483,11 @@ func (l *batchNorm) Init(q num.Queue, inShape []int, opts num.LayerOpts, seed in
 
 func (l *batchNorm) InitParams(q num.Queue, init InitType, bias float64, rng *rand.Rand) {
 	l.BatchNormLayer.InitParams(q)
-	if l.vw != nil {
-		q.Call(num.Fill(l.vw, 0))
+	for _, arr := range l.vw {
+		q.Call(num.Fill(arr, 0))
 	}
-	if l.vb != nil {
-		q.Call(num.Fill(l.vb, 0))
+	for _, arr := range l.vb {
+		q.Call(num.Fill(arr, 0))
 	}
 }
 
@@ -498,9 +498,9 @@ func (l *batchNorm) WeightDecay(q num.Queue, decay float32) {
 }
 
 func (l *batchNorm) UpdateParams(q num.Queue, opt Optimiser) {
-	opt.Update(q, l.w, l.dw, l.vw, l.vw2)
+	opt.Update(q, l.w, l.dw, l.vw)
 	if l.b != nil {
-		opt.Update(q, l.b, l.db, l.vb, l.vb2)
+		opt.Update(q, l.b, l.db, l.vb)
 	}
 }
 
@@ -696,30 +696,26 @@ func (l *add) Bprop(q num.Queue, grad, dsrc *num.Array, work [3]num.Buffer) *num
 
 // weight and bias parameters
 type paramBase struct {
-	w, b     *num.Array
-	dw, db   *num.Array
-	vw, vb   *num.Array
-	vw2, vb2 *num.Array
+	w, b   *num.Array
+	dw, db *num.Array
+	vw, vb []*num.Array
 }
 
 func newParams(q num.Queue, filterShape, biasShape []int, cfg *Config) paramBase {
 	var p paramBase
 	p.w = q.NewArray(num.Float32, filterShape...)
 	p.dw = q.NewArray(num.Float32, filterShape...)
-	if cfg.Momentum != 0 || cfg.RMSprop || cfg.Adam {
-		p.vw = q.NewArray(num.Float32, filterShape...)
-	}
-	if cfg.Adam {
-		p.vw2 = q.NewArray(num.Float32, filterShape...)
+	narr := cfg.Optimiser.ExtraArrays()
+	p.vw = make([]*num.Array, narr)
+	for i := range p.vw {
+		p.vw[i] = q.NewArray(num.Float32, filterShape...)
 	}
 	if biasShape != nil {
 		p.b = q.NewArray(num.Float32, biasShape...)
 		p.db = q.NewArray(num.Float32, biasShape...)
-		if cfg.Momentum != 0 || cfg.RMSprop || cfg.Adam {
-			p.vb = q.NewArray(num.Float32, biasShape...)
-		}
-		if cfg.Adam {
-			p.vb2 = q.NewArray(num.Float32, biasShape...)
+		p.vb = make([]*num.Array, narr)
+		for i := range p.vb {
+			p.vb[i] = q.NewArray(num.Float32, biasShape...)
 		}
 	}
 	return p
@@ -739,20 +735,14 @@ func (p paramBase) InitParams(q num.Queue, init InitType, bias float64, rng *ran
 		weights[i] = float32(wInit())
 	}
 	q.Call(num.Write(p.w, weights))
-	if p.vw != nil {
-		q.Call(num.Fill(p.vw, 0))
-	}
-	if p.vw2 != nil {
-		q.Call(num.Fill(p.vw2, 0))
+	for _, arr := range p.vw {
+		q.Call(num.Fill(arr, 0))
 	}
 	if p.b != nil {
 		q.Call(num.Fill(p.b, float32(bias)))
-	}
-	if p.vb != nil {
-		q.Call(num.Fill(p.vb, 0))
-	}
-	if p.vb2 != nil {
-		q.Call(num.Fill(p.vb2, 0))
+		for _, arr := range p.vb {
+			q.Call(num.Fill(arr, 0))
+		}
 	}
 }
 
@@ -763,9 +753,9 @@ func (p paramBase) WeightDecay(q num.Queue, decay float32) {
 }
 
 func (p paramBase) UpdateParams(q num.Queue, opt Optimiser) {
-	opt.Update(q, p.w, p.dw, p.vw, p.vw2)
+	opt.Update(q, p.w, p.dw, p.vw)
 	if p.b != nil {
-		opt.Update(q, p.b, p.db, p.vb, p.vb2)
+		opt.Update(q, p.b, p.db, p.vb)
 	}
 }
 
@@ -811,11 +801,20 @@ func (p paramBase) NumWeights() int {
 }
 
 func (p paramBase) memory() int {
-	return num.Bytes(p.w, p.b, p.dw, p.db, p.vw, p.vb, p.vw2, p.vb2)
+	n := num.Bytes(p.w, p.b, p.dw, p.db)
+	n += num.Bytes(p.vw...)
+	n += num.Bytes(p.vb...)
+	return n
 }
 
 func (p paramBase) release() {
-	num.Release(p.w, p.b, p.dw, p.db, p.vw, p.vb, p.vw2, p.vb2)
+	num.Release(p.w, p.b, p.dw, p.db)
+	for _, arr := range p.vw {
+		num.Release(arr)
+	}
+	for _, arr := range p.vb {
+		num.Release(arr)
+	}
 }
 
 func maxWeights(layers []Layer) int {

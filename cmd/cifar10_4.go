@@ -10,12 +10,12 @@ import (
 func main() {
 	conf := nnet.Config{
 		DataSet:    "cifar10",
+		Optimiser:  nnet.AdamOpt,
 		Eta:        0.001,
 		Lambda:     0.5,
 		MaxEpoch:   100,
 		MaxSeconds: 180,
 		TrainBatch: 100,
-		Adam:       true,
 		Shuffle:    true,
 		Distort:    true,
 		UseGPU:     true,

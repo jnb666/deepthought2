@@ -73,6 +73,12 @@ void callGPU(Args* a, Stream* s, cublasStatus_t* blasStatus, cudnnStatus_t* dnnS
 	case DIV_ELEM:
 		cuda_div_elem(s->stream, FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->f[0], a->i[0]);
 		break;
+	case MIN:
+		cuda_min(s->stream, FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0]);
+		break;
+	case MAX:
+		cuda_max(s->stream, FP(a->p[0]), FP(a->p[1]), FP(a->p[2]), a->i[0]);
+		break;
 	case ONEHOT:
 		cuda_onehot(s->stream, IP(a->p[0]), FP(a->p[1]), a->i[0], a->i[1]);
 		break;

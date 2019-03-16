@@ -64,12 +64,12 @@ func addBlock(c nnet.Config, nin, nout, stride int, dropout float64) nnet.Config
 func main() {
 	conf := nnet.Config{
 		DataSet:      "cifar10_2",
+		Optimiser:    nnet.NesterovOpt,
 		Eta:          0.05,
 		EtaDecay:     0.2,
 		EtaDecayStep: 25,
 		Lambda:       250,
 		Momentum:     0.9,
-		Nesterov:     true,
 		MaxEpoch:     200,
 		ValidEMA:     20,
 		StopAfter:    3,

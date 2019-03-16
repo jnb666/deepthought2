@@ -72,6 +72,16 @@ __global__ void div_elem(float* a, float* b, float* res, float eps, int n) {
 	if (i < n) res[i] = a[i] / (b[i]+eps);
 }
 
+__global__ void min_elem(float* a, float* b, float* res, int n) {
+	int i = blockIdx.x*blockDim.x + threadIdx.x;
+	if (i < n) res[i] = fminf(a[i], b[i]);
+}
+
+__global__ void max_elem(float* a, float* b, float* res, int n) {
+	int i = blockIdx.x*blockDim.x + threadIdx.x;
+	if (i < n) res[i] = fmaxf(a[i], b[i]);
+}
+
 __global__ void square(float* a, float* res, int n) {
 	int i = blockIdx.x*blockDim.x + threadIdx.x;
 	if (i < n) res[i] = a[i]*a[i];
@@ -209,6 +219,14 @@ void cuda_mul_elem(cudaStream_t stream, float* a, float* b, float* res, int n) {
 
 void cuda_div_elem(cudaStream_t stream, float* a, float* b, float* res, float eps, int n) {
 	div_elem<<<(n+BLOCK-1)/BLOCK, BLOCK>>>(a, b, res, eps, n);
+}
+
+void cuda_min(cudaStream_t stream, float* a, float* b, float* res, int n) {
+	min_elem<<<(n+BLOCK-1)/BLOCK, BLOCK>>>(a, b, res, n);
+}
+
+void cuda_max(cudaStream_t stream, float* a, float* b, float* res, int n) {
+	max_elem<<<(n+BLOCK-1)/BLOCK, BLOCK>>>(a, b, res, n);
 }
 
 void cuda_onehot(cudaStream_t stream, int* y, float* y_one_hot, int n, int classes) {

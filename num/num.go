@@ -30,11 +30,16 @@ var opName = map[C.int]string{
 	C.UNHOT:           "unhot",
 	C.SCALE:           "scale",
 	C.AXPY:            "axpy",
+	C.SQUARE:          "square",
+	C.SQRT:            "sqrt",
+	C.MIN:             "min",
+	C.MAX:             "max",
 	C.TRANS:           "trans",
 	C.SUM:             "sum",
 	C.GEMV:            "gemv",
 	C.GEMM:            "gemm",
 	C.MUL_ELEM:        "mul_elem",
+	C.DIV_ELEM:        "div_elem",
 	C.SIGMOID:         "sigmoid",
 	C.SIGMOID_D:       "sigmoid_d",
 	C.TANH:            "tanh",
@@ -208,6 +213,30 @@ func Mul(a, b, c *Array) Function {
 		panic("Mul: arrays must be same size")
 	}
 	return args(C.MUL_ELEM, asize, a.Data(), b.Data(), c.Data())
+}
+
+// Element wise minimum: c = min(a, b)
+func Min(a, b, c *Array) Function {
+	if a.Dtype != Float32 || b.Dtype != Float32 || c.Dtype != Float32 {
+		panic("Min: dtype must by Float32")
+	}
+	asize, bsize, csize := Prod(a.Dims), Prod(b.Dims), Prod(c.Dims)
+	if asize != csize || bsize != csize {
+		panic("Min: arrays must be same size")
+	}
+	return args(C.MIN, asize, a.Data(), b.Data(), c.Data())
+}
+
+// Element wise maximum: c = max(a, b)
+func Max(a, b, c *Array) Function {
+	if a.Dtype != Float32 || b.Dtype != Float32 || c.Dtype != Float32 {
+		panic("Max: dtype must by Float32")
+	}
+	asize, bsize, csize := Prod(a.Dims), Prod(b.Dims), Prod(c.Dims)
+	if asize != csize || bsize != csize {
+		panic("Max: arrays must be same size")
+	}
+	return args(C.MAX, asize, a.Data(), b.Data(), c.Data())
 }
 
 // Element wise array division: c = a / (b+epsilon)

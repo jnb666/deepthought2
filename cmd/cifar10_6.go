@@ -42,7 +42,7 @@ func output() []nnet.ConfigLayer {
 func main() {
 	conf := nnet.Config{
 		DataSet:     "cifar10_2",
-		Adam:        true,
+		Optimiser:   nnet.AdamOpt,
 		Eta:         0.001,
 		Lambda:      10,
 		MaxEpoch:    200,
