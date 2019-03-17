@@ -255,7 +255,7 @@ func (t *TestBase) Test(net *Network, epoch int, batchLoss []float64, trainError
 	t.Stats = append(t.Stats, s)
 	done := false
 	loss := batchLoss[len(batchLoss)-1]
-	if epoch >= net.MaxEpoch || loss <= net.MinLoss || (net.MaxSeconds > 0 && int(s.Elapsed.Seconds()) > net.MaxSeconds) {
+	if epoch >= net.MaxEpoch || math.IsNaN(loss) || loss <= net.MinLoss || (net.MaxSeconds > 0 && int(s.Elapsed.Seconds()) > net.MaxSeconds) {
 		done = true
 	} else if net.StopAfter > 0 && s.BestSince >= net.StopAfter && epoch > 10 {
 		// auto stopping based on performance on validation set

@@ -428,13 +428,19 @@ func newFont(size vg.Length) vg.Font {
 func newLinePlot(pts plotter.XYs, minZero bool) linePlot {
 	xmax, ymax, ymin := 1.0, 0.0, 0.0
 	for _, pt := range pts {
+		if math.IsInf(pt.Y, 0) || math.IsNaN(pt.Y) {
+			continue
+		}
 		xmax = math.Max(pt.X, xmax)
 		ymax = math.Max(pt.Y, ymax)
 		if !minZero {
 			ymin = math.Min(pt.Y, ymin)
 		}
 	}
-	l, _ := plotter.NewLine(pts)
+	l, err := plotter.NewLine(pts)
+	if err != nil {
+		log.Fatalln("ERROR: invalid plot data", err)
+	}
 	return linePlot{Line: l, xmin: 1, xmax: xmax, ymin: ymin, ymax: ymax}
 }
 
