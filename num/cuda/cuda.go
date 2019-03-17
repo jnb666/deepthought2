@@ -7,6 +7,7 @@ package cuda
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #include <cudnn.h>
+#include <cuda_profiler_api.h>
 */
 import "C"
 
@@ -53,6 +54,7 @@ func (s *Stream) Sync() {
 }
 
 func (s *Stream) Release() {
+	C.cudaProfilerStop()
 	C.cudnnDestroy(s.cudnn)
 	C.cublasDestroy(s.blas)
 	C.cudaStreamDestroy(s.stream)
