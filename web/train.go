@@ -27,6 +27,7 @@ const (
 	plotWidth  = 450
 	plotHeight = 300
 	plotDPI    = 90
+	plotBorder = 32
 )
 
 var upgrader = websocket.Upgrader{
@@ -56,7 +57,7 @@ type HistoryRow struct {
 
 // Base data for handler functions to perform network training and display the stats
 func NewTrainPage(t *Templates, net *Network) *TrainPage {
-	p := &TrainPage{net: net, Templates: t, disabled: map[string]bool{}, PlotWidth: plotWidth + 32, PlotHeight: plotHeight}
+	p := &TrainPage{net: net, Templates: t, disabled: map[string]bool{}, PlotWidth: plotWidth + plotBorder, PlotHeight: plotHeight + plotBorder}
 	for _, opt := range []string{"loss", "errors", "matrix", "tune", "purge", "clear"} {
 		p.AddOption(Link{Name: opt, Url: "/train/set/" + opt, Selected: opt == "loss" || opt == "errors"})
 	}
