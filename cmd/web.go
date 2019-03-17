@@ -3,11 +3,14 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
+	"os/user"
 	"path"
 	"strconv"
 
+	"github.com/goji/httpauth"
 	"github.com/gorilla/mux"
 	"github.com/jnb666/deepthought2/nnet"
 	"github.com/jnb666/deepthought2/web"
@@ -30,7 +33,7 @@ func main() {
 	auth := false
 	flag.IntVar(&port, "port", port, "web server port number")
 	flag.BoolVar(&ssl, "ssl", ssl, "use https transport")
-	flag.BoolVar(&auth, "auth", auth, "authenticate using pam")
+	flag.BoolVar(&auth, "auth", auth, "use basic auth with https")
 	flag.Parse()
 
 	model := os.Args[len(os.Args)-1]
@@ -95,14 +98,19 @@ func main() {
 	r.NotFoundHandler = t.ErrorHandler(http.StatusNotFound, web.ErrNotFound)
 
 	if auth {
-		auth := web.NewAuthMiddleware()
-		r.Use(auth.Middleware)
+		login, err := user.Current()
+		nnet.CheckErr(err)
+		password := os.Getenv("DEEPTHOUGHT_PASSWORD")
+		if password == "" {
+			log.Fatal("DEEPTHOUGHT_PASSWORD env variable must be set for basic auth")
+		}
+		r.Use(httpauth.SimpleBasicAuth(login.Username, password))
 	}
 	host, err := os.Hostname()
 	nnet.CheckErr(err)
 	bind := ":" + strconv.Itoa(port)
 	base := "//" + host + bind
-	if ssl {
+	if ssl || auth {
 		fmt.Println("serving web page at https:" + base)
 		err = http.ListenAndServeTLS(bind, path.Join(web.AssetDir, "server.crt"), path.Join(web.AssetDir, "server.key"), r)
 	} else {
