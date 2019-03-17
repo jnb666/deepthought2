@@ -35,6 +35,9 @@ func main() {
 	flag.BoolVar(&ssl, "ssl", ssl, "use https transport")
 	flag.BoolVar(&auth, "auth", auth, "use basic auth with https")
 	flag.Parse()
+	if auth {
+		ssl = true
+	}
 
 	model := os.Args[len(os.Args)-1]
 	err := nnet.InitLogger(model, 0)
@@ -110,7 +113,7 @@ func main() {
 	nnet.CheckErr(err)
 	bind := ":" + strconv.Itoa(port)
 	base := "//" + host + bind
-	if ssl || auth {
+	if ssl {
 		fmt.Println("serving web page at https:" + base)
 		err = http.ListenAndServeTLS(bind, path.Join(web.AssetDir, "server.crt"), path.Join(web.AssetDir, "server.key"), r)
 	} else {
