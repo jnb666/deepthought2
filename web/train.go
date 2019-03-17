@@ -3,6 +3,14 @@ package web
 import (
 	"bytes"
 	"fmt"
+	"html/template"
+	"image/color"
+	"log"
+	"math"
+	"net/http"
+	"sort"
+	"strings"
+
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"github.com/jnb666/deepthought2/nnet"
@@ -13,19 +21,12 @@ import (
 	"gonum.org/v1/plot/plotutil"
 	"gonum.org/v1/plot/vg"
 	"gonum.org/v1/plot/vg/draw"
-	"gonum.org/v1/plot/vg/vgsvg"
-	"html/template"
-	"image/color"
-	"log"
-	"math"
-	"net/http"
-	"sort"
-	"strings"
 )
 
 const (
 	plotWidth  = 450
 	plotHeight = 300
+	plotDPI    = 90
 )
 
 var upgrader = websocket.Upgrader{
@@ -284,7 +285,7 @@ func (p *TrainPage) lossPlot() template.HTML {
 	for _, s := range p.net.test.Stats {
 		for batch, loss := range s.Loss {
 			x := float64(s.Epoch-1) + float64(batch)/float64(len(s.Loss))
-			vals = append(vals, xy{x, math.Log10(loss)})
+			vals = append(vals, plotter.XY{x, math.Log10(loss)})
 		}
 	}
 	line := newLinePlot(vals, false)
@@ -293,7 +294,7 @@ func (p *TrainPage) lossPlot() template.HTML {
 	plt.Legend.Add("loss per batch", line)
 	vals = plotter.XYs{}
 	for _, s := range p.net.test.Stats {
-		vals = append(vals, xy{float64(s.Epoch), math.Log10(s.AvgLoss)})
+		vals = append(vals, plotter.XY{float64(s.Epoch), math.Log10(s.AvgLoss)})
 	}
 	line = newLinePlot(vals, false)
 	line.Color = plotutil.Color(1)
@@ -310,7 +311,7 @@ func (p *TrainPage) errorPlot() template.HTML {
 	for i, name := range p.StatsHeaders()[1:] {
 		vals := plotter.XYs{}
 		for _, s := range p.net.test.Stats {
-			vals = append(vals, xy{float64(s.Epoch), s.Error[i] * 100})
+			vals = append(vals, plotter.XY{float64(s.Epoch), s.Error[i] * 100})
 		}
 		line := newLinePlot(vals, true)
 		line.Width = 2
@@ -407,7 +408,7 @@ func newPlot() *plot.Plot {
 
 func writePlot(p *plot.Plot, w, h int) template.HTML {
 	var buf bytes.Buffer
-	writer, err := p.WriterTo(vg.Inch*vg.Length(w)/vgsvg.DPI, vg.Inch*vg.Length(h)/vgsvg.DPI, "svg")
+	writer, err := p.WriterTo(vg.Inch*vg.Length(w)/plotDPI, vg.Inch*vg.Length(h)/plotDPI, "svg")
 	if err != nil {
 		log.Fatalln("ERROR: error writing plot", err)
 	}
@@ -422,8 +423,6 @@ func newFont(size vg.Length) vg.Font {
 	}
 	return font
 }
-
-type xy struct{ X, Y float64 }
 
 func newLinePlot(pts plotter.XYs, minZero bool) linePlot {
 	xmax, ymax, ymin := 1.0, 0.0, 0.0
@@ -491,7 +490,7 @@ func (h heatMap) labels(style draw.TextStyle, threshold float64) *plotter.Labels
 		for c := 0; c < g.cols; c++ {
 			val := g.vals[(g.rows-r-1)*g.cols+c]
 			lab.Labels = append(lab.Labels, fmt.Sprint(val))
-			lab.XYs = append(lab.XYs, xy{g.X(c) - 0.35, g.Y(r) - 0.15})
+			lab.XYs = append(lab.XYs, plotter.XY{g.X(c) - 0.35, g.Y(r) - 0.15})
 			s := style
 			if g.Z(c, r) > threshold {
 				s.Color = color.Black
@@ -499,7 +498,7 @@ func (h heatMap) labels(style draw.TextStyle, threshold float64) *plotter.Labels
 			lab.TextStyle = append(lab.TextStyle, s)
 		}
 		errorRow := 1 - g.Z(g.rows-r-1, r)
-		lab.XYs = append(lab.XYs, xy{g.X(g.cols) - 0.4, g.Y(r) - 0.2})
+		lab.XYs = append(lab.XYs, plotter.XY{g.X(g.cols) - 0.4, g.Y(r) - 0.2})
 		lab.Labels = append(lab.Labels, fmt.Sprintf("%.2g%%", 100*errorRow))
 		lab.TextStyle = append(lab.TextStyle, style)
 	}
